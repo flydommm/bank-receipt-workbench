@@ -1,36 +1,37 @@
 # 银行回单工作台
 
-> 0.1.27 公开发布准备版 · Windows x64 · 本地 PDF 查找、审核与导出
+> 0.1.27 公开源码 · v0.1.27-pre.1 预发布安装包 · Windows x64 · 本地 PDF 查找、审核与导出
 
 银行回单工作台是一款 Windows 桌面应用：从本机 PDF 中查找关键词，预览命中页面，复核和调整候选凭证范围，然后导出合并版或按来源拆分的 PDF，并可选生成 XLSX 审核索引。
 
-[使用指南](docs/usage.md) · [开发指南](docs/development.md) · [贡献指南](CONTRIBUTING.md) · [安全说明](SECURITY.md) · [第三方组件说明](THIRD_PARTY_NOTICES.md) · [发布清单](docs/release-checklist.md)
+新手入口：先看[使用指南](docs/usage.md)；已有文字层的 PDF 选 `Core`，扫描 PDF 选 `Ocr`。项目采用 [AGPL-3.0-only](LICENSE)。
+
+[源码](https://github.com/flydommm/bank-receipt-workbench/tree/main) · [Issues](https://github.com/flydommm/bank-receipt-workbench/issues) · [Releases](https://github.com/flydommm/bank-receipt-workbench/releases) · [开发指南](docs/development.md) · [贡献指南](CONTRIBUTING.md) · [安全说明](SECURITY.md) · [第三方组件说明](THIRD_PARTY_NOTICES.md)
 
 ## 当前状态
 
-这里是 0.1.27 的公开发布准备目录，不是已经发布的稳定版。项目许可路线已确定为 **AGPL-3.0-only**，根目录已加入对应的 AGPL-3.0 文本；GitHub 仓库已经创建，但源码尚未推送到 `main`。
+公开源码版本为 `0.1.27`，安装包已按 [v0.1.27-pre.1](https://github.com/flydommm/bank-receipt-workbench/releases/tag/v0.1.27-pre.1) 预发布交付。首次 Windows CI 已通过，下载资产、源码提交及验证边界见[公开交付记录](docs/public-release-0.1.27.md)。当前不把本版本称为已发布的稳定版。
 
 本地整理范围、测试结果和未完成事项见[公开发布准备记录](docs/preparation-status.md)。
 
-## 许可证与计划公开入口
+## 许可证与公开入口
 
-本项目采用 AGPL-3.0-only 路线，根目录已加入对应的 AGPL-3.0 文本；PyMuPDF/MuPDF 按上游 AGPL 分发路线处理，公开发布时需随包保留相应源码、构建说明和许可文本，并继续核对 PaddleOCR/PaddlePaddle/PaddleX、Python、Rust 和前端依赖的分发条件。项目许可证不等于第三方依赖许可证；不能把整个安装包笼统称为 MIT。
+项目采用 [AGPL-3.0-only](LICENSE)，许可证文本见根目录 `LICENSE`。项目许可证不覆盖第三方依赖；PyMuPDF/MuPDF 按上游 AGPL 分发路线处理，其他组件的来源和许可证见[第三方组件说明](THIRD_PARTY_NOTICES.md)。不能把整个安装包笼统称为 MIT。
 
-已创建的 GitHub 仓库地址及待完成入口如下：
+公开入口：
 
-- 仓库：[https://github.com/flydommm/bank-receipt-workbench](https://github.com/flydommm/bank-receipt-workbench)（已创建）；
-- 源码：[https://github.com/flydommm/bank-receipt-workbench/tree/main](https://github.com/flydommm/bank-receipt-workbench/tree/main)（等待源码推送）；
-- Issues：[https://github.com/flydommm/bank-receipt-workbench/issues](https://github.com/flydommm/bank-receipt-workbench/issues)；
-- Releases：[https://github.com/flydommm/bank-receipt-workbench/releases](https://github.com/flydommm/bank-receipt-workbench/releases)（尚未发布）。
+- [源码](https://github.com/flydommm/bank-receipt-workbench/tree/main)；
+- [Issues](https://github.com/flydommm/bank-receipt-workbench/issues)；
+- [Releases](https://github.com/flydommm/bank-receipt-workbench/releases)（实际下载和公开状态以页面为准）；
+- [GitHub 私密漏洞报告](https://github.com/flydommm/bank-receipt-workbench/security/advisories/new)。
 
-仓库已创建但目前尚未推送源码，`main` 不应被描述为已有项目内容；Release 尚未发布，远程 CI 尚未运行。GitHub 私密漏洞报告功能和安全邮箱也尚未确认启用；敏感问题请先按 [安全说明](SECURITY.md) 保留最小合成复现，不要把细节写入公共 Issues。
+仍需完成的发布验证：
 
-公开发布前仍需完成以下事项：
-
-- 核对根目录 `LICENSE`、项目元数据和公开说明均标识 AGPL-3.0-only，按 PyMuPDF/MuPDF 上游 AGPL 分发路线准备随包源码、构建说明和许可文本，并完成其他第三方依赖分发条件核对。
 - 在真正干净的 Windows x64 环境完成 Core 与 OCR 安装、升级、卸载和首次运行验证。
+- 完成 OCR 首次模型下载和首次识别验证，并记录模型来源与许可。
 - 决定是否提供代码签名；当前安装包没有签名证书。
-- 将源码推送到已创建的 GitHub 仓库并验证 `main`、Issues、Releases 和源码入口；当前远程 CI 尚未执行。
+
+源码归档、许可证材料和第三方清单已完成技术核对；这不替代独立法律审查，发布时仍应按实际安装包复核。
 
 ## 能做什么
 
@@ -58,7 +59,7 @@ OCR edition 首次初始化或首次识别时可能从模型提供方下载公�
 
 两种安装包使用同一应用标识，请选择其中一种安装；切换 edition 会更新同一个应用，并非同时安装两套独立软件。
 
-安装包尚未在公开地址发布。维护者完成发布门槛并将源码推送到已创建的仓库后，应在 [GitHub Releases](https://github.com/flydommm/bank-receipt-workbench/releases) 中提供 edition、SHA-256 和对应的运行时清单；在此之前请不要把 `outputs/` 或本地构建目录当作下载源。
+预发布安装包的下载文件名为：`bank-receipt-workbench_0.1.27_core_x64-setup.exe` 和 `bank-receipt-workbench_0.1.27_ocr_x64-setup.exe`。中文构建文件名仅用于构建元数据，文件字节不变；实际下载和公开状态以 [GitHub Releases](https://github.com/flydommm/bank-receipt-workbench/releases) 为准。请不要把 `outputs/` 或本地构建目录当作下载源。
 
 ## 开发环境概览
 

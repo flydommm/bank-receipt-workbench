@@ -1,10 +1,10 @@
 # 0.1.27 公开发布准备记录
 
-日期：2026-09-11。状态：本地准备，尚未公开发布，也未替代已验收的 0.1.26 稳定版。项目许可证路线已确定为 AGPL-3.0-only，根目录已加入对应许可证文本；GitHub 仓库已创建，但源码尚未推送，Release 仍未发布。
+日期：2026-09-11。项目采用 AGPL-3.0-only，公开源码已推送到独立仓库。本文记录本地整理过程；公开发布状态和当前下载资产以 [GitHub Releases](https://github.com/flydommm/bank-receipt-workbench/releases) 为准。0.1.27 按预发布交付，不替代已验收的 0.1.26 稳定版。
 
-GitHub 仓库已创建：[https://github.com/flydommm/bank-receipt-workbench](https://github.com/flydommm/bank-receipt-workbench)。[源码](https://github.com/flydommm/bank-receipt-workbench/tree/main)尚未推送到 `main`，[Issues](https://github.com/flydommm/bank-receipt-workbench/issues)和[Releases](https://github.com/flydommm/bank-receipt-workbench/releases)地址已确定但 Release 尚未发布；GitHub 私密漏洞报告功能和安全邮箱也尚未确认启用。
+公开入口：[源码](https://github.com/flydommm/bank-receipt-workbench/tree/main)、[Issues](https://github.com/flydommm/bank-receipt-workbench/issues)和已启用的[私密漏洞报告](https://github.com/flydommm/bank-receipt-workbench/security/advisories/new)。安全问题使用私密报告，不需要在公开 Issue 中提供业务文件。
 
-本地生成的两个 NSIS 包、构建提交与校验值见[交付记录](delivery-0.1.27-preparation.md)。
+当前两个 NSIS 包、构建提交与校验值见 [AGPL 交付记录](delivery-0.1.27-agpl.md)。[早期准备包记录](delivery-0.1.27-preparation.md)仅作历史快照，不是当前下载文件的校验依据。
 
 ## 范围与处理结果
 
@@ -38,14 +38,14 @@ GitHub 仓库已创建：[https://github.com/flydommm/bank-receipt-workbench](ht
 
 全量测试曾发现两个测试环境兼容问题：Windows 虚拟环境解释器转发进程影响锁释放测试，以及 Rust 合成测试假定系统存在 `py.exe`。已按实际进程行为修正测试入口并完成上述复验，未通过关闭测试规避失败。
 
-## 公开发布前仍需完成
+## 从准备阶段到公开交付
 
-1. **项目许可证。** 核对根目录 `LICENSE` 与项目元数据均标识 AGPL-3.0-only，按 PyMuPDF/MuPDF 上游 AGPL 分发路线准备随包源码、构建说明和许可文本；不能仅给应用贴上 MIT 标签。第三方声明和许可文本也需要随公开版本保留。
-2. **GitHub 归属。** 向已创建的仓库 `flydommm/bank-receipt-workbench` 推送并验证源码、Issue、Release 和安全联系入口。当前 `main` 尚无已推送源码，Release 尚未发布；不要把密码或访问令牌写入源码或会话。
-3. **干净 Windows 验证。** 在没有本项目开发环境的 Windows x64 上验证安装、启动、首次模型下载、升级及卸载。目前没有完成这一项。
-4. **签名与发布说明。** 当前安装包未签名。公开交付需明确说明签名状态、版本、SHA-256、运行时类型和已知限制。
-5. **首次远程 CI。** 已准备 Windows 工作流，但尚未在 GitHub Actions 上执行。工作流只测试，不自动发布资产。
+项目许可、对应源码归档、两种安装包、第三方许可与隐私扫描已完成；公开源码及私密安全报告入口已就绪。首次远程验证的实际状态见 [Windows CI](https://github.com/flydommm/bank-receipt-workbench/actions/runs/34526176098)。工作流只验证源码，不自动发布资产。
+
+仍未完成的是干净 Windows 的安装、启动、升级、卸载和首次 OCR 模型下载验证。安装包未签名；公开交付必须标明预发布状态、SHA-256 和这些限制，不能把本地构建或远程源码测试当作安装验证。
 
 完整步骤见[发布清单](release-checklist.md)。本地构建成功不等于以上门槛已经完成。
 
-维护者确认 AGPL-3.0 后，已完成许可证与项目元数据对齐，并重新构建两种 NSIS 安装包。对应源码提交、资产哈希、验证范围及授权待办见 [0.1.27 AGPL 交付记录](delivery-0.1.27-agpl.md)。前一轮准备包的交付记录保留为历史快照。
+后续公开结果：`v0.1.27-pre.1` 已发布，首次远程 Windows CI 全部通过；公开附件与精确源码标签已核验。最终状态见[公开预发布记录](public-release-0.1.27.md)。
+
+维护者确认 AGPL-3.0 后，已完成许可证与项目元数据对齐，并重新构建两种 NSIS 安装包。对应源码提交、资产哈希和验证范围见 [0.1.27 AGPL 交付记录](delivery-0.1.27-agpl.md)。前一轮准备包的交付记录保留为历史快照。

@@ -1,5 +1,7 @@
 # 0.1.27 本地交付记录（公开发布准备）
 
+> 历史快照：以下为 AGPL 许可对齐前的准备包，不是当前公开下载资产。当前安装包与校验值见 [AGPL 交付记录](delivery-0.1.27-agpl.md)及 [GitHub Releases](https://github.com/flydommm/bank-receipt-workbench/releases)。请勿用本文旧哈希校验新安装包。
+
 日期：2026-09-11。状态：本地构建与校验完成；未向 GitHub 推送、未发布 Release、未标记为新的稳定版。
 
 两个安装包均从干净提交 `a5ef9c0e941238dd1a5ffb98f9aa4e865900a80c` 构建，目标为 Windows x64。后续增加本交付记录的文档提交不改变已经生成的安装包。

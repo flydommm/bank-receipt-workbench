@@ -1,8 +1,8 @@
 # 贡献指南
 
-感谢你关注银行回单工作台。当前目录是 0.1.27 的公开发布准备版，项目许可证路线已确定为 AGPL-3.0-only，根目录已加入对应许可证文本。GitHub 仓库 `https://github.com/flydommm/bank-receipt-workbench` 已创建，但源码尚未推送到 `main`。本文先约定可复现、可审阅的本地协作方式；在源码推送和公开仓库设置完成前，不代表维护者承诺接受或合并外部贡献。
+感谢你关注银行回单工作台。公开源码版本为 `0.1.27`，安装包按 `v0.1.27-pre.1` 预发布交付；实际下载和公开状态以 [GitHub Releases](https://github.com/flydommm/bank-receipt-workbench/releases) 为准。项目采用 [AGPL-3.0-only](LICENSE)，源码已推送到公开仓库。本文约定可复现、可审阅的本地协作方式；外部贡献须经过维护者审阅后合并。
 
-公开入口：[源码](https://github.com/flydommm/bank-receipt-workbench/tree/main)（等待推送） · [Issues](https://github.com/flydommm/bank-receipt-workbench/issues) · [Releases](https://github.com/flydommm/bank-receipt-workbench/releases)（尚未发布）。
+公开入口：[源码](https://github.com/flydommm/bank-receipt-workbench/tree/main) · [Issues](https://github.com/flydommm/bank-receipt-workbench/issues) · [Releases](https://github.com/flydommm/bank-receipt-workbench/releases) · [GitHub 私密漏洞报告](https://github.com/flydommm/bank-receipt-workbench/security/advisories/new)。
 
 ## 开始前
 
@@ -10,7 +10,7 @@
 
 - [使用指南](docs/usage.md)：了解用户看到的行为和限制；
 - [开发指南](docs/development.md)：安装依赖、运行测试和构建 NSIS；
-- [第三方组件说明](THIRD_PARTY_NOTICES.md)：了解依赖来源和发布许可待决事项；
+- [第三方组件说明](THIRD_PARTY_NOTICES.md)：了解依赖来源和发布注意事项；
 - [安全说明](SECURITY.md)：了解漏洞报告和敏感数据边界。
 
 初始化依赖：
@@ -58,4 +58,4 @@ cargo test --manifest-path src-tauri/Cargo.toml --locked
 
 ## 安全问题
 
-不要通过公共 Issue 或 Pull Request 发布可利用的漏洞细节。仓库已经创建但源码尚未推送，GitHub 私密漏洞报告功能也尚未确认启用，请先阅读 [SECURITY.md](SECURITY.md) 并等待维护者配置正式渠道。
+不要通过公共 Issue 或 Pull Request 发布可利用的漏洞细节。请先阅读 [SECURITY.md](SECURITY.md)，并使用 [GitHub 私密漏洞报告](https://github.com/flydommm/bank-receipt-workbench/security/advisories/new) 提交安全问题；普通问题和非敏感建议再使用公开 Issues。

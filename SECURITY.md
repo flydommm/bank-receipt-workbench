@@ -1,8 +1,8 @@
 # 安全说明
 
-银行回单工作台面向本机处理敏感 PDF。当前目录是 0.1.27 的公开发布准备版，项目许可证路线已确定为 AGPL-3.0-only；GitHub 仓库 `https://github.com/flydommm/bank-receipt-workbench` 已创建，但源码尚未推送到 `main`。
+银行回单工作台面向本机处理敏感 PDF。公开源码版本为 `0.1.27`，安装包按 `v0.1.27-pre.1` 预发布交付；实际下载和公开状态以 [GitHub Releases](https://github.com/flydommm/bank-receipt-workbench/releases) 为准。项目采用 [AGPL-3.0-only](LICENSE)，源码已推送到公开仓库。
 
-源码、Issue 和 Release 地址分别是：[源码](https://github.com/flydommm/bank-receipt-workbench/tree/main)（等待推送）、[Issues](https://github.com/flydommm/bank-receipt-workbench/issues)、[Releases](https://github.com/flydommm/bank-receipt-workbench/releases)（尚未发布）。这些地址不提供私密报告能力；GitHub 私密漏洞报告功能和公开安全邮箱尚未确认启用。
+公开入口：[源码](https://github.com/flydommm/bank-receipt-workbench/tree/main) · [Issues](https://github.com/flydommm/bank-receipt-workbench/issues) · [Releases](https://github.com/flydommm/bank-receipt-workbench/releases) · [GitHub 私密漏洞报告](https://github.com/flydommm/bank-receipt-workbench/security/advisories/new)（需登录 GitHub）。
 
 ## 处理边界
 
@@ -13,16 +13,13 @@
 
 ## 如何报告疑似漏洞
 
-在正式仓库和私密渠道配置完成前，不要在公共 Issue、Pull Request、聊天记录或公开日志中描述可直接利用的细节，也不要附上真实业务文件。请保留最小的合成复现，并等待维护者提供以下任一正式渠道：
+不要在公共 Issue、Pull Request、聊天记录或公开日志中描述可直接利用的细节，也不要附上真实业务文件。普通问题和非敏感建议请使用 [Issues](https://github.com/flydommm/bank-receipt-workbench/issues)；安全问题请使用已启用的 [GitHub 私密漏洞报告入口](https://github.com/flydommm/bank-receipt-workbench/security/advisories/new)。
 
-1. GitHub 私密漏洞报告入口；或
-2. 维护者公布的安全邮箱。
-
-当前准备目录没有可用的报告地址，因此不要把计划中的 Issues 或其他 GitHub 地址当作私密渠道，也不要猜测邮箱。若问题涉及已暴露的令牌、密码或私钥，应立即在对应系统撤销或轮换，然后只提供不含秘密的时间线和影响范围。
+请保留最小的合成复现，并在私密报告中避免附上真实业务文件。若问题涉及已暴露的令牌、密码或私钥，应立即在对应系统撤销或轮换，然后只提供不含秘密的时间线和影响范围。
 
 ## 报告内容
 
-收到正式渠道后，报告应尽量包含：
+通过私密报告入口提交时，报告应尽量包含：
 
 - 受影响的版本、edition 和 Windows 版本；
 - 最小合成复现步骤和预期/实际行为；
@@ -34,4 +31,4 @@
 
 ## 依赖和发布前安全门槛
 
-公开发布前，维护者需要在 AGPL-3.0-only 路线下按 PyMuPDF/MuPDF 上游 AGPL 分发路线准备随包源码、构建说明和许可文本，并核对 Paddle 依赖和模型分发条件；同时完成干净 Windows 安装、升级、卸载、代码签名决定以及源码和产物的隐私扫描。当前仍未完成干净 Windows 验证、首次模型下载验证、代码签名和首次远程 CI；CI 不自动发布安装包，也不上传私有样本。
+正式稳定发布前，仍需完成干净 Windows 安装、升级、卸载和首次模型下载验证。当前已提供应用对应源码归档、构建说明、第三方版本及来源与许可清单，源码和附件也已完成配置规则下的隐私扫描；技术核对不替代独立法律审查，也不保证发现所有敏感信息。当前预发布安装包未签名；CI 只验证代码，不自动发布安装包，也不上传私有样本。

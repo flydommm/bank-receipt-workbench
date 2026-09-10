@@ -1,13 +1,15 @@
 # 0.1.27 AGPL 交付记录
 
-记录日期：2026-09-11。状态：本地源码与两种 NSIS 安装包已完成；GitHub 公开仓库已创建，源码推送等待维护者完成 GitHub CLI 授权，Release 尚未发布。本记录不把 0.1.27 标记为公开稳定版。
+记录日期：2026-09-11。本记录固定两种 NSIS 安装包的构建证据和资产哈希；对应源码已推送到公开仓库。下载及公开状态见 [GitHub Releases](https://github.com/flydommm/bank-receipt-workbench/releases)。0.1.27 按预发布交付，不标记为稳定版。
+
+`v0.1.27-pre.1` 已公开，首次 Windows CI 已通过；对应标签、公开附件名称和最终状态见[公开预发布记录](public-release-0.1.27.md)。
 
 ## 源码与许可
 
 - 仓库：<https://github.com/flydommm/bank-receipt-workbench>。
 - 维护者已确认采用 **AGPL-3.0**，项目元数据使用精确标识 **AGPL-3.0-only**。
 - 根目录 [LICENSE](../LICENSE) 为 [GNU 官方 AGPL v3 原文](https://www.gnu.org/licenses/agpl-3.0.txt)，SHA-256：`0D96A4FF68AD6D4B6F1F30F713B18D5184912BA8DD389F86AA7710DB079ABCB0`。
-- 两种安装包的源码提交均为 `ed550857817657f99f82a5268ef6ce81c1dfd7be`。该提交地址在源码推送后可访问；此后仅新增交付文档的提交不改变安装包对应版本。
+- 两种安装包的源码提交均为 [`ed550857817657f99f82a5268ef6ce81c1dfd7be`](https://github.com/flydommm/bank-receipt-workbench/tree/ed550857817657f99f82a5268ef6ce81c1dfd7be)。此后仅更新交付文档的提交不改变安装包对应版本。
 - 安装程序展示许可证，安装目录保留 `LICENSE`、`THIRD_PARTY_NOTICES.md` 和第三方原始许可文本；`runtime/project-source.json` 记录对应源码的精确提交地址。
 - 每个交付目录的 `build-info.json` 保存源码提交、源码 URL、许可证及其哈希、安装包哈希、运行时清单哈希和构建工具版本。
 
@@ -34,4 +36,4 @@
 
 ## 尚未完成
 
-GitHub CLI 授权与源码推送、首次远程 CI、Release 发布和私密漏洞报告入口设置尚未完成。干净 Windows 的安装/升级/卸载及首次模型下载验证仍待补齐；两种安装包均未签名。后续发布时需更新仓库文档中的状态，并根据[发布清单](release-checklist.md)如实区分准备版、预发布版和稳定版。
+干净 Windows 的安装/升级/卸载及首次模型下载验证仍待补齐；两种安装包均未签名。源码推送及私密漏洞报告入口已经完成；首次远程源码验证的实际状态见 [Windows CI](https://github.com/flydommm/bank-receipt-workbench/actions/runs/34526176098)。按[发布清单](release-checklist.md)如实区分预发布版和稳定版，不以 CI 替代安装验证。
