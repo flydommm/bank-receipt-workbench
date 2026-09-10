@@ -138,7 +138,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-release.ps1 
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-release.ps1 -Edition Ocr
 ```
 
-Core 和 Ocr 共用 `.build/runtime`，切换 edition 会重新生成运行时；不要把一次运行的 NSIS 包与另一次运行的 runtime 清单混用。每个版本和 edition 的本地记录目录只能创建一次，已有记录时应先人工保存或清理确认过的构建状态，再开始新的版本构建。
+Core 和 Ocr 共用 `.build/runtime`，切换 edition 会重新生成运行时；不要把一次运行的 NSIS 包与另一次运行的 runtime 清单混用。记录目录为 `outputs/releases/<版本>-<core或ocr>-<源码提交前12位>/`，包含根目录 `LICENSE`、第三方声明和源码提交地址。同一提交与 edition 的已有交付目录不会被覆盖；新提交使用独立目录，保留此前交付记录。
 
 脚本生成的本地资产位于受 `.gitignore` 保护的 `outputs/` 下，不是公开下载地址。若只需要手工调试构建，可分别执行：
 

@@ -11,6 +11,8 @@ try {
     $pendingChanges = & git status --porcelain
     if ($LASTEXITCODE -ne 0) { throw 'Unable to verify source status.' }
     if ($pendingChanges) { throw 'Commit or preserve pending source changes before building a release.' }
+    $projectLicense = Join-Path $projectRoot 'LICENSE'
+    if (-not (Test-Path -LiteralPath $projectLicense -PathType Leaf)) { throw 'Project LICENSE missing.' }
     $runtime = Join-Path $projectRoot '.build/runtime/python'
     & (Join-Path $PSScriptRoot 'prepare-runtime.ps1') -Edition $Edition -Rebuild:([bool](Test-Path -LiteralPath (Join-Path $projectRoot '.build/runtime')))
     if ($LASTEXITCODE -ne 0) { throw 'Runtime preparation failed.' }
@@ -23,6 +25,12 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Third-party license collection failed.' }
     & (Join-Path $runtime 'python.exe') -B -I (Join-Path $PSScriptRoot 'audit-public-tree.py')
     if ($LASTEXITCODE -ne 0) { throw 'Public tree audit failed.' }
+    # Ship the exact corresponding-source address inside the installed runtime.
+    [ordered]@{
+        license = 'AGPL-3.0-only'
+        source_commit = $sourceCommit
+        source_url = "https://github.com/flydommm/bank-receipt-workbench/tree/$sourceCommit"
+    } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $runtime 'project-source.json') -Encoding utf8
     # No developer-machine filenames in Python bytecode shipped in the package.
     Get-ChildItem -LiteralPath $runtime -Recurse -File -Filter '*.pyc' | Remove-Item -Force
     # Pin output location and architecture; never pick up an old default-path asset.
@@ -42,7 +50,7 @@ try {
     $sourcePackage = Join-Path $projectRoot ("src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/银行回单工作台_${version}_x64-setup.exe")
     if (-not (Test-Path -LiteralPath $sourcePackage -PathType Leaf)) { throw 'Expected NSIS package missing.' }
     if ((Get-Item -LiteralPath $sourcePackage).LastWriteTimeUtc -lt $buildStarted) { throw 'Refusing to publish a stale installer.' }
-    $outputRoot = Join-Path $projectRoot ("outputs/releases/$version-" + $Edition.ToLowerInvariant())
+    $outputRoot = Join-Path $projectRoot ("outputs/releases/$version-" + $Edition.ToLowerInvariant() + '-' + $sourceCommit.Substring(0, 12))
     if (Test-Path -LiteralPath $outputRoot) { throw 'Release output already exists; preserve it or choose another version before rebuilding.' }
     New-Item -ItemType Directory -Path $outputRoot -Force | Out-Null
     $assetName = "银行回单工作台_${version}_$($Edition.ToLowerInvariant())_x64-setup.exe"
@@ -51,6 +59,8 @@ try {
     Copy-Item -LiteralPath (Join-Path $runtime 'runtime-info.json') -Destination $outputRoot
     Copy-Item -LiteralPath (Join-Path $runtime 'third-party-inventory.json') -Destination $outputRoot
     Copy-Item -LiteralPath (Join-Path $runtime 'THIRD_PARTY_LICENSES.txt') -Destination $outputRoot
+    Copy-Item -LiteralPath $projectLicense -Destination $outputRoot
+    Copy-Item -LiteralPath (Join-Path $projectRoot 'THIRD_PARTY_NOTICES.md') -Destination $outputRoot
     $bunVersion = & bun --version
     if ($LASTEXITCODE -ne 0) { throw 'Unable to record Bun version.' }
     $rustVersion = & rustc --version
@@ -60,6 +70,9 @@ try {
         bytes = (Get-Item -LiteralPath $asset).Length
         sha256 = (Get-FileHash -LiteralPath $asset -Algorithm SHA256).Hash
         source_commit = $sourceCommit; source_has_uncommitted_changes = $false
+        license = $package.license
+        license_sha256 = (Get-FileHash -LiteralPath $projectLicense -Algorithm SHA256).Hash
+        source_url = "https://github.com/flydommm/bank-receipt-workbench/tree/$sourceCommit"
         built_at_utc = [DateTime]::UtcNow.ToString('o')
         target = 'x86_64-pc-windows-msvc'
         build_command = "scripts/build-release.ps1 -Edition $Edition"

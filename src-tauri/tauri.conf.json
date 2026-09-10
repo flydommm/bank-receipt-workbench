@@ -25,6 +25,9 @@
   },
   "bundle": {
     "active": true,
+    "license": "AGPL-3.0-only",
+    "licenseFile": "../LICENSE",
+    "homepage": "https://github.com/flydommm/bank-receipt-workbench",
     "targets": [
       "nsis"
     ],
@@ -37,7 +40,8 @@
       "../engine/*.py": "engine",
       "../.build/runtime/python/": "runtime/",
       "../engine/requirements*.txt": "engine/",
-      "../THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md"
+      "../THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md",
+      "../LICENSE": "LICENSE"
     },
     "windows": {
       "wix": {

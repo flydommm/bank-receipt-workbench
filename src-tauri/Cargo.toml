@@ -4,6 +4,9 @@ version = "0.1.27"
 description = "Local PDF search and precision splitting tool"
 authors = ["PDF Search Team"]
 edition = "2021"
+license = "AGPL-3.0-only"
+repository = "https://github.com/flydommm/bank-receipt-workbench"
+homepage = "https://github.com/flydommm/bank-receipt-workbench"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

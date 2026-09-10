@@ -1,6 +1,8 @@
 # 安全说明
 
-银行回单工作台面向本机处理敏感 PDF。当前目录是 0.1.27 的公开发布准备版，尚未配置最终 GitHub owner/repo、公开安全邮箱或仓库专属漏洞报告入口。
+银行回单工作台面向本机处理敏感 PDF。当前目录是 0.1.27 的公开发布准备版，项目许可证路线已确定为 AGPL-3.0-only；GitHub 仓库 `https://github.com/flydommm/bank-receipt-workbench` 已创建，但源码尚未推送到 `main`。
+
+源码、Issue 和 Release 地址分别是：[源码](https://github.com/flydommm/bank-receipt-workbench/tree/main)（等待推送）、[Issues](https://github.com/flydommm/bank-receipt-workbench/issues)、[Releases](https://github.com/flydommm/bank-receipt-workbench/releases)（尚未发布）。这些地址不提供私密报告能力；GitHub 私密漏洞报告功能和公开安全邮箱尚未确认启用。
 
 ## 处理边界
 
@@ -16,7 +18,7 @@
 1. GitHub 私密漏洞报告入口；或
 2. 维护者公布的安全邮箱。
 
-当前准备目录没有可用的报告地址，因此不要猜测邮箱、仓库地址或账号名称。若问题涉及已暴露的令牌、密码或私钥，应立即在对应系统撤销或轮换，然后只提供不含秘密的时间线和影响范围。
+当前准备目录没有可用的报告地址，因此不要把计划中的 Issues 或其他 GitHub 地址当作私密渠道，也不要猜测邮箱。若问题涉及已暴露的令牌、密码或私钥，应立即在对应系统撤销或轮换，然后只提供不含秘密的时间线和影响范围。
 
 ## 报告内容
 
@@ -32,4 +34,4 @@
 
 ## 依赖和发布前安全门槛
 
-公开发布前，维护者需要单独核对 PyMuPDF 的 AGPL 或商业许可路径、Paddle 依赖和模型分发条件，并完成干净 Windows 安装、升级、卸载、代码签名决定以及源码和产物的隐私扫描。CI 不自动发布安装包，也不上传私有样本。
+公开发布前，维护者需要在 AGPL-3.0-only 路线下按 PyMuPDF/MuPDF 上游 AGPL 分发路线准备随包源码、构建说明和许可文本，并核对 Paddle 依赖和模型分发条件；同时完成干净 Windows 安装、升级、卸载、代码签名决定以及源码和产物的隐私扫描。当前仍未完成干净 Windows 验证、首次模型下载验证、代码签名和首次远程 CI；CI 不自动发布安装包，也不上传私有样本。

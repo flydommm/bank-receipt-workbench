@@ -8,16 +8,29 @@
 
 ## 当前状态
 
-这里是 0.1.27 的公开发布准备目录，不是已经发布的稳定版。项目归属和 GitHub 仓库地址尚未确定，因此文档不提供下载地址或仓库专属链接。
+这里是 0.1.27 的公开发布准备目录，不是已经发布的稳定版。项目许可路线已确定为 **AGPL-3.0-only**，根目录已加入对应的 AGPL-3.0 文本；GitHub 仓库已经创建，但源码尚未推送到 `main`。
 
 本地整理范围、测试结果和未完成事项见[公开发布准备记录](docs/preparation-status.md)。
 
+## 许可证与计划公开入口
+
+本项目采用 AGPL-3.0-only 路线，根目录已加入对应的 AGPL-3.0 文本；PyMuPDF/MuPDF 按上游 AGPL 分发路线处理，公开发布时需随包保留相应源码、构建说明和许可文本，并继续核对 PaddleOCR/PaddlePaddle/PaddleX、Python、Rust 和前端依赖的分发条件。项目许可证不等于第三方依赖许可证；不能把整个安装包笼统称为 MIT。
+
+已创建的 GitHub 仓库地址及待完成入口如下：
+
+- 仓库：[https://github.com/flydommm/bank-receipt-workbench](https://github.com/flydommm/bank-receipt-workbench)（已创建）；
+- 源码：[https://github.com/flydommm/bank-receipt-workbench/tree/main](https://github.com/flydommm/bank-receipt-workbench/tree/main)（等待源码推送）；
+- Issues：[https://github.com/flydommm/bank-receipt-workbench/issues](https://github.com/flydommm/bank-receipt-workbench/issues)；
+- Releases：[https://github.com/flydommm/bank-receipt-workbench/releases](https://github.com/flydommm/bank-receipt-workbench/releases)（尚未发布）。
+
+仓库已创建但目前尚未推送源码，`main` 不应被描述为已有项目内容；Release 尚未发布，远程 CI 尚未运行。GitHub 私密漏洞报告功能和安全邮箱也尚未确认启用；敏感问题请先按 [安全说明](SECURITY.md) 保留最小合成复现，不要把细节写入公共 Issues。
+
 公开发布前仍需完成以下事项：
 
-- 由维护者选择并加入项目许可证；当前不能把项目或安装包称为 MIT 许可。
-- 明确 PyMuPDF 的 AGPL 或商业许可路径，并核对其他第三方依赖的分发条件。
+- 核对根目录 `LICENSE`、项目元数据和公开说明均标识 AGPL-3.0-only，按 PyMuPDF/MuPDF 上游 AGPL 分发路线准备随包源码、构建说明和许可文本，并完成其他第三方依赖分发条件核对。
 - 在真正干净的 Windows x64 环境完成 Core 与 OCR 安装、升级、卸载和首次运行验证。
 - 决定是否提供代码签名；当前安装包没有签名证书。
+- 将源码推送到已创建的 GitHub 仓库并验证 `main`、Issues、Releases 和源码入口；当前远程 CI 尚未执行。
 
 ## 能做什么
 
@@ -45,7 +58,7 @@ OCR edition 首次初始化或首次识别时可能从模型提供方下载公�
 
 两种安装包使用同一应用标识，请选择其中一种安装；切换 edition 会更新同一个应用，并非同时安装两套独立软件。
 
-安装包尚未在公开地址发布。维护者完成发布门槛后，应在 GitHub Release 中提供 edition、SHA-256 和对应的运行时清单；在此之前请不要把 `outputs/` 或本地构建目录当作下载源。
+安装包尚未在公开地址发布。维护者完成发布门槛并将源码推送到已创建的仓库后，应在 [GitHub Releases](https://github.com/flydommm/bank-receipt-workbench/releases) 中提供 edition、SHA-256 和对应的运行时清单；在此之前请不要把 `outputs/` 或本地构建目录当作下载源。
 
 ## 开发环境概览
 

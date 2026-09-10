@@ -1,13 +1,14 @@
 # 0.1.27 发布清单
 
-本文是 Windows x64 安装包的发布前检查表。当前版本仍处于公开发布准备阶段；未完成许可证、干净 Windows 验证、仓库归属和代码签名决定前，不应把任何本地安装包称为正式公开稳定版。
+本文是 Windows x64 安装包的发布前检查表。当前版本仍处于公开发布准备阶段；项目许可路线已确定为 AGPL-3.0-only，根目录已加入对应许可证文本，但 GitHub 仓库虽已创建、源码尚未推送，且干净 Windows 验证和代码签名仍未完成前，不应把任何本地安装包称为正式公开稳定版。
 
 ## 公开仓库门槛
 
-- [ ] 确认 GitHub owner/repo，并把 README、Issue、Release 和安全报告入口改成真实可访问地址。
-- [ ] 选择项目许可证，获得必要授权后创建根目录 `LICENSE`；在此之前不宣称 MIT 或其他许可证。
-- [ ] 明确 PyMuPDF 的 AGPL 或商业许可路径，并核对 PaddleOCR/PaddlePaddle/PaddleX、Python 和 Rust 依赖的分发条件。
+- [ ] 向已创建的 GitHub 仓库 `flydommm/bank-receipt-workbench` 推送源码并验证 README、Issue、Release 和安全报告入口。入口地址：源码 <https://github.com/flydommm/bank-receipt-workbench/tree/main>、Issues <https://github.com/flydommm/bank-receipt-workbench/issues>、Releases <https://github.com/flydommm/bank-receipt-workbench/releases>；当前源码尚未推送，Release 尚未发布。
+- [ ] 核对根目录 `LICENSE` 和项目元数据均标识 AGPL-3.0-only，并确认项目权利人授权；在公开仓库提交并完成第三方许可核对前，不把本地准备目录称为已完成许可交付，也不宣称 MIT。
+- [ ] 在 AGPL-3.0-only 路线下按 PyMuPDF/MuPDF 上游 AGPL 分发路线准备随包源码、构建说明和许可文本，并核对 PaddleOCR/PaddlePaddle/PaddleX、Python 和 Rust 依赖的分发条件。
 - [ ] 复核第三方通知、版权文本、模型下载与分发边界。
+- [ ] 验证 GitHub 私密漏洞报告功能或公布安全邮箱；当前没有已确认的私密报告入口，不能把计划中的 Issues 当作安全渠道。
 - [ ] 扫描待公开文件、Git 历史和其他 refs，不含真实公司/用户资料、账号、令牌、个人绝对路径、私有 PDF、任务数据库、日志或本地交付记录。
 - [ ] 检查 README、文档和工作流只使用相对路径或真实公开 URL，不链接 `outputs/`、`.artifacts/`、`.build/`、`target/` 或其他只存在于维护者电脑的文件。
 
@@ -93,9 +94,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-release.ps1 
 
 ## 发布决定
 
-- [ ] 项目许可证和第三方依赖许可已获得明确结论。
+- [ ] 根目录 `LICENSE` 已包含 AGPL-3.0-only，且第三方依赖许可和 PyMuPDF/MuPDF 随包源码、构建说明及许可文本均已核对。
 - [ ] Core/Ocr 安装、升级、卸载和首次 OCR 均在干净 Windows 上通过。
-- [ ] 公开仓库、Release 资产、SHA-256、变更说明和安全入口已准备。
+- [ ] 已创建仓库中的 `main` 含有经核对的源码，Release 资产、SHA-256、变更说明和安全入口已准备；当前源码尚未推送，Release 尚未发布。
+- [ ] GitHub 私密漏洞报告功能或安全邮箱已实际启用并验证；不能用公共 Issues 接收敏感漏洞细节。
 - [ ] 代码签名已配置，或公开说明当前包未签名及用户核验方法。
 - [ ] 维护者明确批准后，才创建 Release、上传安装包或把同一二进制标记为稳定版。
 

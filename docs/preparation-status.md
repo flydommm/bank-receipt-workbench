@@ -1,6 +1,8 @@
 # 0.1.27 公开发布准备记录
 
-日期：2026-09-11。状态：本地准备，尚未公开发布，也未替代已验收的 0.1.26 稳定版。
+日期：2026-09-11。状态：本地准备，尚未公开发布，也未替代已验收的 0.1.26 稳定版。项目许可证路线已确定为 AGPL-3.0-only，根目录已加入对应许可证文本；GitHub 仓库已创建，但源码尚未推送，Release 仍未发布。
+
+GitHub 仓库已创建：[https://github.com/flydommm/bank-receipt-workbench](https://github.com/flydommm/bank-receipt-workbench)。[源码](https://github.com/flydommm/bank-receipt-workbench/tree/main)尚未推送到 `main`，[Issues](https://github.com/flydommm/bank-receipt-workbench/issues)和[Releases](https://github.com/flydommm/bank-receipt-workbench/releases)地址已确定但 Release 尚未发布；GitHub 私密漏洞报告功能和安全邮箱也尚未确认启用。
 
 本地生成的两个 NSIS 包、构建提交与校验值见[交付记录](delivery-0.1.27-preparation.md)。
 
@@ -38,8 +40,8 @@
 
 ## 公开发布前仍需完成
 
-1. **项目许可证。** 由权利人确认开源路线并加入 `LICENSE`。PyMuPDF 提供 AGPL 或商业许可，不能仅给应用贴上 MIT 标签；第三方声明和许可文本也需要随公开版本保留。
-2. **GitHub 归属。** 确定 owner/repo、公开范围和登录授权，然后补入真实的源码、Issue、Release 和安全联系入口。不要把密码或访问令牌写入源码或会话。
+1. **项目许可证。** 核对根目录 `LICENSE` 与项目元数据均标识 AGPL-3.0-only，按 PyMuPDF/MuPDF 上游 AGPL 分发路线准备随包源码、构建说明和许可文本；不能仅给应用贴上 MIT 标签。第三方声明和许可文本也需要随公开版本保留。
+2. **GitHub 归属。** 向已创建的仓库 `flydommm/bank-receipt-workbench` 推送并验证源码、Issue、Release 和安全联系入口。当前 `main` 尚无已推送源码，Release 尚未发布；不要把密码或访问令牌写入源码或会话。
 3. **干净 Windows 验证。** 在没有本项目开发环境的 Windows x64 上验证安装、启动、首次模型下载、升级及卸载。目前没有完成这一项。
 4. **签名与发布说明。** 当前安装包未签名。公开交付需明确说明签名状态、版本、SHA-256、运行时类型和已知限制。
 5. **首次远程 CI。** 已准备 Windows 工作流，但尚未在 GitHub Actions 上执行。工作流只测试，不自动发布资产。

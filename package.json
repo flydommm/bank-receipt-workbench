@@ -2,6 +2,15 @@
   "name": "pdf-search",
   "private": true,
   "version": "0.1.27",
+  "license": "AGPL-3.0-only",
+  "homepage": "https://github.com/flydommm/bank-receipt-workbench",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/flydommm/bank-receipt-workbench.git"
+  },
+  "bugs": {
+    "url": "https://github.com/flydommm/bank-receipt-workbench/issues"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 1420",

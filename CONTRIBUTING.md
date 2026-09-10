@@ -1,6 +1,8 @@
 # 贡献指南
 
-感谢你关注银行回单工作台。当前目录是 0.1.27 的公开发布准备版，项目归属、最终许可证和公开仓库流程尚未由维护者确定。本文先约定可复现、可审阅的本地协作方式；在许可证和仓库设置完成前，不代表维护者承诺接受或合并外部贡献。
+感谢你关注银行回单工作台。当前目录是 0.1.27 的公开发布准备版，项目许可证路线已确定为 AGPL-3.0-only，根目录已加入对应许可证文本。GitHub 仓库 `https://github.com/flydommm/bank-receipt-workbench` 已创建，但源码尚未推送到 `main`。本文先约定可复现、可审阅的本地协作方式；在源码推送和公开仓库设置完成前，不代表维护者承诺接受或合并外部贡献。
+
+公开入口：[源码](https://github.com/flydommm/bank-receipt-workbench/tree/main)（等待推送） · [Issues](https://github.com/flydommm/bank-receipt-workbench/issues) · [Releases](https://github.com/flydommm/bank-receipt-workbench/releases)（尚未发布）。
 
 ## 开始前
 
@@ -39,7 +41,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --locked
 - 不把 `outputs/`、`.artifacts/`、`.build/`、`dist/`、`target/`、`.venv/`、模型缓存或安装包加入提交；
 - 不新增会自动上传 PDF、OCR 文字、日志或反馈的服务；
 - 不擅自改变任务数据库、搜索结果协议、OCR 配方或安装身份；这些变更要说明迁移和兼容影响；
-- 不修改、复制或重新许可第三方依赖的许可证文本。当前项目许可证尚未选定，贡献者不要自行创建根目录 `LICENSE` 或宣称项目采用某个许可证。
+- 不修改、复制或重新许可第三方依赖的许可证文本。项目许可证路线为 AGPL-3.0-only；贡献者不要自行替换根目录 `LICENSE`、把第三方依赖误标为项目许可证，或将项目文本改成其他许可证。
 
 涉及结果算法或 OCR 运行时的修改，应补充有意义的合成测试，并说明是否改变了计算版本、缓存复用或安装包资源。涉及文档的修改应检查是否仍指向公开可访问的相对路径，不要链接本机 `outputs/` 或 `target/`。
 
@@ -56,4 +58,4 @@ cargo test --manifest-path src-tauri/Cargo.toml --locked
 
 ## 安全问题
 
-不要通过公共 Issue 或 Pull Request 发布可利用的漏洞细节。当前准备目录没有配置公开安全邮箱或仓库专属私密报告入口，请先阅读 [SECURITY.md](SECURITY.md) 并等待维护者配置正式渠道。
+不要通过公共 Issue 或 Pull Request 发布可利用的漏洞细节。仓库已经创建但源码尚未推送，GitHub 私密漏洞报告功能也尚未确认启用，请先阅读 [SECURITY.md](SECURITY.md) 并等待维护者配置正式渠道。
