@@ -1,0 +1,3 @@
+# Developer default: core text PDF support only.
+# For scanned PDFs use requirements-ocr.txt explicitly.
+-r requirements-core.txt

@@ -1,0 +1,612 @@
+.batch-crop-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(16, 38, 63, .5);
+}
+
+.batch-crop-dialog {
+  --batch-crop-ink: #20374a;
+  --batch-crop-heading: #172b42;
+  --batch-crop-muted: #6a8194;
+  --batch-crop-soft: #8296a4;
+  --batch-crop-line: #dce6ed;
+  --batch-crop-wash: #f5f8fa;
+  --batch-crop-paper: #fffefa;
+  --batch-crop-moss: #3f8b7b;
+  --batch-crop-moss-dark: #286c60;
+  --batch-crop-old: #7f8f9c;
+  --batch-crop-danger: #a6534d;
+  display: flex;
+  width: min(980px, 100%);
+  max-height: min(760px, calc(100vh - 40px));
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--batch-crop-line);
+  border-radius: 16px;
+  background: var(--batch-crop-paper);
+  box-shadow: 0 28px 80px rgba(16, 38, 63, .28);
+  color: var(--batch-crop-ink);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.batch-crop-dialog h2,
+.batch-crop-dialog h3,
+.batch-crop-dialog p,
+.batch-crop-dialog dl,
+.batch-crop-dialog ul {
+  margin: 0;
+}
+
+.batch-crop-dialog button,
+.batch-crop-dialog select,
+.batch-crop-dialog input {
+  font: inherit;
+}
+
+.batch-crop-dialog-header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 17px 22px 14px;
+  border-bottom: 1px solid #edf1f5;
+}
+
+.batch-crop-dialog-eyebrow,
+.batch-crop-dialog-section-kicker {
+  display: block;
+  color: var(--batch-crop-moss);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: .08em;
+  line-height: 1.3;
+  text-transform: uppercase;
+}
+
+.batch-crop-dialog-header h2 {
+  margin-top: 3px;
+  color: var(--batch-crop-heading);
+  font-size: 18px;
+  letter-spacing: -.02em;
+  line-height: 1.25;
+}
+
+.batch-crop-dialog-sample {
+  margin-top: 5px !important;
+  color: var(--batch-crop-muted);
+  font-size: 11px;
+}
+
+.batch-crop-dialog-progress {
+  flex: 0 1 300px;
+  padding-top: 3px;
+  color: var(--batch-crop-soft);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.batch-crop-dialog-content {
+  display: grid;
+  min-height: 0;
+  flex: 1 1 auto;
+  grid-template-columns: minmax(220px, .72fr) minmax(0, 1.28fr);
+  overflow: hidden;
+}
+
+.batch-crop-dialog-sidebar {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.batch-crop-dialog-sidebar {
+  padding: 4px 22px 14px;
+  border-right: 1px solid #edf1f5;
+}
+
+.batch-crop-dialog-preview-panel {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 4px 22px 14px;
+}
+
+.batch-crop-dialog-section {
+  display: grid;
+  gap: 8px;
+  padding: 14px 0;
+  border-bottom: 1px solid #edf1f5;
+}
+
+.batch-crop-dialog-section:last-child {
+  border-bottom: 0;
+}
+
+.batch-crop-dialog-section h3 {
+  color: #29445a;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.batch-crop-dialog-scope > label,
+.batch-crop-dialog-item-select-label {
+  color: #728b9e;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .05em;
+}
+
+.batch-crop-dialog select {
+  width: min(100%, 300px);
+  border: 1px solid #cbd9e3;
+  border-radius: 8px;
+  padding: 8px 9px;
+  outline: 0;
+  background: #fff;
+  color: #243e56;
+  font-size: 12px;
+}
+
+.batch-crop-dialog select:focus-visible,
+.batch-crop-dialog button:focus-visible,
+.batch-crop-dialog input:focus-visible,
+.batch-crop-dialog:focus-visible {
+  outline: 3px solid rgba(63, 139, 123, .3);
+  outline-offset: 2px;
+}
+
+.batch-crop-dialog select:disabled,
+.batch-crop-dialog button:disabled,
+.batch-crop-dialog input:disabled {
+  cursor: not-allowed;
+  opacity: .52;
+}
+
+.batch-crop-dialog-help {
+  color: var(--batch-crop-soft);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.batch-crop-dialog-counts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.batch-crop-dialog-counts > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid var(--batch-crop-line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--batch-crop-wash);
+}
+
+.batch-crop-dialog-counts dt {
+  color: var(--batch-crop-muted);
+}
+
+.batch-crop-dialog-counts dd {
+  margin: 0;
+  color: var(--batch-crop-heading);
+  font-size: 15px;
+  font-weight: 750;
+}
+
+.batch-crop-dialog-skipped ul {
+  display: grid;
+  max-height: 230px;
+  gap: 7px;
+  overflow-y: auto;
+  padding: 0 3px 0 0;
+  list-style: none;
+}
+
+.batch-crop-dialog-skipped li {
+  display: grid;
+  gap: 2px;
+  border-left: 3px solid #e5d2ad;
+  padding: 6px 8px;
+  background: #fff9eb;
+}
+
+.batch-crop-dialog-skipped li strong {
+  color: #5e5960;
+  font-size: 11px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.batch-crop-dialog-skipped li span {
+  color: #8a6a35;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.batch-crop-dialog-error,
+.batch-crop-dialog-preview-error {
+  border: 1px solid #e5b4b0;
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #fff5f4;
+  color: var(--batch-crop-danger);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.batch-crop-dialog-retry {
+  align-self: flex-start;
+  flex: 0 0 auto;
+  justify-self: start;
+  min-height: 2rem;
+  border: 1px solid #d8b9b5;
+  border-radius: 7px;
+  padding: 5px 10px;
+  background: #fff5f4;
+  color: var(--batch-crop-danger);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.batch-crop-dialog-retry:hover {
+  border-color: var(--batch-crop-danger);
+  background: #fcebea;
+}
+
+.batch-crop-dialog-preview-toolbar {
+  display: flex;
+  flex: 0 0 auto;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 10px 0 12px;
+  border-bottom: 1px solid #edf1f5;
+}
+
+.batch-crop-dialog-preview-toolbar > div:first-child {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.batch-crop-dialog-preview-toolbar strong {
+  min-width: 0;
+  color: var(--batch-crop-heading);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.batch-crop-dialog-preview-toolbar span:not(.batch-crop-dialog-section-kicker) {
+  color: var(--batch-crop-muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.batch-crop-dialog-item-select-label {
+  display: grid;
+  flex: 0 1 280px;
+  gap: 5px;
+  min-width: 180px;
+}
+
+.batch-crop-dialog-item-select-label select {
+  width: 100%;
+  font-size: 11px;
+}
+
+.batch-crop-dialog-preview-wrap {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 0 12px;
+  overflow: hidden;
+}
+
+.batch-crop-dialog-image-scroll {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  align-items: flex-start;
+  justify-content: center;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.batch-crop-dialog-preview-page {
+  position: relative;
+  flex: 0 0 auto;
+  width: auto;
+  height: 100%;
+  max-height: 100%;
+  overflow: hidden;
+  background: #fff;
+  box-shadow: 0 12px 28px rgba(27, 55, 79, .18);
+  line-height: 0;
+}
+
+.batch-crop-dialog-preview-page img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  user-select: none;
+}
+
+.batch-crop-dialog-preview-page.is-expanded {
+  width: 100%;
+  height: auto;
+  max-height: none;
+}
+
+.batch-crop-dialog-legend button {
+  margin-left: auto;
+  padding: 4px 8px;
+  font-size: 11px;
+}
+
+.batch-crop-dialog-box {
+  position: absolute;
+  pointer-events: none;
+}
+
+.batch-crop-dialog-box-old {
+  z-index: 2;
+  border: 2px dashed var(--batch-crop-old);
+  background: rgba(127, 143, 156, .08);
+}
+
+.batch-crop-dialog-box-new {
+  z-index: 3;
+  border: 2px solid var(--batch-crop-moss);
+  background: rgba(63, 139, 123, .14);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, .66);
+}
+
+.batch-crop-dialog-preview-placeholder {
+  display: grid;
+  width: min(100%, 620px);
+  height: 100%;
+  min-height: 0;
+  flex: 0 1 auto;
+  place-items: center;
+  border: 1px dashed #c7d4dc;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #f6f9fa, #eef4f3);
+  color: var(--batch-crop-muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.batch-crop-dialog-preview-error {
+  flex: 0 0 auto;
+}
+
+.batch-crop-dialog-legend {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px 18px;
+  color: var(--batch-crop-muted);
+  font-size: 11px;
+}
+
+.batch-crop-dialog-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.batch-crop-dialog-legend i {
+  display: inline-block;
+  width: 19px;
+  height: 11px;
+}
+
+.batch-crop-dialog-legend-old {
+  border: 2px dashed var(--batch-crop-old);
+  background: rgba(127, 143, 156, .08);
+}
+
+.batch-crop-dialog-legend-new {
+  border: 2px solid var(--batch-crop-moss);
+  background: rgba(63, 139, 123, .14);
+}
+
+.batch-crop-dialog-navigation {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 2px 0 11px;
+}
+
+.batch-crop-dialog-navigation button,
+.batch-crop-dialog-legend button,
+.batch-crop-dialog-actions button {
+  min-height: 2.2rem;
+  border: 1px solid var(--batch-crop-line);
+  border-radius: 7px;
+  padding: 6px 12px;
+  background: var(--batch-crop-wash);
+  color: var(--batch-crop-muted);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.batch-crop-dialog-navigation button:hover:not(:disabled),
+.batch-crop-dialog-legend button:hover:not(:disabled),
+.batch-crop-dialog-actions button:hover:not(:disabled) {
+  border-color: #b9d3cd;
+  background: #eef8f4;
+  color: var(--batch-crop-moss-dark);
+}
+
+.batch-crop-dialog-item-position {
+  min-width: 50px;
+  color: var(--batch-crop-soft);
+  font-size: 11px;
+  text-align: center;
+}
+
+.batch-crop-dialog-check {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  margin-top: 0;
+  padding: 9px 0 2px;
+  border-top: 1px solid #edf1f5;
+  color: #48677b;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.batch-crop-dialog-check input {
+  margin: 0;
+  accent-color: var(--batch-crop-moss);
+}
+
+.batch-crop-dialog-actions {
+  display: flex;
+  flex: 0 0 auto;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 22px 15px;
+  border-top: 1px solid #edf1f5;
+}
+
+.batch-crop-dialog-actions button {
+  min-width: 90px;
+}
+
+.batch-crop-dialog-actions .batch-crop-dialog-apply {
+  border-color: var(--batch-crop-moss);
+  background: var(--batch-crop-moss);
+  color: #fff;
+}
+
+.batch-crop-dialog-actions .batch-crop-dialog-apply:hover:not(:disabled) {
+  border-color: var(--batch-crop-moss-dark);
+  background: var(--batch-crop-moss-dark);
+  color: #fff;
+}
+
+@media (max-width: 820px) {
+  .batch-crop-dialog-content {
+    grid-template-columns: minmax(0, 1fr);
+    overflow-y: auto;
+  }
+
+  .batch-crop-dialog-sidebar {
+    overflow: visible;
+  }
+
+  .batch-crop-dialog-sidebar {
+    border-right: 0;
+    border-bottom: 1px solid #edf1f5;
+  }
+}
+
+@media (max-width: 560px) {
+  .batch-crop-backdrop {
+    align-items: stretch;
+    padding: 10px;
+  }
+
+  .batch-crop-dialog {
+    width: 100%;
+    max-height: 100%;
+    border-radius: 12px;
+  }
+
+  .batch-crop-dialog-header,
+  .batch-crop-dialog-sidebar,
+  .batch-crop-dialog-preview-panel,
+  .batch-crop-dialog-actions {
+    padding-inline: 16px;
+  }
+
+  .batch-crop-dialog-header,
+  .batch-crop-dialog-preview-toolbar {
+    flex-direction: column;
+  }
+
+  .batch-crop-dialog-progress {
+    flex-basis: auto;
+    padding-top: 0;
+    text-align: left;
+  }
+
+  .batch-crop-dialog-item-select-label {
+    width: 100%;
+  }
+
+  .batch-crop-dialog-actions {
+    align-items: stretch;
+    flex-direction: column-reverse;
+  }
+
+  .batch-crop-dialog-actions button {
+    width: 100%;
+  }
+}
+
+@media (max-height: 720px) {
+  .batch-crop-backdrop {
+    padding-block: 10px;
+  }
+
+  .batch-crop-dialog {
+    max-height: calc(100vh - 20px);
+  }
+
+  .batch-crop-dialog-header {
+    padding-block: 12px 10px;
+  }
+
+  .batch-crop-dialog-section {
+    padding-block: 10px;
+  }
+
+  .batch-crop-dialog-preview-wrap {
+    min-height: 0;
+    padding-block: 10px 8px;
+  }
+
+  .batch-crop-dialog-preview-placeholder {
+    min-height: 0;
+  }
+
+  .batch-crop-dialog-skipped ul {
+    max-height: 150px;
+  }
+
+  .batch-crop-dialog-actions {
+    padding-block: 9px 11px;
+  }
+}

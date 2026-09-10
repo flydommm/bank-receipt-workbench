@@ -1,0 +1,5 @@
+# Optional Windows CPU OCR runtime; model downloads are separate.
+-r requirements-core.txt
+paddleocr==3.7.0
+paddlepaddle==3.3.1
+paddlex==3.7.2

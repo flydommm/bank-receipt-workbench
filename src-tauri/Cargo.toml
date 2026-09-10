@@ -1,0 +1,31 @@
+[package]
+name = "pdf-search"
+version = "0.1.27"
+description = "Local PDF search and precision splitting tool"
+authors = ["PDF Search Team"]
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+# PDF geometry must survive Python -> Rust -> WebView -> Rust unchanged:
+# review manifests compare the original coordinates exactly.
+serde_json = { version = "1", features = ["float_roundtrip"] }
+rfd = "0.15"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_JobObjects",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+] }
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]

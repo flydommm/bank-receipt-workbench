@@ -1,0 +1,5 @@
+* text=auto eol=lf
+third-party/licenses/** -text whitespace=-blank-at-eol
+
+*.ico binary
+*.png binary

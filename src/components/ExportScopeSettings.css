@@ -1,0 +1,443 @@
+.export-scope-settings-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(16, 38, 63, .48);
+}
+
+.export-scope-settings {
+  --export-scope-ink: #20374a;
+  --export-scope-heading: #172b42;
+  --export-scope-muted: #6a8194;
+  --export-scope-soft: #8195a4;
+  --export-scope-line: #dce6ed;
+  --export-scope-paper: #fffefa;
+  --export-scope-wash: #f5f8fa;
+  --export-scope-moss: #3f8b7b;
+  --export-scope-moss-dark: #286c60;
+  --export-scope-danger: #a6534d;
+  display: flex;
+  width: min(760px, 100%);
+  max-height: min(760px, calc(100vh - 48px));
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--export-scope-line);
+  border-radius: 16px;
+  background: var(--export-scope-paper);
+  box-shadow: 0 24px 70px rgba(16, 38, 63, .24);
+  color: var(--export-scope-ink);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.export-scope-settings h2,
+.export-scope-settings h3,
+.export-scope-settings p,
+.export-scope-settings dl {
+  margin: 0;
+}
+
+.export-scope-settings-header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 22px 14px;
+  border-bottom: 1px solid #edf1f5;
+}
+
+.export-scope-settings-eyebrow {
+  color: var(--export-scope-moss);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.export-scope-settings-header h2 {
+  margin-top: 3px;
+  color: var(--export-scope-heading);
+  font-size: 20px;
+  letter-spacing: -.02em;
+  line-height: 1.25;
+}
+
+.export-scope-settings-busy {
+  flex: 0 1 auto;
+  padding-top: 4px;
+  color: var(--export-scope-soft);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.export-scope-settings-content {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px 22px 10px;
+  scrollbar-gutter: stable;
+}
+
+.export-scope-settings-error,
+.export-scope-settings-warning,
+.export-scope-settings-omitted-note,
+.export-scope-settings-empty-note {
+  margin-top: 10px;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.export-scope-settings-error {
+  border: 1px solid #e5b4b0;
+  background: #fff5f4;
+  color: var(--export-scope-danger);
+}
+
+.export-scope-settings-warning {
+  border: 1px solid #e5d2ad;
+  background: #fff9eb;
+  color: #8a6a35;
+}
+
+.export-scope-settings-omitted-note,
+.export-scope-settings-empty-note {
+  border: 1px solid #ead19c;
+  background: #fff9e9;
+  color: #8a671d;
+}
+
+.export-scope-settings-section {
+  display: grid;
+  gap: 9px;
+  padding: 15px 0;
+  border-bottom: 1px solid #edf1f5;
+}
+
+.export-scope-settings-section:last-child {
+  border-bottom: 0;
+}
+
+.export-scope-settings-section h3 {
+  color: #29445a;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.export-scope-settings-fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.export-scope-settings-fieldset legend {
+  margin-bottom: 6px;
+  color: #728b9e;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .05em;
+}
+
+.export-scope-settings-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+}
+
+.export-scope-settings-options label,
+.export-scope-settings-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: #597488;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.export-scope-settings-options input,
+.export-scope-settings-checkbox input,
+.export-scope-settings-source-option input {
+  margin: 0;
+  accent-color: var(--export-scope-moss);
+}
+
+.export-scope-settings-source-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 7px;
+}
+
+.export-scope-settings-source-option {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 7px;
+  border: 1px solid var(--export-scope-line);
+  border-radius: 8px;
+  padding: 8px;
+  background: #fff;
+  color: var(--export-scope-ink);
+  cursor: pointer;
+}
+
+.export-scope-settings-source-option:hover {
+  border-color: #b9d3cd;
+  background: #f4faf7;
+}
+
+.export-scope-settings-source-copy,
+.export-scope-settings-list-capture > div,
+.export-scope-settings-captured-list > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.export-scope-settings-source-copy strong,
+.export-scope-settings-list-capture strong,
+.export-scope-settings-captured-list strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #29445a;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.export-scope-settings-source-copy span,
+.export-scope-settings-list-capture span,
+.export-scope-settings-captured-list span {
+  color: var(--export-scope-muted);
+  font-size: 10px;
+}
+
+.export-scope-settings-list-capture,
+.export-scope-settings-captured-list {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid var(--export-scope-line);
+  border-radius: 8px;
+  padding: 9px 10px;
+  background: var(--export-scope-wash);
+}
+
+.export-scope-settings-captured-list {
+  border-color: #c9ddda;
+  background: #eef8f4;
+}
+
+.export-scope-settings button,
+.export-scope-settings select {
+  font: inherit;
+}
+
+.export-scope-settings-name-input {
+  width: min(420px, 100%);
+  border: 1px solid #cbd9e3;
+  border-radius: 8px;
+  padding: 8px 9px;
+  outline: 0;
+  background: #fff;
+  color: #243e56;
+  font: inherit;
+  font-size: 11px;
+}
+
+.export-scope-settings-name-input[aria-invalid='true'] {
+  border-color: #d58b84;
+}
+
+.export-scope-settings-name-hint,
+.export-scope-settings-name-error {
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.export-scope-settings-name-hint {
+  color: var(--export-scope-muted);
+}
+
+.export-scope-settings-name-error {
+  color: var(--export-scope-danger);
+}
+
+.export-scope-settings button {
+  min-height: 2.2rem;
+  border: 1px solid var(--export-scope-line);
+  border-radius: 7px;
+  padding: 6px 10px;
+  background: var(--export-scope-wash);
+  color: var(--export-scope-muted);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.export-scope-settings button:hover:not(:disabled) {
+  border-color: #b9d3cd;
+  background: #eef8f4;
+  color: var(--export-scope-moss-dark);
+}
+
+.export-scope-settings button:focus-visible,
+.export-scope-settings input:focus-visible,
+.export-scope-settings select:focus-visible {
+  outline: 3px solid rgba(63, 139, 123, .3);
+  outline-offset: 2px;
+}
+
+.export-scope-settings button:disabled,
+.export-scope-settings input:disabled,
+.export-scope-settings select:disabled {
+  cursor: not-allowed;
+  opacity: .52;
+}
+
+.export-scope-settings-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 18px;
+}
+
+.export-scope-settings-summary > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.export-scope-settings-summary dt {
+  color: var(--export-scope-muted);
+}
+
+.export-scope-settings-summary dd {
+  margin: 0;
+  color: var(--export-scope-ink);
+  font-weight: 700;
+  text-align: right;
+}
+
+.export-scope-settings-output-summary {
+  color: #3f7d72;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.export-scope-settings-dedup-note {
+  color: var(--export-scope-muted);
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.export-scope-settings-select-label {
+  color: #728b9e;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .05em;
+}
+
+.export-scope-settings select {
+  width: min(280px, 100%);
+  border: 1px solid #cbd9e3;
+  border-radius: 8px;
+  padding: 8px 9px;
+  outline: 0;
+  background: #fff;
+  color: #243e56;
+  font-size: 11px;
+}
+
+.export-scope-settings-actions {
+  display: flex;
+  flex: 0 0 auto;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 13px 22px 16px;
+  border-top: 1px solid #edf1f5;
+}
+
+.export-scope-settings-actions button {
+  min-width: 120px;
+}
+
+.export-scope-settings-actions .export-scope-settings-primary {
+  border-color: var(--export-scope-moss);
+  background: var(--export-scope-moss);
+  color: #fff;
+}
+
+.export-scope-settings-actions .export-scope-settings-primary:hover:not(:disabled) {
+  border-color: var(--export-scope-moss-dark);
+  background: var(--export-scope-moss-dark);
+  color: #fff;
+}
+
+@media (max-width: 700px) {
+  .export-scope-settings-backdrop {
+    align-items: stretch;
+    padding: 12px;
+  }
+
+  .export-scope-settings {
+    width: 100%;
+    max-height: 100%;
+    border-radius: 12px;
+  }
+
+  .export-scope-settings-header {
+    padding: 16px 16px 12px;
+  }
+
+  .export-scope-settings-content {
+    padding-inline: 16px;
+  }
+
+  .export-scope-settings-actions {
+    padding-inline: 16px;
+  }
+}
+
+@media (max-width: 460px) {
+  .export-scope-settings-summary {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .export-scope-settings-list-capture,
+  .export-scope-settings-captured-list,
+  .export-scope-settings-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .export-scope-settings-actions button {
+    width: 100%;
+  }
+}
+
+@media (max-height: 720px) {
+  .export-scope-settings-backdrop {
+    padding-block: 10px;
+  }
+
+  .export-scope-settings-header {
+    padding-block: 13px 10px;
+  }
+
+  .export-scope-settings-section {
+    padding-block: 11px;
+  }
+
+  .export-scope-settings-actions {
+    padding-block: 10px 12px;
+  }
+}

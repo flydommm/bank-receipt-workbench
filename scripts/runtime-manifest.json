@@ -1,0 +1,9 @@
+{
+  "python": {
+    "version": "3.12.14",
+    "distribution": "astral-sh/python-build-standalone",
+    "release": "20260901",
+    "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260901/cpython-3.12.14%2B20260901-x86_64-pc-windows-msvc-install_only_stripped.tar.gz",
+    "sha256": "7c45c9622400d578709a9b2cddbe8124cc21d382409d9f13406d706d28e31b14"
+  }
+}

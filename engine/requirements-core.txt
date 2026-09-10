@@ -1,0 +1,2 @@
+# Text PDF parsing, preview, crop and export. Release wheels are hash-locked.
+PyMuPDF==1.28.2

@@ -1,0 +1,1853 @@
+{
+  "schema": 1,
+  "reference": "src/App.tsx analyzeMatches via AST extraction with cached analysis access",
+  "referenceCommit": "01997cb47b1ada744713afeb286e9419163e037e",
+  "fixtures": [
+    {
+      "name": "legacy per hit uses selection confidence and full page mode",
+      "criteria": {
+        "include": [
+          "fee"
+        ],
+        "includeMode": "all",
+        "exclude": []
+      },
+      "match_mode": "exact",
+      "sources": [
+        {
+          "source_id": "s0",
+          "position": 0,
+          "source_key": "/documents/legacy-full.pdf",
+          "initial_path": "/documents/legacy-full.pdf",
+          "access_path": "/documents/legacy-full.pdf",
+          "name": "legacy-full.pdf",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "page_count": 1,
+          "size_bytes": 1234
+        }
+      ],
+      "pages": [
+        {
+          "source_id": "s0",
+          "payload": {
+            "schema": 1,
+            "page": 1,
+            "page_width": 600,
+            "page_height": 800,
+            "matches": [
+              {
+                "page": 1,
+                "matched_text": "fee first",
+                "matched_field": "摘要",
+                "confidence": 0.72,
+                "needs_review": true,
+                "x0": 20,
+                "y0": 30,
+                "x1": 120,
+                "y1": 40
+              },
+              {
+                "page": 1,
+                "matched_text": "fee second",
+                "matched_field": "摘要",
+                "confidence": 0.99,
+                "needs_review": false,
+                "x0": 20,
+                "y0": 350,
+                "x1": 120,
+                "y1": 360
+              }
+            ],
+            "analysis": {
+              "status": "ok",
+              "page": 1,
+              "page_width": 600,
+              "page_height": 800,
+              "page_fully_matched": true,
+              "selections": [
+                {
+                  "match_rect": {
+                    "x0": 20,
+                    "y0": 30,
+                    "x1": 120,
+                    "y1": 40
+                  },
+                  "rect": {
+                    "x0": 0,
+                    "y0": 0,
+                    "x1": 600,
+                    "y1": 800
+                  },
+                  "candidate_index": 0,
+                  "candidate_rect": {
+                    "x0": 0,
+                    "y0": 0,
+                    "x1": 600,
+                    "y1": 300
+                  },
+                  "confidence": 0.96,
+                  "slot": "receipt",
+                  "evidence": [
+                    "geometry"
+                  ],
+                  "needs_review": false,
+                  "snap_points": [
+                    0,
+                    300,
+                    600
+                  ]
+                },
+                {
+                  "match_rect": {
+                    "x0": 20,
+                    "y0": 350,
+                    "x1": 120,
+                    "y1": 360
+                  },
+                  "rect": {
+                    "x0": 0,
+                    "y0": 0,
+                    "x1": 600,
+                    "y1": 800
+                  },
+                  "candidate_index": 1,
+                  "candidate_rect": {
+                    "x0": 0,
+                    "y0": 300,
+                    "x1": 600,
+                    "y1": 600
+                  },
+                  "confidence": 0.73,
+                  "slot": "receipt",
+                  "evidence": [
+                    "geometry"
+                  ],
+                  "needs_review": true,
+                  "snap_points": [
+                    0,
+                    300,
+                    600
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "expected_segments": [
+        {
+          "id": "job-test:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:1:1",
+          "sourcePath": "/documents/legacy-full.pdf",
+          "sourceSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "sourcePage": 1,
+          "segmentNo": 1,
+          "matchRect": {
+            "x0": 20,
+            "y0": 30,
+            "x1": 120,
+            "y1": 40
+          },
+          "candidateRect": {
+            "x0": 0,
+            "y0": 0,
+            "x1": 600,
+            "y1": 800
+          },
+          "finalRect": null,
+          "pageWidth": 600,
+          "pageHeight": 800,
+          "confidence": 0.96,
+          "slot": "receipt",
+          "snapPoints": [
+            0,
+            300,
+            600
+          ],
+          "layoutFingerprint": "geometry:600x800:unknown,unknown,600,800",
+          "mode": "full_page",
+          "reviewStatus": "confirmed",
+          "manualAdjusted": false
+        },
+        {
+          "id": "job-test:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:1:2",
+          "sourcePath": "/documents/legacy-full.pdf",
+          "sourceSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "sourcePage": 1,
+          "segmentNo": 2,
+          "matchRect": {
+            "x0": 20,
+            "y0": 350,
+            "x1": 120,
+            "y1": 360
+          },
+          "candidateRect": {
+            "x0": 0,
+            "y0": 0,
+            "x1": 600,
+            "y1": 800
+          },
+          "finalRect": null,
+          "pageWidth": 600,
+          "pageHeight": 800,
+          "confidence": 0.73,
+          "slot": "receipt",
+          "snapPoints": [
+            0,
+            300,
+            600
+          ],
+          "layoutFingerprint": "geometry:600x800:unknown,unknown,600,800",
+          "mode": "full_page",
+          "reviewStatus": "needs_review",
+          "manualAdjusted": false
+        }
+      ],
+      "expected_evidence": {
+        "job-test:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:1:1": [
+          {
+            "page": 1,
+            "matched_text": "fee first",
+            "matched_field": "摘要",
+            "confidence": 0.72,
+            "needs_review": true,
+            "x0": 20,
+            "y0": 30,
+            "x1": 120,
+            "y1": 40
+          }
+        ],
+        "job-test:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:1:2": [
+          {
+            "page": 1,
+            "matched_text": "fee second",
+            "matched_field": "摘要",
+            "confidence": 0.99,
+            "needs_review": false,
+            "x0": 20,
+            "y0": 350,
+            "x1": 120,
+            "y1": 360
+          }
+        ]
+      }
+    },
+    {
+      "name": "legacy low confidence and null candidate are blocked",
+      "criteria": {
+        "include": [
+          "fee"
+        ],
+        "includeMode": "all",
+        "exclude": []
+      },
+      "match_mode": "exact",
+      "sources": [
+        {
+          "source_id": "s0",
+          "position": 0,
+          "source_key": "/documents/legacy-blocked.pdf",
+          "initial_path": "/documents/legacy-blocked.pdf",
+          "access_path": "/documents/legacy-blocked.pdf",
+          "name": "legacy-blocked.pdf",
+          "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "page_count": 1,
+          "size_bytes": 1234
+        }
+      ],
+      "pages": [
+        {
+          "source_id": "s0",
+          "payload": {
+            "schema": 1,
+            "page": 1,
+            "page_width": 600,
+            "page_height": 800,
+            "matches": [
+              {
+                "page": 1,
+                "matched_text": "low fee",
+                "matched_field": "摘要",
+                "confidence": 0.98,
+                "needs_review": false,
+                "x0": 20,
+                "y0": 30,
+                "x1": 120,
+                "y1": 40
+              },
+              {
+                "page": 1,
+                "matched_text": "no candidate fee",
+                "matched_field": "摘要",
+                "confidence": 0.98,
+                "needs_review": false,
+                "x0": 20,
+                "y0": 50,
+                "x1": 120,
+                "y1": 60
+              }
+            ],
+            "analysis": {
+              "status": "ok",
+              "page": 1,
+              "page_width": 600,
+              "page_height": 800,
+              "page_fully_matched": false,
+              "selections": [
+                {
+                  "match_rect": {
+                    "x0": 20,
+                    "y0": 30,
+                    "x1": 120,
+                    "y1": 40
+                  },
+                  "rect": {
+                    "x0": 0,
+                    "y0": 0,
+                    "x1": 600,
+                    "y1": 300
+                  },
+                  "candidate_index": 0,
+                  "candidate_rect": {
+                    "x0": 0,
+                    "y0": 0,
+                    "x1": 600,
+                    "y1": 300
+                  },
+                  "confidence": 0.65,
+                  "slot": "receipt",
+                  "evidence": [
+                    "geometry"
+                  ],
+                  "needs_review": true,
+                  "snap_points": [
+                    0,
+                    300
+                  ]
+                },
+                {
+                  "match_rect": {
+                    "x0": 20,
+                    "y0": 50,
+                    "x1": 120,
+                    "y1": 60
+                  },
+                  "rect": null,
+                  "candidate_index": null,
+                  "candidate_rect": null,
+                  "confidence": 0,
+                  "slot": null,
+                  "evidence": [],
+                  "needs_review": true,
+                  "snap_points": [
+                    0,
+                    300
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "expected_segments": [
+        {
+          "id": "job-test:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:1:1",
+          "sourcePath": "/documents/legacy-blocked.pdf",
+          "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "sourcePage": 1,
+          "segmentNo": 1,
+          "matchRect": {
+            "x0": 20,
+            "y0": 30,
+            "x1": 120,
+            "y1": 40
+          },
+          "candidateRect": {
+            "x0": 0,
+            "y0": 0,
+            "x1": 600,
+            "y1": 300
+          },
+          "finalRect": {
+            "x0": 0,
+            "y0": 0,
+            "x1": 600,
+            "y1": 300
+          },
+          "pageWidth": 600,
+          "pageHeight": 800,
+          "confidence": 0.65,
+          "slot": "receipt",
+          "snapPoints": [
+            0,
+            300
+          ],
+          "layoutFingerprint": "geometry:600x800:unknown,unknown,600,300",
+          "mode": "candidate",
+          "reviewStatus": "blocked",
+          "manualAdjusted": false
+        },
+        {
+          "id": "job-test:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:1:2",
+          "sourcePath": "/documents/legacy-blocked.pdf",
+          "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "sourcePage": 1,
+          "segmentNo": 2,
+          "matchRect": {
+            "x0": 20,
+            "y0": 50,
+            "x1": 120,
+            "y1": 60
+          },
+          "candidateRect": null,
+          "finalRect": null,
+          "pageWidth": 600,
+          "pageHeight": 800,
+          "confidence": 0,
+          "slot": null,
+          "snapPoints": [
+            0,
+            300
+          ],
+          "layoutFingerprint": "geometry:600x800:20,50,120,60",
+          "mode": "candidate",
+          "reviewStatus": "blocked",
+          "manualAdjusted": false
+        }
+      ],
+      "expected_evidence": {
+        "job-test:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:1:1": [
+          {
+            "page": 1,
+            "matched_text": "low fee",
+            "matched_field": "摘要",
+            "confidence": 0.98,
+            "needs_review": false,
+            "x0": 20,
+            "y0": 30,
+            "x1": 120,
+            "y1": 40
+          }
+        ],
+        "job-test:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:1:2": [
+          {
+            "page": 1,
+            "matched_text": "no candidate fee",
+            "matched_field": "摘要",
+            "confidence": 0.98,
+            "needs_review": false,
+            "x0": 20,
+            "y0": 50,
+            "x1": 120,
+            "y1": 60
+          }
+        ]
+      }
+    },
+    {
+      "name": "single include any takes the multi candidate path",
+      "criteria": {
+        "include": [
+          "fee"
+        ],
+        "includeMode": "any",
+        "exclude": []
+      },
+      "match_mode": "fuzzy",
+      "sources": [
+        {
+          "source_id": "s0",
+          "position": 0,
+          "source_key": "/documents/multi-any.pdf",
+          "initial_path": "/documents/multi-any.pdf",
+          "access_path": "/documents/multi-any.pdf",
+          "name": "multi-any.pdf",
+          "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "page_count": 1,
+          "size_bytes": 1234
+        }
+      ],
+      "pages": [
+        {
+          "source_id": "s0",
+          "payload": {
+            "schema": 1,
+            "page": 1,
+            "page_width": 600,
+            "page_height": 800,
+            "matches": [
+              {
+                "page": 1,
+                "matched_text": "fee any",
+                "matched_field": "摘要",
+                "confidence": 0.96,
+                "needs_review": false,
+                "x0": 20,
+                "y0": 30,
+                "x1": 120,
+                "y1": 40,
+                "query_id": "include-0",
+                "role": "include"
+              }
+            ],
+            "analysis": {
+              "status": "ok",
+              "page": 1,
+              "page_width": 600,
+              "page_height": 800,
+              "page_fully_matched": false,
+              "selections": [
+                {
+                  "match_rect": {
+                    "x0": 20,
+                    "y0": 30,
+                    "x1": 120,
+                    "y1": 40
+                  },
+                  "rect": {
+                    "x0": 0,
+                    "y0": 0,
+                    "x1": 600,
+                    "y1": 220
+                  },
+                  "candidate_index": 4,
+                  "candidate_rect": {
+                    "x0": 0,
+                    "y0": 0,
+                    "x1": 600,
+                    "y1": 220
+                  },
+                  "confidence": 0.91,
+                  "slot": "receipt",
+                  "evidence": [
+                    "geometry"
+                  ],
+                  "needs_review": false,
+                  "snap_points": [
+                    0,
+                    220
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "expected_segments": [
+        {
+          "id": "job-test:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc:1:1",
+          "sourcePath": "/documents/multi-any.pdf",
+          "sourceSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "sourcePage": 1,
+          "segmentNo": 1,
+          "matchRect": {
+            "x0": 20,
+            "y0": 30,
+            "x1": 120,
+            "y1": 40
+          },
+          "candidateRect": {
+            "x0": 0,
+            "y0": 0,
+            "x1": 600,
+            "y1": 220
+          },
+          "finalRect": {
+            "x0": 0,
+            "y0": 0,
+            "x1": 600,
+            "y1": 220
+          },
+          "pageWidth": 600,
+          "pageHeight": 800,
+          "confidence": 0.91,
+          "slot": "receipt",
+          "snapPoints": [
+            0,
+            220
+          ],
+          "layoutFingerprint": "geometry:600x800:unknown,unknown,600,220",
+          "mode": "candidate",
+          "reviewStatus": "confirmed",
+          "manualAdjusted": false
+        }
+      ],
+      "expected_evidence": {
+        "job-test:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc:1:1": [
+          {
+            "page": 1,
+            "matched_text": "fee any",
+            "matched_field": "摘要",
+            "confidence": 0.96,
+            "needs_review": false,
+            "x0": 20,
+            "y0": 30,
+            "x1": 120,
+            "y1": 40,
+            "query_id": "include-0",
+            "role": "include"
+          }
+        ]
+      }
+    },
+    {
+      "name": "multi all requires both includes and rejects excluded candidates",
+      "criteria": {
+        "include": [
+          "fee",
+          "bank"
+        ],
+        "includeMode": "all",
+        "exclude": [
+          "refund"
+        ]
+      },
+      "match_mode": "exact",
+      "sources": [
+        {
+          "source_id": "s0",
+          "position": 0,
+          "source_key": "/documents/multi-filter.pdf",
+          "initial_path": "/documents/multi-filter.pdf",
+          "access_path": "/documents/multi-filter.pdf",
+          "name": "multi-filter.pdf",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "page_count": 1,
+          "size_bytes": 1234
+        }
+      ],
+      "pages": [
+        {
+          "source_id": "s0",
+          "payload": {
+            "schema": 1,
+            "page": 1,
+            "page_width": 600,
+            "page_height": 800,
+            "matches": [
+              {
+                "page": 1,
+                "matched_text": "fee accepted",
+                "matched_field": "摘要",
+                "confidence": 0.96,
+                "needs_review": false,
+                "x0": 20,
+                "y0": 30,
+                "x1": 120,
+                "y1": 40,
+                "query_id": "include-0",
+                "role": "include"
+              },
+              {
+                "page": 1,
+                "matched_text": "bank accepted",
+                "matched_field": "摘要",
+                "confidence": 0.94,
+                "needs_review": false,
+                "x0": 20,
+                "y0": 45,
+                "x1": 120,
+                "y1": 55,
+                "query_id": "include-1",
+                "role": "include"
+              },
+              {
+                "page": 1,
+                "matched_text": "fee only",
+                "matched_field": "摘要",
+                "confidence": 0.96,
+                "needs_review": false,
+                "x0": 20,
+                "y0": 260,
+                "x1": 120,
+                "y1": 270,
+                "query_id": "include-0",
+                "role": "include"
+              },
+              {
+                "page": 1,
+                "matched_text": "fee rejected",
+                "matched_field": "摘要",
+                "confidence": 0.96,
+                "needs_review": false,
+                "x0": 20,
+                "y0": 500,
+                "x1": 120,
+                "y1": 510,
+                "query_id": "include-0",
+                "role": "include"
+              },
+              {
+                "page": 1,
+                "matched_text": "bank rejected",
+                "matched_field": "摘要",
+                "confidence": 0.96,
+                "needs_review": false,
+                "x0": 20,
+                "y0": 515,
+                "x1": 120,
+                "y1": 525,
+                "query_id": "include-1",
+                "role": "include"
+              },
+              {
+                "page": 1,
+                "matched_text": "refund rejected",
+                "matched_field": "摘要",
+                "confidence": 0.96,
+                "needs_review": false,
+                "x0": 20,
+                "y0": 530,
+                "x1": 120,
+                "y1": 540,
+                "query_id": "exclude-0",
+                "role": "exclude"
+              }
+            ],
+            "analysis": {
+              "status": "ok",
+              "page": 1,
+              "page_width": 600,
+              "page_height": 800,
+              "page_fully_matched": false,
+              "selections": [
+                {
+                  "match_rect": {
+                    "x0": 20,
+                    "y0": 30,
+                    "x1": 120,
+                    "y1": 40
+                  },
+                  "rect": {
+                    "x0": 0,
+                    "y0": 0,
+                    "x1": 600,
+                    "y1": 220
+                  },
+                  "candidate_index": 1,
+                  "candidate_rect": {
+                    "x0": 0,
+                    "y0": 0,
+                    "x1": 600,
+                    "y1": 220
+                  },
+                  "confidence": 0.92,
+                  "slot": "receipt",
+                  "evidence": [
+                    "geometry"
+                  ],
+                  "needs_review": false,
+                  "snap_points": [
+                    0,
+                    220,
+                    240,
+                    460,
+                    480,
+                    700
+                  ]
+                },
+                {
+                  "match_rect": {
+                    "x0": 20,
+                    "y0": 45,
+                    "x1": 120,
+                    "y1": 55
+                  },
+                  "rect": {
+                    "x0": 0,
+                    "y0": 0,
+                    "x1": 600,
+                    "y1": 220
+                  },
+                  "candidate_index": 1,
+                  "candidate_rect": {
+                    "x0": 0,
+                    "y0": 0,
+                    "x1": 600,
+                    "y1": 220
+                  },
+                  "confidence": 0.91,
+                  "slot": "receipt",
+                  "evidence": [
+                    "geometry"
+                  ],
+                  "needs_review": false,
+                  "snap_points": [
+                    0,
+                    220,
+                    240,
+                    460,
+                    480,
+                    700
+                  ]
+                },
+                {
+                  "match_rect": {
+                    "x0": 20,
+                    "y0": 260,
+                    "x1": 120,
+                    "y1": 270
+                  },
+                  "rect": {
+                    "x0": 0,
+                    "y0": 240,
+                    "x1": 600,
+                    "y1": 460
+                  },
+                  "candidate_index": 2,
+                  "candidate_rect": {
+                    "x0": 0,
+                    "y0": 240,
+                    "x1": 600,
+                    "y1": 460
+                  },
+                  "confidence": 0.99,
+                  "slot": "receipt",
+                  "evidence": [
+                    "geometry"
+                  ],
+                  "needs_review": false,
+                  "snap_points": [
+                    0,
+                    220,
+                    240,
+                    460,
+                    480,
+                    700
+                  ]
+                },
+                {
+                  "match_rect": {
+                    "x0": 20,
+                    "y0": 500,
+                    "x1": 120,
+                    "y1": 510
+                  },
+                  "rect": {
+                    "x0": 0,
+                    "y0": 480,
+                    "x1": 600,
+                    "y1": 700
+                  },
+                  "candidate_index": 3,
+                  "candidate_rect": {
+                    "x0": 0,
+                    "y0": 480,
+                    "x1": 600,
+                    "y1": 700
+                  },
+                  "confidence": 0.95,
+                  "slot": "receipt",
+                  "evidence": [
+                    "geometry"
+                  ],
+                  "needs_review": false,
+                  "snap_points": [
+                    0,
+                    220,
+                    240,
+                    460,
+                    480,
+                    700
+                  ]
+                },
+                {
+                  "match_rect": {
+                    "x0": 20,
+                    "y0": 515,
+                    "x1": 120,
+                    "y1": 525
+                  },
+                  "rect": {
+                    "x0": 0,
+                    "y0": 480,
+                    "x1": 600,
+                    "y1": 700
+                  },
+                  "candidate_index": 3,
+                  "candidate_rect": {
+                    "x0": 0,
+                    "y0": 480,
+                    "x1": 600,
+                    "y1": 700
+                  },
+                  "confidence": 0.94,
+                  "slot": "receipt",
+                  "evidence": [
+                    "geometry"
+                  ],
+                  "needs_review": false,
+                  "snap_points": [
+                    0,
+                    220,
+                    240,
+                    460,
+                    480,
+                    700
+                  ]
+                },
+                {
+                  "match_rect": {
+                    "x0": 20,
+                    "y0": 530,
+                    "x1": 120,
+                    "y1": 540
+                  },
+                  "rect": {
+                    "x0": 0,
+                    "y0": 480,
+                    "x1": 600,
+                    "y1": 700
+                  },
+                  "candidate_index": 3,
+                  "candidate_rect": {
+                    "x0": 0,
+                    "y0": 480,
+                    "x1": 600,
+                    "y1": 700
+                  },
+                  "confidence": 0.97,
+                  "slot": "receipt",
+                  "evidence": [
+                    "geometry"
+                  ],
+                  "needs_review": false,
+                  "snap_points": [
+                    0,
+                    220,
+                    240,
+                    460,
+                    480,
+                    700
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "expected_segments": [
+        {
+          "id": "job-test:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:1:1",
+          "sourcePath": "/documents/multi-filter.pdf",
+          "sourceSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "sourcePage": 1,
+          "segmentNo": 1,
+          "matchRect": {
+            "x0": 20,
+            "y0": 30,
+            "x1": 120,
+            "y1": 40
+          },
+          "candidateRect": {
+            "x0": 0,
+            "y0": 0,
+            "x1": 600,
+            "y1": 220
+          },
+          "finalRect": {
+            "x0": 0,
+            "y0": 0,
+            "x1": 600,
+            "y1": 220
+          },
+          "pageWidth": 600,
+          "pageHeight": 800,
+          "confidence": 0.91,
+          "slot": "receipt",
+          "snapPoints": [
+            0,
+            220,
+            240,
+            460,
+            480,
+            700
+          ],
+          "layoutFingerprint": "geometry:600x800:unknown,unknown,600,220",
+          "mode": "candidate",
+          "reviewStatus": "confirmed",
+          "manualAdjusted": false
+        }
+      ],
+      "expected_evidence": {
+        "job-test:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:1:1": [
+          {
+            "page": 1,
+            "matched_text": "fee accepted",
+            "matched_field": "摘要",
+            "confidence": 0.96,
+            "needs_review": false,
+            "x0": 20,
+            "y0": 30,
+            "x1": 120,
+            "y1": 40,
+            "query_id": "include-0",
+            "role": "include"
+          },
+          {
+            "page": 1,
+            "matched_text": "bank accepted",
+            "matched_field": "摘要",
+            "confidence": 0.94,
+            "needs_review": false,
+            "x0": 20,
+            "y0": 45,
+            "x1": 120,
+            "y1": 55,
+            "query_id": "include-1",
+            "role": "include"
+          }
+        ]
+      }
+    },
+    {
+      "name": "multi duplicate query evidence is retained and candidates sort by index",
+      "criteria": {
+        "include": [
+          "fee"
+        ],
+        "includeMode": "any",
+        "exclude": []
+      },
+      "match_mode": "exact",
+      "sources": [
+        {
+          "source_id": "s0",
+          "position": 0,
+          "source_key": "/documents/multi-duplicates.pdf",
+          "initial_path": "/documents/multi-duplicates.pdf",
+          "access_path": "/documents/multi-duplicates.pdf",
+          "name": "multi-duplicates.pdf",
+          "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "page_count": 1,
+          "size_bytes": 1234
+        }
+      ],
+      "pages": [
+        {
+          "source_id": "s0",
+          "payload": {
+            "schema": 1,
+            "page": 1,
+            "page_width": 600,
+            "page_height": 800,
+            "matches": [
+              {
+                "page": 1,
+                "matched_text": "fee duplicate first",
+                "matched_field": "摘要",
+                "confidence": 0.96,
+                "needs_review": false,
+                "x0": 20,
+                "y0": 430,
+                "x1": 120,
+                "y1": 440,
+                "query_id": "include-0",
+                "role": "include"
+              },
+              {
+                "page": 1,
+                "matched_text": "fee duplicate second",
+                "matched_field": "摘要",
+                "confidence": 0.93,
+                "needs_review": false,
+                "x0": 20,
+                "y0": 450,
+                "x1": 120,
+                "y1": 460,
+                "query_id": "include-0",
+                "role": "include"
+              },
+              {
+                "page": 1,
+                "matched_text": "fee candidate zero",
+                "matched_field": "摘要",
+                "confidence": 0.94,
+                "needs_review": false,
+                "x0": 20,
+                "y0": 30,
+                "x1": 120,
+                "y1": 40,
+                "query_id": "include-0",
+                "role": "include"
+              }
+            ],
+            "analysis": {
+              "status": "ok",
+              "page": 1,
+              "page_width": 600,
+              "page_height": 800,
+              "page_fully_matched": false,
+              "selections": [
+                {
+                  "match_rect": {
+                    "x0": 20,
+                    "y0": 430,
+                    "x1": 120,
+                    "y1": 440
+                  },
+                  "rect": {
+                    "x0": 0,
+                    "y0": 400,
+                    "x1": 600,
+                    "y1": 620
+                  },
+                  "candidate_index": 2,
+                  "candidate_rect": {
+                    "x0": 0,
+                    "y0": 400,
+                    "x1": 600,
+                    "y1": 620
+                  },
+                  "confidence": 0.92,
+                  "slot": "receipt",
+                  "evidence": [
+                    "geometry"
+                  ],
+                  "needs_review": false,
+                  "snap_points": [
+                    0,
+                    220,
+                    400,
+                    620
+                  ]
+                },
+                {
+                  "match_rect": {
+                    "x0": 20,
+                    "y0": 450,
+                    "x1": 120,
+                    "y1": 460
+                  },
+                  "rect": {
+                    "x0": 0,
+                    "y0": 400,
+                    "x1": 600,
+                    "y1": 620
+                  },
+                  "candidate_index": 2,
+                  "candidate_rect": {
+                    "x0": 0,
+                    "y0": 400,
+                    "x1": 600,
+                    "y1": 620
+                  },
+                  "confidence": 0.91,
+                  "slot": "receipt",
+                  "evidence": [
+                    "geometry"
+                  ],
+                  "needs_review": false,
+                  "snap_points": [
+                    0,
+                    220,
+                    400,
+                    620
+                  ]
+                },
+                {
+                  "match_rect": {
+                    "x0": 20,
+                    "y0": 30,
+                    "x1": 120,
+                    "y1": 40
+                  },
+                  "rect": {
+                    "x0": 0,
+                    "y0": 0,
+                    "x1": 600,
+                    "y1": 220
+                  },
+                  "candidate_index": 0,
+                  "candidate_rect": {
+                    "x0": 0,
+                    "y0": 0,
+                    "x1": 600,
+                    "y1": 220
+                  },
+                  "confidence": 0.94,
+                  "slot": "receipt",
+                  "evidence": [
+                    "geometry"
+                  ],
+                  "needs_review": false,
+                  "snap_points": [
+                    0,
+                    220,
+                    400,
+                    620
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "expected_segments": [
+        {
+          "id": "job-test:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:1:1",
+          "sourcePath": "/documents/multi-duplicates.pdf",
+          "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "sourcePage": 1,
+          "segmentNo": 1,
+          "matchRect": {
+            "x0": 20,
+            "y0": 30,
+            "x1": 120,
+            "y1": 40
+          },
+          "candidateRect": {
+            "x0": 0,
+            "y0": 0,
+            "x1": 600,
+            "y1": 220
+          },
+          "finalRect": {
+            "x0": 0,
+            "y0": 0,
+            "x1": 600,
+            "y1": 220
+          },
+          "pageWidth": 600,
+          "pageHeight": 800,
+          "confidence": 0.94,
+          "slot": "receipt",
+          "snapPoints": [
+            0,
+            220,
+            400,
+            620
+          ],
+          "layoutFingerprint": "geometry:600x800:unknown,unknown,600,220",
+          "mode": "candidate",
+          "reviewStatus": "confirmed",
+          "manualAdjusted": false
+        },
+        {
+          "id": "job-test:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:1:2",
+          "sourcePath": "/documents/multi-duplicates.pdf",
+          "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "sourcePage": 1,
+          "segmentNo": 2,
+          "matchRect": {
+            "x0": 20,
+            "y0": 430,
+            "x1": 120,
+            "y1": 440
+          },
+          "candidateRect": {
+            "x0": 0,
+            "y0": 400,
+            "x1": 600,
+            "y1": 620
+          },
+          "finalRect": {
+            "x0": 0,
+            "y0": 400,
+            "x1": 600,
+            "y1": 620
+          },
+          "pageWidth": 600,
+          "pageHeight": 800,
+          "confidence": 0.91,
+          "slot": "receipt",
+          "snapPoints": [
+            0,
+            220,
+            400,
+            620
+          ],
+          "layoutFingerprint": "geometry:600x800:unknown,400,600,620",
+          "mode": "candidate",
+          "reviewStatus": "confirmed",
+          "manualAdjusted": false
+        }
+      ],
+      "expected_evidence": {
+        "job-test:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:1:1": [
+          {
+            "page": 1,
+            "matched_text": "fee candidate zero",
+            "matched_field": "摘要",
+            "confidence": 0.94,
+            "needs_review": false,
+            "x0": 20,
+            "y0": 30,
+            "x1": 120,
+            "y1": 40,
+            "query_id": "include-0",
+            "role": "include"
+          }
+        ],
+        "job-test:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:1:2": [
+          {
+            "page": 1,
+            "matched_text": "fee duplicate first",
+            "matched_field": "摘要",
+            "confidence": 0.96,
+            "needs_review": false,
+            "x0": 20,
+            "y0": 430,
+            "x1": 120,
+            "y1": 440,
+            "query_id": "include-0",
+            "role": "include"
+          },
+          {
+            "page": 1,
+            "matched_text": "fee duplicate second",
+            "matched_field": "摘要",
+            "confidence": 0.93,
+            "needs_review": false,
+            "x0": 20,
+            "y0": 450,
+            "x1": 120,
+            "y1": 460,
+            "query_id": "include-0",
+            "role": "include"
+          }
+        ]
+      }
+    },
+    {
+      "name": "different sources with the same sha use the global id collision suffix",
+      "criteria": {
+        "include": [
+          "fee"
+        ],
+        "includeMode": "all",
+        "exclude": []
+      },
+      "match_mode": "exact",
+      "sources": [
+        {
+          "source_id": "s0",
+          "position": 0,
+          "source_key": "/documents/same-sha-a.pdf",
+          "initial_path": "/documents/same-sha-a.pdf",
+          "access_path": "/documents/same-sha-a.pdf",
+          "name": "same-sha-a.pdf",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "page_count": 1,
+          "size_bytes": 1234
+        },
+        {
+          "source_id": "s1",
+          "position": 1,
+          "source_key": "/documents/same-sha-b.pdf",
+          "initial_path": "/documents/same-sha-b.pdf",
+          "access_path": "/documents/same-sha-b.pdf",
+          "name": "same-sha-b.pdf",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "page_count": 1,
+          "size_bytes": 1234
+        }
+      ],
+      "pages": [
+        {
+          "source_id": "s0",
+          "payload": {
+            "schema": 1,
+            "page": 1,
+            "page_width": 600,
+            "page_height": 800,
+            "matches": [
+              {
+                "page": 1,
+                "matched_text": "same sha A",
+                "matched_field": "摘要",
+                "confidence": 0.96,
+                "needs_review": false,
+                "x0": 20,
+                "y0": 30,
+                "x1": 120,
+                "y1": 40
+              }
+            ],
+            "analysis": {
+              "status": "ok",
+              "page": 1,
+              "page_width": 600,
+              "page_height": 800,
+              "page_fully_matched": false,
+              "selections": [
+                {
+                  "match_rect": {
+                    "x0": 20,
+                    "y0": 30,
+                    "x1": 120,
+                    "y1": 40
+                  },
+                  "rect": {
+                    "x0": 0,
+                    "y0": 0,
+                    "x1": 600,
+                    "y1": 220
+                  },
+                  "candidate_index": 0,
+                  "candidate_rect": {
+                    "x0": 0,
+                    "y0": 0,
+                    "x1": 600,
+                    "y1": 220
+                  },
+                  "confidence": 0.96,
+                  "slot": "receipt",
+                  "evidence": [
+                    "geometry"
+                  ],
+                  "needs_review": false,
+                  "snap_points": [
+                    0,
+                    220
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "source_id": "s1",
+          "payload": {
+            "schema": 1,
+            "page": 1,
+            "page_width": 600,
+            "page_height": 800,
+            "matches": [
+              {
+                "page": 1,
+                "matched_text": "same sha B",
+                "matched_field": "摘要",
+                "confidence": 0.95,
+                "needs_review": false,
+                "x0": 20,
+                "y0": 30,
+                "x1": 120,
+                "y1": 40
+              }
+            ],
+            "analysis": {
+              "status": "ok",
+              "page": 1,
+              "page_width": 600,
+              "page_height": 800,
+              "page_fully_matched": false,
+              "selections": [
+                {
+                  "match_rect": {
+                    "x0": 20,
+                    "y0": 30,
+                    "x1": 120,
+                    "y1": 40
+                  },
+                  "rect": {
+                    "x0": 0,
+                    "y0": 0,
+                    "x1": 600,
+                    "y1": 220
+                  },
+                  "candidate_index": 0,
+                  "candidate_rect": {
+                    "x0": 0,
+                    "y0": 0,
+                    "x1": 600,
+                    "y1": 220
+                  },
+                  "confidence": 0.95,
+                  "slot": "receipt",
+                  "evidence": [
+                    "geometry"
+                  ],
+                  "needs_review": false,
+                  "snap_points": [
+                    0,
+                    220
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "expected_segments": [
+        {
+          "id": "job-test:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:1:1",
+          "sourcePath": "/documents/same-sha-a.pdf",
+          "sourceSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "sourcePage": 1,
+          "segmentNo": 1,
+          "matchRect": {
+            "x0": 20,
+            "y0": 30,
+            "x1": 120,
+            "y1": 40
+          },
+          "candidateRect": {
+            "x0": 0,
+            "y0": 0,
+            "x1": 600,
+            "y1": 220
+          },
+          "finalRect": {
+            "x0": 0,
+            "y0": 0,
+            "x1": 600,
+            "y1": 220
+          },
+          "pageWidth": 600,
+          "pageHeight": 800,
+          "confidence": 0.96,
+          "slot": "receipt",
+          "snapPoints": [
+            0,
+            220
+          ],
+          "layoutFingerprint": "geometry:600x800:unknown,unknown,600,220",
+          "mode": "candidate",
+          "reviewStatus": "confirmed",
+          "manualAdjusted": false
+        },
+        {
+          "id": "job-test:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:1:1:source-2",
+          "sourcePath": "/documents/same-sha-b.pdf",
+          "sourceSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "sourcePage": 1,
+          "segmentNo": 1,
+          "matchRect": {
+            "x0": 20,
+            "y0": 30,
+            "x1": 120,
+            "y1": 40
+          },
+          "candidateRect": {
+            "x0": 0,
+            "y0": 0,
+            "x1": 600,
+            "y1": 220
+          },
+          "finalRect": {
+            "x0": 0,
+            "y0": 0,
+            "x1": 600,
+            "y1": 220
+          },
+          "pageWidth": 600,
+          "pageHeight": 800,
+          "confidence": 0.95,
+          "slot": "receipt",
+          "snapPoints": [
+            0,
+            220
+          ],
+          "layoutFingerprint": "geometry:600x800:unknown,unknown,600,220",
+          "mode": "candidate",
+          "reviewStatus": "confirmed",
+          "manualAdjusted": false
+        }
+      ],
+      "expected_evidence": {
+        "job-test:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:1:1": [
+          {
+            "page": 1,
+            "matched_text": "same sha A",
+            "matched_field": "摘要",
+            "confidence": 0.96,
+            "needs_review": false,
+            "x0": 20,
+            "y0": 30,
+            "x1": 120,
+            "y1": 40
+          }
+        ],
+        "job-test:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:1:1:source-2": [
+          {
+            "page": 1,
+            "matched_text": "same sha B",
+            "matched_field": "摘要",
+            "confidence": 0.95,
+            "needs_review": false,
+            "x0": 20,
+            "y0": 30,
+            "x1": 120,
+            "y1": 40
+          }
+        ]
+      }
+    },
+    {
+      "name": "two pages retain page order and zero hit sources produce no segments",
+      "criteria": {
+        "include": [
+          "fee"
+        ],
+        "includeMode": "all",
+        "exclude": []
+      },
+      "match_mode": "exact",
+      "sources": [
+        {
+          "source_id": "s0",
+          "position": 0,
+          "source_key": "/documents/two-pages.pdf",
+          "initial_path": "/documents/two-pages.pdf",
+          "access_path": "/documents/two-pages.pdf",
+          "name": "two-pages.pdf",
+          "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "page_count": 2,
+          "size_bytes": 1234
+        },
+        {
+          "source_id": "s1",
+          "position": 1,
+          "source_key": "/documents/zero-hit.pdf",
+          "initial_path": "/documents/zero-hit.pdf",
+          "access_path": "/documents/zero-hit.pdf",
+          "name": "zero-hit.pdf",
+          "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "page_count": 1,
+          "size_bytes": 1234
+        }
+      ],
+      "pages": [
+        {
+          "source_id": "s0",
+          "payload": {
+            "schema": 1,
+            "page": 1,
+            "page_width": 600,
+            "page_height": 800,
+            "matches": [
+              {
+                "page": 1,
+                "matched_text": "page one fee",
+                "matched_field": "摘要",
+                "confidence": 0.96,
+                "needs_review": false,
+                "x0": 20,
+                "y0": 30,
+                "x1": 120,
+                "y1": 40
+              }
+            ],
+            "analysis": {
+              "status": "ok",
+              "page": 1,
+              "page_width": 600,
+              "page_height": 800,
+              "page_fully_matched": false,
+              "selections": [
+                {
+                  "match_rect": {
+                    "x0": 20,
+                    "y0": 30,
+                    "x1": 120,
+                    "y1": 40
+                  },
+                  "rect": {
+                    "x0": 0,
+                    "y0": 0,
+                    "x1": 600,
+                    "y1": 220
+                  },
+                  "candidate_index": 0,
+                  "candidate_rect": {
+                    "x0": 0,
+                    "y0": 0,
+                    "x1": 600,
+                    "y1": 220
+                  },
+                  "confidence": 0.96,
+                  "slot": "receipt",
+                  "evidence": [
+                    "geometry"
+                  ],
+                  "needs_review": false,
+                  "snap_points": [
+                    0,
+                    220
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "source_id": "s0",
+          "payload": {
+            "schema": 1,
+            "page": 2,
+            "page_width": 600,
+            "page_height": 800,
+            "matches": [
+              {
+                "page": 2,
+                "matched_text": "page two fee",
+                "matched_field": "摘要",
+                "confidence": 0.95,
+                "needs_review": false,
+                "x0": 20,
+                "y0": 230,
+                "x1": 120,
+                "y1": 240
+              }
+            ],
+            "analysis": {
+              "status": "ok",
+              "page": 2,
+              "page_width": 600,
+              "page_height": 800,
+              "page_fully_matched": false,
+              "selections": [
+                {
+                  "match_rect": {
+                    "x0": 20,
+                    "y0": 230,
+                    "x1": 120,
+                    "y1": 240
+                  },
+                  "rect": {
+                    "x0": 0,
+                    "y0": 220,
+                    "x1": 600,
+                    "y1": 440
+                  },
+                  "candidate_index": 0,
+                  "candidate_rect": {
+                    "x0": 0,
+                    "y0": 220,
+                    "x1": 600,
+                    "y1": 440
+                  },
+                  "confidence": 0.95,
+                  "slot": "receipt",
+                  "evidence": [
+                    "geometry"
+                  ],
+                  "needs_review": false,
+                  "snap_points": [
+                    220,
+                    440
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "source_id": "s1",
+          "payload": {
+            "schema": 1,
+            "page": 1,
+            "page_width": 600,
+            "page_height": 800,
+            "matches": [],
+            "analysis": null
+          }
+        }
+      ],
+      "expected_segments": [
+        {
+          "id": "job-test:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc:1:1",
+          "sourcePath": "/documents/two-pages.pdf",
+          "sourceSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "sourcePage": 1,
+          "segmentNo": 1,
+          "matchRect": {
+            "x0": 20,
+            "y0": 30,
+            "x1": 120,
+            "y1": 40
+          },
+          "candidateRect": {
+            "x0": 0,
+            "y0": 0,
+            "x1": 600,
+            "y1": 220
+          },
+          "finalRect": {
+            "x0": 0,
+            "y0": 0,
+            "x1": 600,
+            "y1": 220
+          },
+          "pageWidth": 600,
+          "pageHeight": 800,
+          "confidence": 0.96,
+          "slot": "receipt",
+          "snapPoints": [
+            0,
+            220
+          ],
+          "layoutFingerprint": "geometry:600x800:unknown,unknown,600,220",
+          "mode": "candidate",
+          "reviewStatus": "confirmed",
+          "manualAdjusted": false
+        },
+        {
+          "id": "job-test:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc:2:1",
+          "sourcePath": "/documents/two-pages.pdf",
+          "sourceSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "sourcePage": 2,
+          "segmentNo": 1,
+          "matchRect": {
+            "x0": 20,
+            "y0": 230,
+            "x1": 120,
+            "y1": 240
+          },
+          "candidateRect": {
+            "x0": 0,
+            "y0": 220,
+            "x1": 600,
+            "y1": 440
+          },
+          "finalRect": {
+            "x0": 0,
+            "y0": 220,
+            "x1": 600,
+            "y1": 440
+          },
+          "pageWidth": 600,
+          "pageHeight": 800,
+          "confidence": 0.95,
+          "slot": "receipt",
+          "snapPoints": [
+            220,
+            440
+          ],
+          "layoutFingerprint": "geometry:600x800:unknown,220,600,440",
+          "mode": "candidate",
+          "reviewStatus": "confirmed",
+          "manualAdjusted": false
+        }
+      ],
+      "expected_evidence": {
+        "job-test:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc:1:1": [
+          {
+            "page": 1,
+            "matched_text": "page one fee",
+            "matched_field": "摘要",
+            "confidence": 0.96,
+            "needs_review": false,
+            "x0": 20,
+            "y0": 30,
+            "x1": 120,
+            "y1": 40
+          }
+        ],
+        "job-test:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc:2:1": [
+          {
+            "page": 2,
+            "matched_text": "page two fee",
+            "matched_field": "摘要",
+            "confidence": 0.95,
+            "needs_review": false,
+            "x0": 20,
+            "y0": 230,
+            "x1": 120,
+            "y1": 240
+          }
+        ]
+      }
+    }
+  ]
+}

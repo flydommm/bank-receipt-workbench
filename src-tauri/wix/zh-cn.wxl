@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WixLocalization Culture="zh-CN" Codepage="936" xmlns="http://schemas.microsoft.com/wix/2006/localization">
+  <String Id="TauriLanguage">2052</String>
+  <String Id="TauriCodepage">936</String>
+  <String Id="LaunchApp">启动 银行回单工作台</String>
+  <String Id="DowngradeErrorMessage">已安装更高版本的 银行回单工作台。</String>
+  <String Id="PathEnvVarFeature">将 银行回单工作台加入 PATH 环境变量。</String>
+  <String Id="InstallAppFeature">安装 银行回单工作台。</String>
+</WixLocalization>

@@ -1,0 +1,2 @@
+# Windows x64 / CPython 3.12 release wheels. Do not edit hashes manually.
+pymupdf==1.28.2 --hash=sha256:ebd244918798502d7b4504c90410d1711a4d7675a32584ca30f1bab419ecbffe
