@@ -47,3 +47,5 @@ GitHub 仓库已创建：[https://github.com/flydommm/bank-receipt-workbench](ht
 5. **首次远程 CI。** 已准备 Windows 工作流，但尚未在 GitHub Actions 上执行。工作流只测试，不自动发布资产。
 
 完整步骤见[发布清单](release-checklist.md)。本地构建成功不等于以上门槛已经完成。
+
+维护者确认 AGPL-3.0 后，已完成许可证与项目元数据对齐，并重新构建两种 NSIS 安装包。对应源码提交、资产哈希、验证范围及授权待办见 [0.1.27 AGPL 交付记录](delivery-0.1.27-agpl.md)。前一轮准备包的交付记录保留为历史快照。

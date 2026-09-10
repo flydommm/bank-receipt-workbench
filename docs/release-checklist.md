@@ -5,7 +5,7 @@
 ## 公开仓库门槛
 
 - [ ] 向已创建的 GitHub 仓库 `flydommm/bank-receipt-workbench` 推送源码并验证 README、Issue、Release 和安全报告入口。入口地址：源码 <https://github.com/flydommm/bank-receipt-workbench/tree/main>、Issues <https://github.com/flydommm/bank-receipt-workbench/issues>、Releases <https://github.com/flydommm/bank-receipt-workbench/releases>；当前源码尚未推送，Release 尚未发布。
-- [ ] 核对根目录 `LICENSE` 和项目元数据均标识 AGPL-3.0-only，并确认项目权利人授权；在公开仓库提交并完成第三方许可核对前，不把本地准备目录称为已完成许可交付，也不宣称 MIT。
+- [x] 维护者已确认 AGPL-3.0；根目录 `LICENSE`、package/Cargo/Tauri 元数据已按 AGPL-3.0-only 对齐并核对，许可证已随重新构建的两种安装包交付。对应源码公开仍需完成推送。
 - [ ] 在 AGPL-3.0-only 路线下按 PyMuPDF/MuPDF 上游 AGPL 分发路线准备随包源码、构建说明和许可文本，并核对 PaddleOCR/PaddlePaddle/PaddleX、Python 和 Rust 依赖的分发条件。
 - [ ] 复核第三方通知、版权文本、模型下载与分发边界。
 - [ ] 验证 GitHub 私密漏洞报告功能或公布安全邮箱；当前没有已确认的私密报告入口，不能把计划中的 Issues 当作安全渠道。
