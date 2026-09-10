@@ -22,7 +22,7 @@
 
   ```powershell
   $privatePython = '.\.build\runtime\python\python.exe'
-  & $privatePython -B -I .\scripts\smoke-runtime.py --resource-root .
+  & $privatePython -B -I -X utf8 .\scripts\smoke-runtime.py --resource-root .
   ```
 - [ ] 记录源码提交、构建时间、构建命令和构建机工具版本；删除或隔离不属于本次构建的 `.build/`、`dist/` 和 `target/` 内容。
 

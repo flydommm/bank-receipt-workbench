@@ -95,7 +95,7 @@ cargo check --manifest-path src-tauri/Cargo.toml --locked
 
 ```powershell
 $privatePython = '.\.build\runtime\python\python.exe'
-& $privatePython -B -I .\scripts\smoke-runtime.py --resource-root .
+& $privatePython -B -I -X utf8 .\scripts\smoke-runtime.py --resource-root .
 ```
 
 需要检查 OCR 运行时和模型时再显式添加 `--ocr`；这一步可能下载公开模型，不应在普通前端或 Python 单元测试中隐式触发。
