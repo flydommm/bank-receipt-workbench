@@ -46,7 +46,7 @@
 
 - 在真正干净的 Windows x64 环境完成 Core 与 OCR 安装、升级、卸载和首次运行验证。
 - 完成 OCR 首次模型下载和首次识别验证，并记录模型来源与许可。
-- 决定是否提供代码签名；当前安装包没有签名证书。
+- 正在评估 SignPath Foundation 免费开源签名；当前安装包仍未签名，尚未提交申请或获批。见 [Code signing policy（准备稿）](docs/code-signing-policy.md)及[申请准备记录](docs/signpath-assessment-2026-09-12.md)。
 
 源码归档、许可证材料和第三方清单已完成技术核对；这不替代独立法律审查，发布时仍应按实际安装包复核。
 

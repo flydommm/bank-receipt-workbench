@@ -84,6 +84,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-release.ps1 
 - [x] `build-info.json` 中 `source_has_uncommitted_changes` 为 `false`，`clean_windows_verified` 和 `signed` 按实际状态填写；本地构建记录不会被当作公开下载链接。
 - [x] 安装包没有签名时，明确标注“未签名”，不把构建成功写成签名或安全发布。
 
+后续签名接入另见 [Code signing policy（准备稿）](code-signing-policy.md)与[SignPath 申请评估](signpath-assessment-2026-09-12.md)。这些准备文件不表示已有证书；现有 CI 与安装包签名状态保持不变。
+
 ## 干净 Windows 手工验收
 
 使用与构建机隔离的 Windows 10/11 x64 机器或干净虚拟机；不要用已有开发环境代替此项。
