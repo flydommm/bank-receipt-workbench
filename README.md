@@ -2,6 +2,23 @@
 
 > 0.1.27 公开源码 · v0.1.27-pre.1 预发布安装包 · Windows x64 · 本地 PDF 查找、审核与导出
 
+**[下载安装包](#下载安装包windows) · [Releases / 全部版本](https://github.com/flydommm/bank-receipt-workbench/releases) · [使用指南](docs/usage.md) · [问题反馈](https://github.com/flydommm/bank-receipt-workbench/issues)**
+
+## 下载安装包（Windows）
+
+点击下表中的下载链接即可获取安装包，无需进入发布页展开 Assets。
+
+| 安装包 | 适用情况 | 直接下载 |
+| --- | --- | --- |
+| **OCR 版（推荐）** | 同时支持文字型 PDF 和扫描型 PDF | **[下载 0.1.27 OCR 版 · 约 164 MB](https://github.com/flydommm/bank-receipt-workbench/releases/download/v0.1.27-pre.1/bank-receipt-workbench_0.1.27_ocr_x64-setup.exe)** |
+| Core 版 | 仅处理已有文字层的 PDF，安装包更小 | **[下载 0.1.27 Core 版 · 约 30 MB](https://github.com/flydommm/bank-receipt-workbench/releases/download/v0.1.27-pre.1/bank-receipt-workbench_0.1.27_core_x64-setup.exe)** |
+
+适用于 Windows 10/11 x64。选择其中一个安装包，关闭应用后运行下载的 `.exe`；两种包更新同一个应用，无需另装 Python。OCR 版首次使用可能联网下载识别模型。
+
+当前为 **0.1.27 公开预发布**，安装包未签名，干净 Windows 环境安装验证尚未完成。[查看本版说明](https://github.com/flydommm/bank-receipt-workbench/releases/tag/v0.1.27-pre.1) · [查看 SHA-256 校验值](https://github.com/flydommm/bank-receipt-workbench/releases/download/v0.1.27-pre.1/SHA256SUMS.txt)
+
+## 应用介绍
+
 银行回单工作台是一款 Windows 桌面应用：从本机 PDF 中查找关键词，预览命中页面，复核和调整候选凭证范围，然后导出合并版或按来源拆分的 PDF，并可选生成 XLSX 审核索引。
 
 新手入口：先看[使用指南](docs/usage.md)；已有文字层的 PDF 选 `Core`，扫描 PDF 选 `Ocr`。项目采用 [AGPL-3.0-only](LICENSE)。
