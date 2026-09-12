@@ -35,6 +35,8 @@
 
 项目采用 [AGPL-3.0-only](LICENSE)，许可证文本见根目录 `LICENSE`。项目许可证不覆盖第三方依赖；PyMuPDF/MuPDF 按上游 AGPL 分发路线处理，其他组件的来源和许可证见[第三方组件说明](THIRD_PARTY_NOTICES.md)。不能把整个安装包笼统称为 MIT。
 
+贡献者保留版权；原创贡献按 AGPL-3.0-only 提供，每个 PR 提交需遵守 [DCO 1.1](DCO) 并附 `Signed-off-by`。本项目不要求版权转让或 CLA。提交方法和第三方来源要求见[贡献指南](CONTRIBUTING.md)，维护者合并前使用[贡献审查清单](docs/contribution-review.md)。
+
 公开入口：
 
 - [源码](https://github.com/flydommm/bank-receipt-workbench/tree/main)；

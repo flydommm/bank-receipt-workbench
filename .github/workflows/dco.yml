@@ -1,0 +1,39 @@
+name: Contribution DCO
+
+on:
+  pull_request_target:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+
+# PR metadata is untrusted. This job never checks out or builds a PR head.
+permissions:
+  contents: read
+  pull-requests: read
+  statuses: write
+
+concurrency:
+  group: dco-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Check DCO
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Read trusted contribution checker from the base revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+          sparse-checkout: scripts/check-dco.cjs
+          sparse-checkout-cone-mode: false
+
+      # pull_request_target jobs refer to the base commit. Publish the required
+      # DCO commit status explicitly on the exact PR head being validated.
+      - name: Validate all commits and publish DCO status
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            const { checkPullRequest } = require('./scripts/check-dco.cjs');
+            await checkPullRequest({ github, context, core });

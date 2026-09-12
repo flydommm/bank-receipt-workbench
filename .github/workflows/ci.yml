@@ -27,6 +27,9 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Test contribution checker
+        run: node --test scripts/check-dco.test.cjs
+
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
