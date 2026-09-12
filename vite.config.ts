@@ -8,6 +8,7 @@ export default defineConfig({
     strictPort: true,
   },
   test: {
-    exclude: ['**/node_modules/**', '**/.git/**', '**/.worktrees/**'],
+    // The contribution checker uses node:test and has its own CI step.
+    exclude: ['**/node_modules/**', '**/.git/**', '**/.worktrees/**', 'scripts/check-dco.test.cjs'],
   },
 });
