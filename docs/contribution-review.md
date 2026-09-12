@@ -6,13 +6,14 @@
 
 | 项目 | 已核实状态 |
 | --- | --- |
-| 贡献规则、DCO 原文、PR 模板 | 本地已完成；项目继续采用 AGPL-3.0-only，无 CLA 或版权转让 |
+| 贡献规则、DCO 原文、PR 模板 | 已发布到 GitHub `main`（`4567bb5b6bae9652438ff63df37e9be46c07d17f`）；项目继续采用 AGPL-3.0-only，无 CLA 或版权转让 |
 | DCO 检查程序 | 本地 13 项测试通过，工作流权限与差异审查通过；DCO 全文与官方原文按空白归一化比对一致 |
-| GitHub 主分支 | 只读 API 核查时为 `848ec2463dd28618bba8382e05c42005764dac8d`，`protected: false`，仓库 ruleset 列表为空 |
-| 当前开放 PR | 只读 API 核查时为 0；这不代表已审计所有历史贡献的权属 |
-| 远端强制检查 | 本轮尚未推送工作流、配置保护或运行试验 PR，不能宣称已经生效 |
+| DCO 远端反例 | [试验 PR #1](https://github.com/flydommm/bank-receipt-workbench/pull/1)：未签署提交 `8a3e53c58cb3fdd4315427e51a393116bffae0c3` 的 `DCO` 状态失败 |
+| DCO 远端正例 | [试验 PR #2](https://github.com/flydommm/bank-receipt-workbench/pull/2)：签署提交 `33dfe8f0d7c8efbe4bdb2b65b1597523e90c3eda` 的 `DCO` 状态成功 |
+| Windows 检查联动 | 首次运行发现前端工具误收集 Node DCO 测试，已将该文件从 Vitest 扫描中排除；独立 `node --test` 步骤继续执行全部 13 项测试 |
+| 保护规则与最终验收 | 最终配置、最新被核验 SHA 和 Windows 检查链接统一记在 [PR #2 的验收记录](https://github.com/flydommm/bank-receipt-workbench/pull/2)。配置及试验分支更新后必须重新核验；不能用上面早期 SHA 的成功状态代替最终验收 |
 
-以下远端启用和正反例验收完成前，**不合并第一份外部 PR**。此记录不改变应用版本、安装包或已发布的许可证。
+以下远端启用和正反例验收完成前，**不合并第一份外部 PR**。试验 PR 均不得合并，其作用是保留可追溯的检查证据。这些测试不代表已审计所有历史贡献的权属，也不改变应用版本、安装包或已发布的许可证。
 
 ## 记录
 
@@ -68,7 +69,7 @@
 
 ## 远端规则启用与验收记录
 
-以下是建议由维护者在 GitHub 远端设置的规则，最终状态必须以实际核查为准：
+以下是本次批准启用并应持续保持的规则；实时配置以 [main 分支保护 API](https://api.github.com/repos/flydommm/bank-receipt-workbench/branches/main/protection) 为准（需要维护权限），本次最终核验结果见 [PR #2 验收记录](https://github.com/flydommm/bank-receipt-workbench/pull/2)：
 
 - [ ] 要求 Pull Request 合并。
 - [ ] 将 `DCO` 和 `Windows verification` 设为必需检查。
@@ -80,11 +81,11 @@
 启用顺序：
 
 1. 先将经过审查的贡献文件和工作流发布到 `main`，使 DCO 检查能读取可信的主分支代码。已有 `main` 历史不批量补签或改写。
-2. 用维护者的独立试验分支创建 PR，验证“缺少签署失败 → 本人补齐签署后通过”；修改 PR 提交后检查必须针对新的 SHA 重新运行。试验 PR 不合并，实际签署必须由有权贡献的人完成。
+2. 用维护者的独立试验分支创建 PR，分别验证缺少签署失败和本人正确签署通过。本次用两个独立 PR 保留正反例，不强推、不改写已发布历史；修改试验分支后检查必须针对新的 SHA 重新运行。试验 PR 不合并，实际签署必须由有权贡献的人完成。
 3. 在 GitHub 的 `main` 分支保护或 ruleset 中启用上述规则。`DCO` 应选已实际产生的状态，避免把 `Check DCO` 配成另一个永远缺失的必需检查。
 4. 验证未签署 PR 确实不能合并、通过 DCO 和 Windows CI 的 PR 仍需维护者检查本页，再记录规则名称、启用时间、试验 PR 与工作流链接。
 
-如果启用后配置有误，由仓库所有者在 Settings 修正规则；撤回本次贡献文件可用新的 revert 提交，不强制重写历史。调整规则期间继续暂停外部 PR 合并。远端实测完成后再更新本页“启用状态”，不能用本地测试替代 GitHub 验收。
+如果启用后配置有误，由仓库所有者在 Settings 修正规则；撤回本次贡献文件可用新的 revert 提交，不强制重写历史。调整规则期间继续暂停外部 PR 合并。远端实测完成后，在上述试验 PR 的描述中记录保护规则、检查来源、当前 SHA、成功/失败运行和关闭结果；本页链接到该验收记录，不能用本地测试替代 GitHub 验收。
 
 ## 合并保留和验收
 
