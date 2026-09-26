@@ -69,8 +69,29 @@ def test_legacy_keeps_per_match_order_full_page_and_selection_confidence():
     assert [item["review_status"] for item in segments] == ["confirmed", "needs_review"]
     assert all(item["crop_mode"] == "full_page" and item["final_rect"] is None for item in segments)
     assert all(item["auto_full_page"] for item in result["originals"])
-    assert segments[0]["layout_fingerprint"] == "geometry:600x800:unknown,unknown,600,800"
+    assert segments[0]["layout_fingerprint"] == "geometry:600x800:unknown,unknown,600,300"
+    assert segments[0]["candidate_rect"]["y1"] == 300
     assert len(result["items"][0]["evidence"]) == 1
+
+
+def test_distinct_candidates_cannot_be_collapsed_by_an_old_full_page_flag():
+    matches = [hit(y=30), hit(y=350)]
+    selections = [selection(matches[0]), selection(matches[1], index=1, top=300, bottom=600)]
+    result = assemble(pages=[page_result(matches=matches, selections=selections, full=True)])
+    assert len(result["items"]) == 2
+    assert all(item["segment"]["crop_mode"] == "candidate" for item in result["items"])
+    assert [item["segment"]["final_rect"] for item in result["items"]] == [item["candidate_rect"] for item in selections]
+
+
+def test_multi_condition_native_single_page_preserves_full_page_and_original_crop():
+    criteria = {"include": ["fee", "bank"], "includeMode": "all", "exclude": []}
+    matches = [hit(query_id="include-0", role="include", y=30), hit(query_id="include-1", role="include", y=50)]
+    result = assemble(criteria=criteria, pages=[page_result(matches=matches, full=True)])
+    assert len(result["items"]) == 1
+    segment = result["items"][0]["segment"]
+    assert segment["crop_mode"] == "full_page" and segment["final_rect"] is None
+    assert segment["candidate_rect"]["y1"] == 300
+    assert len(result["items"][0]["evidence"]) == 2
 
 
 def test_multi_all_filters_per_candidate_and_keeps_all_evidence():
@@ -196,7 +217,9 @@ def test_signature_binds_original_layout_evidence_even_in_full_page_mode():
     second["payload"]["analysis"]["selections"][0]["candidate_rect"]["y1"] = 350
     second["payload"]["analysis"]["selections"][0]["evidence"].append("additional layout anchor")
     before, after = assemble(pages=[first]), assemble(pages=[second])
-    assert before["items"][0]["segment"] == after["items"][0]["segment"]
+    assert before["items"][0]["segment"]["final_rect"] is None
+    assert after["items"][0]["segment"]["final_rect"] is None
+    assert before["items"][0]["segment"]["candidate_rect"] != after["items"][0]["segment"]["candidate_rect"]
     assert before["originals"][0]["analysis_signature"] != after["originals"][0]["analysis_signature"]
 
 

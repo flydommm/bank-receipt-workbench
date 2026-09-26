@@ -788,7 +788,18 @@ class ReviewStoreV2:
     @staticmethod
     def context_key(context: object) -> str:
         """Return the stable context key for a validated descriptor."""
+        if isinstance(context, dict) and type(context.get("version")) is int and context["version"] == 3:
+            # Receipt-instance contexts have a separate pure-model contract.
+            # Keep this import local so the legacy store remains importable
+            # while the receipt codec imports its storage error type.
+            from .receipt_review_models import validate_receipt_context
+            from .receipt_review_models import ReceiptReviewError
 
+            try:
+                _descriptor, _sha_by_key, context_key = validate_receipt_context(context)
+            except ReceiptReviewError as exc:
+                raise ReviewStoreError(str(exc)) from exc
+            return context_key
         _descriptor, _sha_by_key, context_key = _validate_context(context)
         return context_key
 
@@ -797,9 +808,16 @@ class ReviewStoreV2:
         return self.database.connection
 
     def _migrate_v2(self) -> None:
+        from .receipt_review_store import RECEIPT_REVIEW_DDL, migrate_receipt_schema
+
         with self.database.transaction() as connection:
             for statement in _V2_DDL:
                 connection.execute(statement)
+            # The receipt codec is a parallel record table, but its foreign
+            # key points at the shared context table.  Create it in the same
+            # transaction so a partial migration cannot be observed.
+            connection.execute(RECEIPT_REVIEW_DDL)
+            migrate_receipt_schema(connection)
             self._validate_schema(connection)
             self._validate_owner_rows(connection)
             self._backfill_unknown_owners(connection)
@@ -887,6 +905,16 @@ class ReviewStoreV2:
             )
         ):
             raise ReviewStoreCorruptionError("v2 review schema is incompatible")
+        # Validate the schema-3 receipt codec when it is present.  The
+        # read-only snapshot path must remain able to inspect an older v2
+        # database created before the parallel table existed; normal writes
+        # create it in ``_migrate_v2`` before reaching this check.
+        receipt_table = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='review_receipt_records_v1'"
+        ).fetchone()
+        if receipt_table is not None:
+            from .receipt_review_store import validate_receipt_schema
+            validate_receipt_schema(connection)
 
     @staticmethod
     def _validate_owner_rows(connection: sqlite3.Connection) -> None:
@@ -961,14 +989,71 @@ class ReviewStoreV2:
         )
 
     @staticmethod
+    def _receipt_records_connection(
+        connection: sqlite3.Connection,
+        context_key: str,
+        context_row: sqlite3.Row,
+    ) -> dict[tuple[str, str, str], dict[str, object]]:
+        """Validate and load every record in a schema-3 receipt context."""
+
+        from .receipt_review_store import read_records
+
+        try:
+            descriptor = json.loads(context_row["descriptor_json"])
+        except (TypeError, ValueError):
+            raise ReviewStoreCorruptionError("stored review context is invalid") from None
+        if not isinstance(descriptor, dict):
+            raise ReviewStoreCorruptionError("stored review context is invalid")
+        validated = ReviewStoreV2._validate_context_row(context_row, descriptor, context_key)
+        if (not isinstance(validated, tuple) or len(validated) != 2
+                or not isinstance(validated[0], dict)):
+            raise ReviewStoreCorruptionError("stored receipt review context is invalid")
+        stored_descriptor = validated[0]
+        # The helper rejects records in the opposite codec before reads or
+        # cleanup, which prevents mixed legacy/receipt rows from being used.
+        if ReviewStoreV2._record_table_connection(connection, context_key, context_row) != "review_receipt_records_v1":
+            raise ReviewStoreCorruptionError("stored receipt review codec is invalid")
+        try:
+            return read_records(connection, context_key, stored_descriptor)
+        except sqlite3.Error:
+            # A schema-3 context cannot be read from a legacy database that
+            # lacks the receipt table; expose the store's corruption error
+            # rather than leaking an implementation-specific SQL exception.
+            raise ReviewStoreCorruptionError("stored receipt review codec is unavailable") from None
+
+    @staticmethod
+    def _record_table_connection(
+        connection: sqlite3.Connection,
+        context_key: str,
+        context_row: sqlite3.Row,
+    ) -> str:
+        """Select a codec table while tolerating pre-schema-3 read databases."""
+
+        from .receipt_review_store import record_table
+
+        table_present = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='review_receipt_records_v1'"
+        ).fetchone() is not None
+        # A read-only legacy database may not contain the newly introduced
+        # table.  It still has an unambiguous v2 codec; writes always migrate
+        # before reaching this adapter.
+        if not table_present and type(context_row["version"]) is int and context_row["version"] == 2:
+            return "review_segments_v2"
+        try:
+            return record_table(connection, context_key, context_row)
+        except sqlite3.Error:
+            raise ReviewStoreCorruptionError("stored review codec is unavailable") from None
+
+    @staticmethod
     def _ownership_fingerprint_connection(
         connection: sqlite3.Connection,
         context_key: str,
         context_row: sqlite3.Row | None = None,
+        validated_records: dict[tuple[str, str, str], dict[str, object]] | None = None,
     ) -> str | None:
         row = context_row or connection.execute(
             """
-            SELECT result_revision, updated_at
+            SELECT *
               FROM review_contexts_v2
              WHERE context_key = ?
             """,
@@ -979,29 +1064,46 @@ class ReviewStoreV2:
         try:
             result_revision = _bounded_result_revision(row["result_revision"])
             updated_at = _bounded_text(row["updated_at"], "updated_at", 128)
-            record_row = connection.execute(
-                """
-                SELECT COUNT(*) AS record_count,
-                       COALESCE(SUM(record_revision), 0) AS record_revision_total,
-                       COALESCE(MAX(record_revision), 0) AS record_revision_max
-                  FROM review_segments_v2
-                 WHERE context_key = ?
-                """,
-                (context_key,),
-            ).fetchone()
-            if record_row is None:
-                raise ReviewStoreError("review ownership fingerprint is unavailable")
-            record_count = _require_int(record_row["record_count"], "record_count", positive=False)
-            record_revision_total = _require_int(
-                record_row["record_revision_total"],
-                "record_revision_total",
-                positive=False,
-            )
-            record_revision_max = _require_int(
-                record_row["record_revision_max"],
-                "record_revision_max",
-                positive=False,
-            )
+            if type(row["version"]) is int and row["version"] == 3:
+                records = validated_records
+                if records is None:
+                    records = ReviewStoreV2._receipt_records_connection(connection, context_key, row)
+                revisions = [record["record_revision"] for record in records.values()]
+                record_count = _require_int(len(revisions), "record_count", positive=False)
+                record_revision_total = _require_int(
+                    sum(revisions),
+                    "record_revision_total",
+                    positive=False,
+                )
+                record_revision_max = _require_int(
+                    max(revisions, default=0),
+                    "record_revision_max",
+                    positive=False,
+                )
+            else:
+                record_row = connection.execute(
+                    """
+                    SELECT COUNT(*) AS record_count,
+                           COALESCE(SUM(record_revision), 0) AS record_revision_total,
+                           COALESCE(MAX(record_revision), 0) AS record_revision_max
+                      FROM review_segments_v2
+                     WHERE context_key = ?
+                    """,
+                    (context_key,),
+                ).fetchone()
+                if record_row is None:
+                    raise ReviewStoreError("review ownership fingerprint is unavailable")
+                record_count = _require_int(record_row["record_count"], "record_count", positive=False)
+                record_revision_total = _require_int(
+                    record_row["record_revision_total"],
+                    "record_revision_total",
+                    positive=False,
+                )
+                record_revision_max = _require_int(
+                    record_row["record_revision_max"],
+                    "record_revision_max",
+                    positive=False,
+                )
         except (KeyError, TypeError, ValueError, ReviewStoreError):
             raise ReviewStoreCorruptionError("stored review ownership fingerprint is invalid") from None
         return _sha256_text(
@@ -1042,16 +1144,38 @@ class ReviewStoreV2:
         # Cleanup is a destructive consumer of the stored binding. Validate
         # historical rows too: they can legitimately be absent from the latest
         # analysis manifest, but must still belong to its immutable source set.
+        receipt_records: dict[tuple[str, str, str], dict[str, object]] | None = None
+        record_count: int | None = None
         try:
             descriptor = json.loads(context_row["descriptor_json"])
-            ReviewStoreV2._validate_context_row(context_row, descriptor, context_key)
-            sources = {source["source_key"]: source for source in descriptor["sources"]}
-            for raw in connection.execute("SELECT * FROM review_segments_v2 WHERE context_key = ?", (context_key,)):
-                record = _row_to_record(raw)
-                source = sources.get(record["source_key"])
-                if (source is None or record["source_sha256"] != source["source_sha256"]
-                        or _normalize_source_path(record["source_path"]) != _normalize_source_path(source["source_path"])):
-                    raise ReviewStoreCorruptionError("stored review source binding is invalid")
+            if type(context_row["version"]) is int and context_row["version"] == 3:
+                receipt_records = ReviewStoreV2._receipt_records_connection(
+                    connection,
+                    context_key,
+                    context_row,
+                )
+                record_count = len(receipt_records)
+            else:
+                # Ask the codec dispatcher to reject receipt rows accidentally
+                # attached to a legacy context.  The adapter tolerates an
+                # older read-only database that predates the new table.
+                if ReviewStoreV2._record_table_connection(connection, context_key, context_row) != "review_segments_v2":
+                    raise ReviewStoreCorruptionError("stored review cleanup codec is invalid")
+                ReviewStoreV2._validate_context_row(context_row, descriptor, context_key)
+                sources = {source["source_key"]: source for source in descriptor["sources"]}
+                for raw in connection.execute("SELECT * FROM review_segments_v2 WHERE context_key = ?", (context_key,)):
+                    record = _row_to_record(raw)
+                    source = sources.get(record["source_key"])
+                    if (source is None or record["source_sha256"] != source["source_sha256"]
+                            or _normalize_source_path(record["source_path"]) != _normalize_source_path(source["source_path"])):
+                        raise ReviewStoreCorruptionError("stored review source binding is invalid")
+                record_row = connection.execute(
+                    "SELECT COUNT(*) AS record_count FROM review_segments_v2 WHERE context_key = ?",
+                    (context_key,),
+                ).fetchone()
+                if record_row is None:
+                    raise ReviewStoreCorruptionError("stored review ownership records are invalid")
+                record_count = _require_int(record_row["record_count"], "record_count")
         except (KeyError, TypeError, ValueError, ReviewStoreError):
             raise ReviewStoreCorruptionError("stored review cleanup binding is invalid") from None
 
@@ -1066,14 +1190,14 @@ class ReviewStoreV2:
             (context_key,),
         ).fetchall()
         owned_by_job = any(row["owner_kind"] == "batch" and row["owner_id"] == job_id for row in owners)
-        record_row = connection.execute(
-            "SELECT COUNT(*) AS record_count FROM review_segments_v2 WHERE context_key = ?",
-            (context_key,),
-        ).fetchone()
-        if record_row is None:
+        if record_count is None:
             raise ReviewStoreCorruptionError("stored review ownership records are invalid")
-        record_count = _require_int(record_row["record_count"], "record_count")
-        fingerprint = ReviewStoreV2._ownership_fingerprint_connection(connection, context_key, context_row)
+        fingerprint = ReviewStoreV2._ownership_fingerprint_connection(
+            connection,
+            context_key,
+            context_row,
+            receipt_records,
+        )
         owner_count = len(owners)
         other_owner_count = owner_count - int(owned_by_job)
         return {
@@ -1205,19 +1329,27 @@ class ReviewStoreV2:
 
             owner_count = int(view["owner_count"])
             if should_delete_exclusive and not preserve_for_external_reference and owner_count == 1:
-                count_row = connection.execute(
-                    "SELECT COUNT(*) AS record_count FROM review_segments_v2 WHERE context_key = ?",
+                deleted_record_count = _require_int(view["record_count"], "record_count")
+                context_row = connection.execute(
+                    "SELECT * FROM review_contexts_v2 WHERE context_key = ?",
                     (canonical_context_key,),
                 ).fetchone()
-                if count_row is None:
-                    raise ReviewStoreCorruptionError("stored review ownership records are invalid")
-                deleted_record_count = _require_int(count_row["record_count"], "record_count")
+                if context_row is None:
+                    raise ReviewStoreCorruptionError("stored review context disappeared during cleanup")
+                codec_table = ReviewStoreV2._record_table_connection(
+                    connection,
+                    canonical_context_key,
+                    context_row,
+                )
+                delete_sql = {
+                    "review_segments_v2": "DELETE FROM review_segments_v2 WHERE context_key = ?",
+                    "review_receipt_records_v1": "DELETE FROM review_receipt_records_v1 WHERE context_key = ?",
+                }.get(codec_table)
+                if delete_sql is None:
+                    raise ReviewStoreCorruptionError("stored review ownership codec is invalid")
                 # Keep deletion order explicit even though the context has an
                 # ON DELETE CASCADE foreign key for defensive compatibility.
-                connection.execute(
-                    "DELETE FROM review_segments_v2 WHERE context_key = ?",
-                    (canonical_context_key,),
-                )
+                connection.execute(delete_sql, (canonical_context_key,))
                 connection.execute(
                     "DELETE FROM review_context_owners_v2 WHERE context_key = ?",
                     (canonical_context_key,),
@@ -1343,6 +1475,20 @@ class ReviewStoreV2:
         owner_kind: str,
         owner_id: str,
     ) -> dict[str, object]:
+        if isinstance(context, dict) and type(context.get("version")) is int and context["version"] == 3:
+            # Receipt-instance manifests are server-attested and use their
+            # own record codec.  Dispatch before legacy validation so a
+            # schema-3 request can never be projected into review_segments_v2.
+            from .receipt_review_store import prepare_receipts
+            return prepare_receipts(
+                self,
+                context,
+                originals,
+                result_revision=result_revision,
+                trusted_aliases=trusted_aliases,
+                owner_kind=owner_kind,
+                owner_id=owner_id,
+            )
         descriptor, source_sha_by_key, context_key = _validate_context(
             context,
             trusted_aliases=trusted_aliases,
@@ -1388,6 +1534,8 @@ class ReviewStoreV2:
                 )
             else:
                 self._validate_context_row(row, descriptor, context_key)
+                if self._record_table_connection(connection, context_key, row) != "review_segments_v2":
+                    raise ReviewStoreCorruptionError("stored review codec is invalid")
                 try:
                     stored_descriptor_value = json.loads(row["descriptor_json"])
                 except (TypeError, ValueError):
@@ -1564,7 +1712,17 @@ class ReviewStoreV2:
         }
 
     @staticmethod
-    def _validate_context_row(row: sqlite3.Row, descriptor: dict[str, object], context_key: str) -> None:
+    def _validate_context_row(
+        row: sqlite3.Row,
+        descriptor: dict[str, object],
+        context_key: str,
+    ) -> object:
+        if type(row["version"]) is int and row["version"] == 3:
+            # Schema-3 context and manifest validation is owned by the
+            # receipt codec.  It also returns the stored descriptor and the
+            # immutable originals needed by receipt-aware callers.
+            from .receipt_review_store import validate_context_row
+            return validate_context_row(row, descriptor, context_key)
         try:
             if row["context_key"] != context_key or row["version"] != 2:
                 raise ReviewStoreError("stored review context is invalid")
@@ -1653,6 +1811,23 @@ class ReviewStoreV2:
             raise ReviewStoreError("records must be an array")
         if len(records) > _MAX_SEGMENTS:
             raise ReviewStoreError("records exceeds the segment limit")
+        # Select the codec from the durable context row before interpreting
+        # client records.  Receipt edits have a different shape and must be
+        # handled by the schema-3 helper, never guessed from the payload.
+        stored_context_row = self.connection.execute(
+            "SELECT version FROM review_contexts_v2 WHERE context_key = ?",
+            (canonical_context_key,),
+        ).fetchone()
+        if stored_context_row is not None and type(stored_context_row["version"]) is int \
+                and stored_context_row["version"] == 3:
+            from .receipt_review_store import save_receipts
+            return save_receipts(
+                self,
+                canonical_context_key,
+                current_result_revision,
+                records,
+                confirm_group=confirm_group,
+            )
         # Alias paths are admitted only after the stored context descriptor
         # binds source_key to the server's current access path below.
         parsed_records = [
@@ -1681,6 +1856,8 @@ class ReviewStoreV2:
             ).fetchone()
             if context_row is None:
                 raise ReviewStoreError("review context does not exist")
+            if self._record_table_connection(connection, canonical_context_key, context_row) != "review_segments_v2":
+                raise ReviewStoreCorruptionError("stored review codec is invalid")
             try:
                 descriptor = json.loads(context_row["descriptor_json"])
                 manifest_json = context_row["manifest_json"]

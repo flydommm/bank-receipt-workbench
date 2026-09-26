@@ -1,0 +1,44 @@
+.layout-template-manager.panel { flex: 1; min-height: 0; overflow: auto; margin: 24px; padding: 24px; min-width: 0; }
+.layout-template-manager button { border: 1px solid #d8e3ea; border-radius: 8px; padding: 8px 12px; background: #f7fafc; color: #365267; }
+.layout-template-manager button.primary-button { background: #2f8d82; border-color: #2f8d82; color: #fff; }
+.layout-template-manager button:disabled { opacity: .55; cursor: not-allowed; }
+.layout-template-manager h2 { font-size: 18px; }
+.layout-template-manager h3 { font-size: 16px; }
+.layout-template-manager input { padding: 8px 10px; border: 1px solid #cbd9e3; border-radius: 8px; }
+.layout-template-manager__header, .layout-template-manager__toolbar, .layout-template-manager__actions, .layout-template-manager__pagination { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.layout-template-manager__header { justify-content: space-between; align-items: flex-start; }
+.layout-template-manager h2, .layout-template-manager h3 { margin-top: 0; }
+.layout-template-manager p { line-height: 1.6; }
+.layout-template-manager__header p { margin-bottom: 0; }
+.layout-template-manager__toolbar { margin: 20px 0; justify-content: space-between; }
+.layout-template-manager__body { display: grid; grid-template-columns: minmax(180px, 240px) minmax(0, 1fr); gap: 24px; }
+.layout-template-manager__list { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.layout-template-manager__bank-group { display: grid; gap: 8px; }
+.layout-template-manager__bank-group > h3 { margin: 8px 4px 0; font-size: 13px; color: #4d6257; }
+.layout-template-manager__bank-group > button { text-align: left; display: grid; gap: 6px; padding: 12px; overflow-wrap: anywhere; }
+.layout-template-manager__bank-group > button[aria-pressed="true"] { border-color: #24745d; background: #edf7f2; box-shadow: inset 3px 0 #24745d; }
+.layout-template-manager__list span, .layout-template-manager__list small { font-size: 12px; }
+.layout-template-manager__pagination { justify-content: space-between; margin-top: 12px; gap: 6px; }
+.layout-template-manager__pagination button { padding: 6px 8px; }
+.layout-template-manager__detail { display: grid; grid-template-columns: minmax(150px, .8fr) minmax(230px, 1.2fr); gap: 24px; align-items: start; min-width: 0; }
+.layout-template-manager__drawing { padding: 16px; background: #f1f4f2; border-radius: 10px; text-align: center; }
+.layout-template-manager__drawing svg { display: block; width: 100%; max-height: 460px; margin: auto; border: 1px solid #cbd6d0; }
+.layout-template-manager__paper { fill: #fff; }
+.layout-template-manager__drawing g rect { fill: #edf7f2; stroke: #24745d; stroke-width: 2px; vector-effect: non-scaling-stroke; }
+.layout-template-manager__drawing g.is-unconfirmed rect { fill: #f5f6f5; stroke: #86918c; stroke-dasharray: 5 4; }
+.layout-template-manager__drawing g.is-unconfirmed text { fill: #64716a; }
+.layout-template-manager__drawing text { fill: #205a48; font-size: 22px; }
+.layout-template-manager__drawing p { margin-bottom: 0; font-size: 12px; }
+.layout-template-manager__properties { min-width: 0; }
+.layout-template-manager__properties h3 { overflow-wrap: anywhere; }
+.layout-template-manager__properties label { display: grid; gap: 8px; margin-bottom: 12px; }
+.layout-template-manager__properties input { width: 100%; min-width: 0; box-sizing: border-box; }
+.layout-template-manager__table-scroll { overflow-x: auto; margin-top: 20px; }
+.layout-template-manager table { width: 100%; border-collapse: collapse; font-size: 12px; white-space: nowrap; }
+.layout-template-manager caption { text-align: left; font-weight: 600; margin-bottom: 8px; }
+.layout-template-manager th, .layout-template-manager td { padding: 8px 5px; text-align: left; border-bottom: 1px solid #dbe3df; }
+.layout-template-manager__empty { padding: 40px 16px; text-align: center; background: #f6f8f7; border-radius: 10px; }
+.layout-template-manager__validation, .layout-template-manager [role="alert"] { color: #a33427; }
+@media (max-width: 1250px) { .layout-template-manager.panel { margin: 16px; } }
+@media (max-width: 1050px) { .layout-template-manager__detail { grid-template-columns: 1fr; } .layout-template-manager__drawing svg { max-height: 300px; } }
+@media (max-width: 650px) { .layout-template-manager.panel { padding: 16px; } .layout-template-manager__body { grid-template-columns: 1fr; } }

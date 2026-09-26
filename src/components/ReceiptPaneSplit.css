@@ -1,0 +1,91 @@
+.receipt-pane-split {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.receipt-pane-split__preview,
+.receipt-pane-split__controls {
+  min-width: 0;
+  min-height: 0;
+}
+
+.receipt-pane-split__preview {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.receipt-pane-split__preview > * {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.receipt-pane-split[data-resizable='true'] .receipt-pane-split__separator {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex: 0 0 var(--receipt-pane-separator-height, 10px);
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  height: var(--receipt-pane-separator-height, 10px);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: row-resize;
+  touch-action: none;
+  user-select: none;
+}
+
+.receipt-pane-split__separator::before {
+  width: 44px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--border-strong, #aabac4);
+  content: '';
+}
+
+.receipt-pane-split__separator:hover::before,
+.receipt-pane-split__separator:focus-visible::before {
+  width: 64px;
+  background: var(--accent, #2c887b);
+}
+
+.receipt-pane-split__separator:focus-visible {
+  outline: 2px solid var(--accent, #2c887b);
+  outline-offset: -2px;
+}
+
+.receipt-pane-split[data-resizable='true'] .receipt-pane-split__controls {
+  display: flex;
+  flex: 0 0 var(--receipt-pane-controls-height, 240px);
+  flex-direction: column;
+  width: 100%;
+  height: var(--receipt-pane-controls-height, 240px);
+  overflow: hidden;
+}
+
+.receipt-pane-split[data-resizable='true'] .receipt-pane-split__controls > * {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.receipt-pane-split[data-resizable='false'] .receipt-pane-split__controls {
+  flex: 0 1 auto;
+  max-height: 46%;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.receipt-pane-split[data-hidden='true'] > * {
+  visibility: hidden;
+}

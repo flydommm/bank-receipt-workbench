@@ -302,6 +302,10 @@ def _prepare_data(value: object) -> tuple[dict[str, Any], bytes]:
     # get silently coerced into a different record.
     if type(value.get("schema")) is not int or value.get("schema") != JOURNAL_SCHEMA:
         raise _validation_error("export journal schema is unsupported")
+    if "receipt_schema" in value and (type(value["receipt_schema"]) is not int or value["receipt_schema"] != 2):
+        raise _validation_error("export receipt schema is unsupported")
+    if "include_manifest" in value and type(value["include_manifest"]) is not bool:
+        raise _validation_error("export manifest option is invalid")
     intent_id = _validate_intent_id(value.get("intent_id"))
     _validate_text_identifier(value.get("job_id"), "export journal job id is invalid")
     created_at = value.get("created_at")
@@ -582,7 +586,7 @@ def _latest_record(
     anchor_final, anchor_final_identity = _read_journal_file(anchor.path, intent_id, anchor.info)
     if anchor_final != anchor_data or not _same_file_identity(anchor_final_identity, anchor_identity):
         raise _conflict_error()
-    immutable = ("schema", "intent_id", "job_id", "created_at")
+    immutable = ("schema", "receipt_schema", "include_manifest", "intent_id", "job_id", "created_at")
     if any(data.get(field) != anchor_data.get(field) for field in immutable):
         raise _integrity_error()
     return data, identity, latest.path, latest.version
@@ -1376,6 +1380,14 @@ class ExportJournal:
 
     def create(self, data: dict[str, Any]) -> None:
         prepared, encoded = _prepare_data(data)
+        # New receipt intents explicitly bind their publication contract in
+        # the immutable anchor. Legacy journals may still load without it.
+        scope = prepared.get("scope")
+        if isinstance(scope, dict) and scope.get("schema") == 2 and prepared.get("receipt_schema") != 2:
+            raise _validation_error("receipt intent requires an explicit receipt schema")
+        if isinstance(scope, dict) and (("include_manifest" in scope) != ("include_manifest" in prepared)
+                or ("include_manifest" in scope and scope["include_manifest"] is not prepared["include_manifest"])):
+            raise _validation_error("export manifest option must be anchored to its scope")
         intent_id = _validate_intent_id(prepared["intent_id"])
         _, path = self._journal_path(intent_id)
         _, maximum, _ = _limits()
@@ -1450,7 +1462,7 @@ class ExportJournal:
         _assert_root_identity(self.root, self._identity)
         self._assert_record_path(record)
         prepared, encoded = _prepare_data(data)
-        immutable = ("schema", "intent_id", "job_id", "created_at")
+        immutable = ("schema", "receipt_schema", "include_manifest", "intent_id", "job_id", "created_at")
         if any(prepared.get(field) != record._baseline.get(field) for field in immutable):
             raise _validation_error("export journal identity fields are immutable")
         _, maximum, _ = _limits()

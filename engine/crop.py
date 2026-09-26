@@ -10,6 +10,8 @@ from collections.abc import Iterable
 from typing import Any
 
 from .layout import LayoutCandidate, Rect, clamp_rect
+from .pdf_geometry import append_visible_pdf_crop, read_page_geometry
+from .receipt_layout_models import MIN_CROP_SIZE, near
 
 try:
     import pymupdf
@@ -28,7 +30,7 @@ class PdfSegment:
 # Keep the lower-level exporter conservative as well as the JSON protocol.
 # The UI uses the same minimum for pointer editing.  This prevents
 # zero-area/near-empty pages from being emitted by callers that bypass the UI.
-MIN_EXPORT_RECT_SIZE = 12.0
+MIN_EXPORT_RECT_SIZE = MIN_CROP_SIZE
 
 
 def normalize_region(candidate: LayoutCandidate, page_width: float, page_height: float) -> LayoutCandidate:
@@ -40,7 +42,10 @@ def region_from_points(x0: float, y0: float, x1: float, y1: float, page_width: f
 
 
 def _is_real_number(value: object) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value))
+    try:
+        return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value))
+    except OverflowError:
+        return False
 
 
 def _validated_clip(segment: PdfSegment, source_page: Any) -> Any:
@@ -55,8 +60,10 @@ def _validated_clip(segment: PdfSegment, source_page: Any) -> Any:
         raise ValueError("page number must be a positive integer")
     if isinstance(segment.segment_no, bool) or not isinstance(segment.segment_no, int) or segment.segment_no < 1:
         raise ValueError("segment number must be a positive integer")
+    geometry = read_page_geometry(source_page)
+    page_width, page_height = geometry['width_pt'], geometry['height_pt']
     if segment.keep_full_page is True:
-        return source_page.rect
+        return pymupdf.Rect(0, 0, page_width, page_height)
     if segment.rect is None:
         raise ValueError("reviewed rectangle is required unless full page was explicitly selected")
 
@@ -65,14 +72,14 @@ def _validated_clip(segment: PdfSegment, source_page: Any) -> Any:
     if not all(_is_real_number(value) for value in values):
         raise ValueError("reviewed rectangle must contain finite numbers")
     x0, y0, x1, y1 = (float(value) for value in values)
-    page_width = float(source_page.rect.width)
-    page_height = float(source_page.rect.height)
-    if not (
-        0 <= x0 < x1 <= page_width
-        and 0 <= y0 < y1 <= page_height
-        and x1 - x0 >= MIN_EXPORT_RECT_SIZE
-        and y1 - y0 >= MIN_EXPORT_RECT_SIZE
-    ):
+    def valid_extent(start: float, end: float, size: float) -> bool:
+        if size < MIN_EXPORT_RECT_SIZE:
+            return start == 0 and end == size
+        return (start < end and (start >= 0 or near(start, 0))
+                and (end <= size or near(end, size))
+                and (end - start >= MIN_EXPORT_RECT_SIZE or near(end - start, MIN_EXPORT_RECT_SIZE)))
+
+    if not (valid_extent(x0, x1, page_width) and valid_extent(y0, y1, page_height)):
         raise ValueError("reviewed rectangle must be ordered, non-empty, and inside the page")
     return pymupdf.Rect(x0, y0, x1, y1)
 
@@ -101,8 +108,7 @@ def export_segments(source_path: str | Path, output_path: str | Path, segments: 
                 raise ValueError(f"page number out of range: {segment.page_number}")
             source_page = source.load_page(segment.page_number - 1)
             clip = _validated_clip(segment, source_page)
-            target = output.new_page(width=clip.width, height=clip.height)
-            target.show_pdf_page(target.rect, source, segment.page_number - 1, clip=clip)
+            append_visible_pdf_crop(output, source, segment.page_number - 1, clip)
         destination = Path(output_path)
         destination.parent.mkdir(parents=True, exist_ok=True)
         output.save(str(destination))
@@ -135,8 +141,7 @@ def export_merged_segments(
                     raise ValueError(f"page number out of range: {segment.page_number}")
                 source_page = source.load_page(segment.page_number - 1)
                 clip = _validated_clip(segment, source_page)
-                target = output.new_page(width=clip.width, height=clip.height)
-                target.show_pdf_page(target.rect, source, segment.page_number - 1, clip=clip)
+                append_visible_pdf_crop(output, source, segment.page_number - 1, clip)
         destination = Path(output_path)
         destination.parent.mkdir(parents=True, exist_ok=True)
         output.save(str(destination))

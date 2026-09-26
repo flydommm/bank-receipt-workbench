@@ -88,6 +88,45 @@ afterEach(() => {
 });
 
 describe('ResizableWorkspace', () => {
+  it('cancels a drag across workflow layouts and restores the measured columns on return', () => {
+    const persisted = JSON.stringify({ left: 320, right: 410 });
+    window.localStorage.setItem(WORKSPACE_COLUMNS_STORAGE_KEY, persisted);
+    document.body.style.cursor = 'crosshair';
+    document.body.style.userSelect = 'text';
+    const element = (layout: 'columns' | 'overview' | 'calibration') => (
+      <ResizableWorkspace layout={layout} left={<aside>来源栏</aside>} center={<main>工作区</main>} right={<aside>片段栏</aside>} />
+    );
+    const view = render(element('columns'));
+    setWorkspaceWidth(1600);
+    fireEvent.pointerDown(screen.getByTestId('workspace-divider-left'), { clientX: 100, pointerId: 2 });
+    fireEvent(window, new PointerEvent('pointermove', { clientX: 180, pointerId: 2 }));
+    expect(variableValue('--workspace-left')).toBe('400px');
+
+    view.rerender(element('overview'));
+    expect(screen.getByText('工作区')).toBeTruthy();
+    expect(screen.queryByText('来源栏')).toBeNull();
+    expect(screen.queryByText('片段栏')).toBeNull();
+    expect(document.body.style.cursor).toBe('crosshair');
+    expect(document.body.style.userSelect).toBe('text');
+    fireEvent(window, new PointerEvent('pointerup', { clientX: 180, pointerId: 2 }));
+    expect(window.localStorage.getItem(WORKSPACE_COLUMNS_STORAGE_KEY)).toBe(persisted);
+
+    view.rerender(element('calibration'));
+    expect(screen.getByText('工作区')).toBeTruthy();
+    expect(screen.getByText('片段栏')).toBeTruthy();
+    expect(screen.queryByText('来源栏')).toBeNull();
+    view.rerender(element('columns'));
+    setWorkspaceWidth(1600);
+    expect(variableValue('--workspace-left')).toBe('320px');
+    expect(variableValue('--workspace-right')).toBe('410px');
+    setWorkspaceWidth(1200);
+    expect(variableValue('--workspace-left')).toBe('220px');
+    expect(variableValue('--workspace-right')).toBe('400px');
+    setWorkspaceWidth(1600);
+    expect(variableValue('--workspace-left')).toBe('320px');
+    expect(variableValue('--workspace-right')).toBe('410px');
+  });
+
   it('keeps a persisted preference when the initial reset signal is provided', () => {
     const persisted = JSON.stringify({ left: 320, right: 410 });
     window.localStorage.setItem(WORKSPACE_COLUMNS_STORAGE_KEY, persisted);

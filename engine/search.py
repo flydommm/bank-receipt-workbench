@@ -272,19 +272,7 @@ def _search_pages(
     matches: list[SearchMatch] = []
     fuzzy_work = budget.fuzzy_work
     for page_index, page in enumerate(pages, start=1):
-        if page_index > MAX_SEARCH_PAGES or budget.processed_pages >= MAX_SEARCH_PAGES:
-            raise SearchBudgetExceeded("PDF has too many pages to search safely")
-        budget.processed_pages += 1
-        if (
-            len(page.text) > MAX_PAGE_TEXT_CHARACTERS
-            or len(page.blocks) > MAX_TEXT_BLOCKS_PER_PAGE
-        ):
-            raise SearchBudgetExceeded("PDF page text exceeds safe search limits")
-        block_text_characters = sum(len(block.text) for block in page.blocks)
-        next_text_characters = budget.text_characters + len(page.text) + block_text_characters
-        if next_text_characters > MAX_TOTAL_TEXT_CHARACTERS:
-            raise SearchBudgetExceeded("PDF text exceeds safe search limits")
-        budget.text_characters = next_text_characters
+        _register_page_budget(page, budget, page_index=page_index)
         if query is not None and (query.date_from is not None or query.date_to is not None):
             page_date = _page_date(page.text)
             if query.date_from and (page_date is None or page_date < query.date_from):
@@ -343,6 +331,58 @@ def _search_pages(
                     )
                 )
     return matches
+
+
+def _register_page_budget(
+    page: ParsedPage,
+    budget: SearchBudget,
+    *,
+    page_index: int,
+) -> None:
+    """Charge one physical page using the same counters as text search.
+
+    The page-level checks intentionally happen before block-level checks to
+    preserve the existing search budget mutation order.  Callers that read
+    every block without filtering (such as ``split_all``) should additionally
+    call ``_validate_page_blocks``.
+    """
+
+    if page_index > MAX_SEARCH_PAGES or budget.processed_pages >= MAX_SEARCH_PAGES:
+        raise SearchBudgetExceeded("PDF has too many pages to search safely")
+    budget.processed_pages += 1
+    if (
+        len(page.text) > MAX_PAGE_TEXT_CHARACTERS
+        or len(page.blocks) > MAX_TEXT_BLOCKS_PER_PAGE
+    ):
+        raise SearchBudgetExceeded("PDF page text exceeds safe search limits")
+    block_text_characters = sum(len(block.text) for block in page.blocks)
+    next_text_characters = budget.text_characters + len(page.text) + block_text_characters
+    if next_text_characters > MAX_TOTAL_TEXT_CHARACTERS:
+        raise SearchBudgetExceeded("PDF text exceeds safe search limits")
+    budget.text_characters = next_text_characters
+
+
+def _validate_page_blocks(page: ParsedPage) -> None:
+    """Apply the per-block text bound without charging another page."""
+
+    for block in page.blocks:
+        if len(block.text) > MAX_TEXT_BLOCK_CHARACTERS:
+            raise SearchBudgetExceeded("PDF text block exceeds safe search limits")
+
+
+def register_page_budget(page: ParsedPage, budget: SearchBudget | None = None) -> SearchBudget:
+    """Register one physical page for a non-search processing mode.
+
+    ``split_all`` still reads parsed page text to classify occupied slots, so
+    it must consume the same page, text, and per-block safety budgets as a
+    search.  A fresh budget is returned when ``budget`` is omitted; callers
+    that pass a budget observe the counters in that object.
+    """
+
+    checked_budget = _coerce_search_budget(budget)
+    _register_page_budget(page, checked_budget, page_index=1)
+    _validate_page_blocks(page)
+    return checked_budget
 
 
 def search_pages(

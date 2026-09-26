@@ -39,6 +39,7 @@ describe('ReviewOperationTools', () => {
     expect(props.onUndo).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole('button', { name: '下一项待复核' }));
+    await user.click(screen.getByRole('button', { name: '更多审核工具' }));
     await user.click(screen.getByRole('button', { name: '恢复自动候选' }));
     await user.click(screen.getByRole('button', { name: '撤销上一步' }));
 
@@ -78,7 +79,7 @@ describe('ReviewOperationTools', () => {
     busyView.view.unmount();
   });
 
-  it('shows the capped recent history count and disables undo or restore for their guards', () => {
+  it('shows the capped recent history count and disables undo or restore for their guards', async () => {
     renderTools({
       historyCount: 27,
       canUndo: false,
@@ -87,6 +88,7 @@ describe('ReviewOperationTools', () => {
       restoreDisabledReason: '当前片段没有自动候选。',
     });
 
+    await userEvent.setup().click(screen.getByRole('button', { name: '更多审核工具' }));
     expect(screen.getByText('最近 20 / 20 步')).toBeTruthy();
     const undoButton = screen.getByRole('button', { name: '撤销上一步' }) as HTMLButtonElement;
     const restoreButton = screen.getByRole('button', { name: '恢复自动候选' }) as HTMLButtonElement;
@@ -99,6 +101,28 @@ describe('ReviewOperationTools', () => {
     const restoreReason = document.getElementById(restoreButton.getAttribute('aria-describedby') ?? '');
     expect(undoReason?.textContent).toContain('最近没有可撤销的审核操作。');
     expect(restoreReason?.textContent).toContain('当前片段没有自动候选。');
+  });
+
+  it('keeps only the sync switch available during a crop draft', async () => {
+    const user = userEvent.setup();
+    const onSyncEnabledChange = vi.fn();
+    renderTools({
+      draftPending: true,
+      onSplitCandidate: vi.fn(),
+      onBatchCrop: vi.fn(),
+      onSyncEnabledChange,
+    });
+
+    expect(screen.queryByRole('button', { name: '下一项待复核' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '更多审核工具' })).toBeNull();
+    for (const name of ['按单张候选分割', '应用到同类片段', '恢复自动候选', '撤销上一步']) {
+      expect(screen.queryByRole('button', { name })).toBeNull();
+    }
+
+    const sync = screen.getByRole('checkbox', { name: '保存时同步同银行同版式候选' }) as HTMLInputElement;
+    expect(sync.disabled).toBe(false);
+    await user.click(sync);
+    expect(onSyncEnabledChange).toHaveBeenCalledWith(true);
   });
 
   it('shows unsaved recovery actions and disables them while busy or frozen', async () => {

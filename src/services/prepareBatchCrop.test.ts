@@ -7,7 +7,8 @@ const segment = (id:string,page:number): ReviewSegment => ({id,sourceKey:'file-a
   finalRect:{x0:0,y0:30,x1:600,y1:180},confidence:0.8,slot:'single',layoutFingerprint:'old',mode:'candidate',manualAdjusted:false,reviewStatus:'needs_review'});
 const sample = (): ReviewSegment => ({...segment('sample',1),mode:'manual',manualAdjusted:true,reviewStatus:'confirmed',finalRect:{x0:0,y0:20,x1:600,y1:200}});
 const metadata = (s:ReviewSegment): CropTemplatePage => ({status:'ok',page:s.sourcePage,page_count:100,page_width:600,page_height:800,source_sha256:s.sourceSha256,
-  crop_template:{status:'ready',fingerprint:'b'.repeat(64),receipts:[{anchor_y:20,title_key:'c'.repeat(64),bounds:{x0:0,y0:0,x1:600,y1:250}}]}});
+  crop_template:{status:'ready',fingerprint:'b'.repeat(64),receipts:[{anchor_y:20,title_key:'c'.repeat(64),
+    issuer_bank_key:'d'.repeat(64),template_fingerprint:'e'.repeat(64),bounds:{x0:0,y0:0,x1:600,y1:250}}]}});
 it('deduplicates pages, bounds work to two slots and skips failed validations without partial writes', async()=>{
   const targets=[segment('one',2),segment('two',2),segment('three',3)];
   let active=0,peak=0;

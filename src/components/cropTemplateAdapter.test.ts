@@ -6,7 +6,8 @@ import { localEngineAdapter } from './localEngineAdapter';
 const sha = 'a'.repeat(64);
 const valid = () => ({ status: 'ok', page: 2, page_count: 3, page_width: 600, page_height: 900, source_sha256: sha,
   crop_template: { status: 'ready', fingerprint: 'b'.repeat(64), receipts: [
-    { anchor_y: 25, bounds: {x0:0,y0:0,x1:600,y1:300}, title_key:'c'.repeat(64) },
+    { anchor_y: 25, bounds: {x0:0,y0:0,x1:600,y1:300}, title_key:'c'.repeat(64),
+      issuer_bank_key:'d'.repeat(64), template_fingerprint:'e'.repeat(64) },
   ] } });
 beforeEach(() => { Object.defineProperty(window, '__TAURI_INTERNALS__', { configurable: true, value: {} }); invoke.mockReset(); });
 afterEach(() => { delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__; });
@@ -15,7 +16,7 @@ it('requests only readonly crop metadata through the existing guarded page bound
   expect(await localEngineAdapter.describeCropPage('C:/test.pdf', 2, sha)).toEqual(valid());
   expect(invoke).toHaveBeenCalledWith('engine_analyze_page', {path:'C:/test.pdf',page:2,matches:[],sourceSha256:sha,includeCropTemplate:true});
 });
-it.each(['page','hash','bounds','anchor','empty','overlap','oversized','fingerprint'])('rejects malformed descriptor: %s', async (fault) => {
+it.each(['page','hash','bounds','anchor','empty','overlap','oversized','fingerprint','issuer','receipt-template','template-without-issuer'])('rejects malformed descriptor: %s', async (fault) => {
   const data = valid();
   if (fault === 'page') data.page = 1;
   if (fault === 'hash') data.source_sha256 = 'd'.repeat(64);
@@ -25,8 +26,19 @@ it.each(['page','hash','bounds','anchor','empty','overlap','oversized','fingerpr
   if (fault === 'overlap') data.crop_template.receipts.push(structuredClone(data.crop_template.receipts[0]));
   if (fault === 'oversized') data.crop_template.receipts = Array(129).fill(data.crop_template.receipts[0]);
   if (fault === 'fingerprint') data.crop_template.fingerprint = 'not a hash';
+  if (fault === 'issuer') data.crop_template.receipts[0].issuer_bank_key = 'China Bank';
+  if (fault === 'receipt-template') data.crop_template.receipts[0].template_fingerprint = 'not a hash';
+  if (fault === 'template-without-issuer') delete (data.crop_template.receipts[0] as Record<string, unknown>).issuer_bank_key;
   invoke.mockResolvedValue(data);
   await expect(localEngineAdapter.describeCropPage('C:/test.pdf', 2, sha)).rejects.toMatchObject({code:'ENGINE_INVALID_RESPONSE'});
+});
+it('accepts explicitly unknown issuer metadata without inventing an account-bank identity', async () => {
+  const data = valid();
+  const receipt = data.crop_template.receipts[0] as Record<string, unknown>;
+  receipt.issuer_bank_key = null;
+  receipt.template_fingerprint = null;
+  invoke.mockResolvedValue(data);
+  expect(await localEngineAdapter.describeCropPage('C:/test.pdf', 2, sha)).toEqual(data);
 });
 it('accepts explicitly unavailable layouts, rejects unknown reasons, and retains engine error codes', async () => {
   invoke.mockResolvedValue({...valid(),crop_template:{status:'unavailable',reason:'no_titles'}});

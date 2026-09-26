@@ -8,6 +8,7 @@
 | --- | --- | --- |
 | PyMuPDF / MuPDF | PDF 解析、渲染、裁剪和导出 | 按上游 AGPL 分发路线处理，见 [官方许可说明](https://pymupdf.readthedocs.io/en/latest/about.html#license-and-copyright)；安装包保留对应的上游许可文本 |
 | CPython | 应用私有 Python 解释器 | PSF 及其随附第三方声明，见运行时 `LICENSE.txt` 和 [Python 许可](https://docs.python.org/3/license.html) |
+| Microsoft Visual C++ Runtime | Windows 上 Python / PyMuPDF 所需的原生运行库 | 来自 VS 2022 的 x64 `VC/Redist`，按微软许可原样随应用提供；见包内 `MSVC_RUNTIME_NOTICE.txt` 和 [微软分发清单](https://learn.microsoft.com/en-us/visualstudio/releases/2022/redistribution#visual-c-runtime-files)，精确版本及 SHA-256 记录于 `runtime-info.json` |
 | python-build-standalone | 可移植 Python 发行包来源 | [Astral 项目](https://github.com/astral-sh/python-build-standalone)；发行包固定地址与 SHA-256 记录于 `scripts/runtime-manifest.json`，运行时内许可证随包保留 |
 | PaddleOCR / PaddlePaddle / PaddleX | 可选本地 CPU OCR | 各上游项目的 Apache-2.0 许可及随附第三方声明：[PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR/blob/main/LICENSE)、[PaddlePaddle](https://github.com/PaddlePaddle/Paddle/blob/develop/LICENSE)、[PaddleX](https://github.com/PaddlePaddle/PaddleX/blob/develop/LICENSE) |
 | React / React DOM | 前端界面 | MIT，随依赖分发的 LICENSE |

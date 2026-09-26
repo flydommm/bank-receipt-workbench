@@ -148,11 +148,12 @@
 .crop-handle-se { top: 100%; left: 100%; }
 
 .crop-editor.is-disabled .crop-box.interactive {
-  cursor: not-allowed;
+  cursor: default;
   opacity: .65;
 }
 
 .crop-editor.is-disabled .crop-handle {
+  visibility: hidden;
   pointer-events: none;
 }
 

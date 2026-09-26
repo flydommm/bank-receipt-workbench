@@ -2,7 +2,7 @@
 
 > 0.1.27 公开源码 · v0.1.27-pre.1 预发布安装包 · Windows x64 · 本地 PDF 查找、审核与导出
 
-**[下载安装包](#下载安装包windows) · [Releases / 全部版本](https://github.com/flydommm/bank-receipt-workbench/releases) · [使用指南](docs/usage.md) · [问题反馈](https://github.com/flydommm/bank-receipt-workbench/issues)**
+**[下载安装包](#下载安装包windows) · [Releases / 全部版本](https://github.com/flydommm/bank-receipt-workbench/releases) · [使用指南](docs/usage.md) · [微调审核流程](docs/guided-review-workflow.md) · [问题反馈](https://github.com/flydommm/bank-receipt-workbench/issues)**
 
 ## 下载安装包（Windows）
 
@@ -21,15 +21,17 @@
 
 银行回单工作台是一款 Windows 桌面应用：从本机 PDF 中查找关键词，预览命中页面，复核和调整候选凭证范围，然后导出合并版或按来源拆分的 PDF，并可选生成 XLSX 审核索引。
 
-新手入口：先看[使用指南](docs/usage.md)；已有文字层的 PDF 选 `Core`，扫描 PDF 选 `Ocr`。项目采用 [AGPL-3.0-only](LICENSE)。
+新手入口：先看[使用指南](docs/usage.md)；需要调整候选框时再看[微调审核流程](docs/guided-review-workflow.md)。已有文字层的 PDF 选 `Core`，扫描 PDF 选 `Ocr`。项目采用 [AGPL-3.0-only](LICENSE)。
 
-[源码](https://github.com/flydommm/bank-receipt-workbench/tree/main) · [Issues](https://github.com/flydommm/bank-receipt-workbench/issues) · [Releases](https://github.com/flydommm/bank-receipt-workbench/releases) · [开发指南](docs/development.md) · [贡献指南](CONTRIBUTING.md) · [安全说明](SECURITY.md) · [第三方组件说明](THIRD_PARTY_NOTICES.md)
+[源码](https://github.com/flydommm/bank-receipt-workbench/tree/main) · [Issues](https://github.com/flydommm/bank-receipt-workbench/issues) · [Releases](https://github.com/flydommm/bank-receipt-workbench/releases) · [开发指南](docs/development.md) · [贡献指南](CONTRIBUTING.md) · [安全说明](SECURITY.md) · [反馈维护说明](docs/feedback-maintenance.md) · [第三方组件说明](THIRD_PARTY_NOTICES.md)
 
 ## 当前状态
 
 公开源码版本为 `0.1.27`，安装包已按 [v0.1.27-pre.1](https://github.com/flydommm/bank-receipt-workbench/releases/tag/v0.1.27-pre.1) 预发布交付。首次 Windows CI 已通过，下载资产、源码提交及验证边界见[公开交付记录](docs/public-release-0.1.27.md)。当前不把本版本称为已发布的稳定版。
 
 本地整理范围、测试结果和未完成事项见[公开发布准备记录](docs/preparation-status.md)。
+
+回单版式设置、全部分割与历史版式参考正在功能分支中实施，尚未向桌面入口开放：[完整方案](docs/receipt-layout-design.md) · [实施 TODO](docs/receipt-layout-todo.md) · [验收矩阵](docs/receipt-layout-acceptance.md)。阶段性引擎验证不代表完整新功能或安装包已交付。
 
 ## 许可证与公开入口
 
@@ -56,8 +58,9 @@
 
 - 对带文字层的 PDF 进行精确或模糊关键词搜索。
 - 对扫描 PDF 使用可选的本地 OCR 运行时搜索，并用识别文字和坐标辅助候选凭证定位。
-- 在真实页面预览中检查候选框，手动调整、保留整页或确认裁剪范围。
-- 按来源筛选和排序结果，批量应用经过检查的同类裁剪，并在任务内撤销最近的审核操作。
+- 在真实页面预览中检查候选框；多回单版式逐张分割，全部命中也不自动合并整页，原生每页单张继续保留整页。
+- 分析后先在“结果检查”中查看自动候选边界；边界正确时直接选择导出范围、生成最终 PDF 预览并导出，无需进入微调或按银行逐轮确认。
+- 只有框选不合适时才进入按银行分轮的微调向导：同一家银行的多个 PDF 合并为一个来源，每轮只处理同银行、同版式、同位置；按“确认并预览本轮 → 逐项检查 → 保存本轮”的顺序完成一轮，保存成功后进入下一位置，微调完成或显式退出后恢复导出。未完成、阻塞、预览未完成或来源变化的片段仍由导出范围校验拦截；未知银行独立处理，不跨来源同步，每轮支持撤销。
 - 先生成最终 PDF 预览，再导出合并版、按来源输出的 PDF，或同时导出可选的 XLSX 审核索引。
 - 持久保存任务、分页进度和审核状态，支持暂停、继续、停止以及从历史任务中明确载入。
 
@@ -65,9 +68,21 @@
 
 ## 本地处理与文件保护
 
-PDF 处理在本机完成。应用不把 PDF 内容上传到云端服务，也没有在线反馈上传或自动更新服务。原始 PDF 以只读方式处理；任务数据库、临时文件、OCR 文字缓存和导出结果写在本机或用户选择的输出目录中。
+PDF 处理在本机完成。应用不把 PDF 内容上传到云端服务，也不提供自动反馈上传、反馈服务器或自动更新服务。原始 PDF 以只读方式处理；任务数据库、临时文件、OCR 文字缓存和导出结果写在本机或用户选择的输出目录中。
 
-OCR edition 首次初始化或首次识别时可能从模型提供方下载公开模型文件，因此首次使用需要网络。模型下载不等于上传用户 PDF；若组织环境禁止联网，应提前准备模型缓存并在帮助中心执行 OCR 检测。反馈窗口只在本机生成可复制或保存的文本，不会自动发送。
+OCR edition 首次初始化或首次识别时可能从模型提供方下载公开模型文件，因此首次使用需要网络。模型下载不等于上传用户 PDF；若组织环境禁止联网，应提前准备模型缓存并在帮助中心执行 OCR 检测。反馈窗口先在本机生成预览，用户主动选择邮件或 GitHub 入口时才会打开外部客户端或网页；应用不会自动上传、提交 Issue 或发送消息。
+
+## 反馈渠道
+
+以下快捷入口是本次源码开发新增功能，当前 `v0.1.27-pre.1` 安装包尚未包含新增按钮。使用现有安装包时，也可以将生成的反馈文本手动发送到下列渠道。
+
+在“帮助与反馈”的“03 使用反馈”中，用户可以继续生成反馈预览、复制内容或保存 TXT。需要联系维护者时，可按下面的方式操作：
+
+- **邮件**：点击“复制反馈并写邮件”，应用会先复制预览，再打开默认邮件客户端，收件人为 `venz@163.com`。用户需要在邮件正文粘贴、检查并自行发送；维护者通过原邮件回复。
+- **GitHub Issues**：点击“复制反馈并打开 GitHub”，应用会先复制预览，再打开[新建 Issue 页面](https://github.com/flydommm/bank-receipt-workbench/issues/new)。用户需要登录 GitHub、粘贴并检查内容后自行提交；维护者在同一条 Issue 中回复。
+- **微信**：添加微信号 `vinz2009` 后发送反馈。应用只展示或复制微信号，不会自动添加好友或发送消息；维护者通过微信回复。
+
+这些入口只负责复制预览和打开用户选择的外部应用或网页，不会把 PDF、日志或附件上传，也不会替用户发送邮件或提交 Issue。分享前请删除路径、客户名称、账号、文件名等敏感内容；应用不会将反馈正文写入外部链接的 URL 参数。邮件客户端不可用、GitHub 需要登录或网络不可用时，可以回到预览手工复制，或保存 TXT 后在外部渠道粘贴。
 
 ## 选择安装包 edition
 

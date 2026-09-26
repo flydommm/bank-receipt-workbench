@@ -264,6 +264,22 @@ describe('localEngineAdapter export preview boundary', () => {
     });
   });
 
+  it('requests thumbnail quality explicitly while preserving PDF geometry and source binding', async () => {
+    const sourceSha256 = 'a'.repeat(64);
+    const response = { status: 'ok', page: 1, page_count: 2, page_width: 612, page_height: 792,
+      source_sha256: sourceSha256, image_data: 'data:image/png;base64,AA==' };
+    invoke.mockResolvedValueOnce(response);
+    await expect(localEngineAdapter.renderPage('/source.pdf', 1, sourceSha256, 'thumbnail')).resolves.toEqual(response);
+    expect(invoke).toHaveBeenCalledWith('engine_render_page', { path: '/source.pdf', page: 1,
+      sourceSha256, quality: 'thumbnail' });
+  });
+
+  it.each(['preview', 'high', '', null, 72])('rejects invalid render quality %j before invoking the engine', async (quality) => {
+    await expect(localEngineAdapter.renderPage('/source.pdf', 1, 'a'.repeat(64), quality as 'thumbnail'))
+      .rejects.toMatchObject({ code: 'ENGINE_INVALID_REQUEST' });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   it.each([
     [{ page_count: 7282, max_pages: 5000 }, '此 PDF 共 7282 页，超过当前每个 PDF 5000 页的限制。请拆分文件后重试。'],
     [{ page_count: 7282, max_pages: 6000 }, '此 PDF 共 7282 页，超过当前每个 PDF 6000 页的限制。请拆分文件后重试。'],

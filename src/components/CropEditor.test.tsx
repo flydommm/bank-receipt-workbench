@@ -15,6 +15,70 @@ const requiredProps = {
   onChange: vi.fn(),
 };
 
+it('preserves a layout draft beyond the page and moves it without shortening its height', () => {
+  const onChange = vi.fn();
+  const value = { x0: 60, y0: 600, x1: 540, y1: 820 };
+  render(<CropEditor {...requiredProps} value={value} preserveDraftGeometry onChange={onChange} />);
+  expect(onChange).not.toHaveBeenCalled();
+  const box = screen.getByRole('region', { name: '裁剪区域' });
+  expect(parseFloat(box.style.height)).toBeCloseTo(27.5);
+  fireEvent.keyDown(box, { key: 'ArrowUp' });
+  expect(onChange).toHaveBeenLastCalledWith({ x0: 60, y0: 580, x1: 540, y1: 800 });
+});
+
+it.each(['pointer', 'keyboard'] as const)('preserves an overflowing height when only the east edge is resized by %s', (input) => {
+  const onChange = vi.fn();
+  const value = { x0: 60, y0: 600, x1: 540, y1: 820 };
+  render(<CropEditor {...requiredProps} value={value} preserveDraftGeometry onChange={onChange} snapPoints={[790]} />);
+  const east = screen.getByRole('button', { name: '调整东边界' });
+  if (input === 'keyboard') fireEvent.keyDown(east, { key: 'ArrowLeft' });
+  else {
+    preparePageBounds(); addPointerCaptureSpies(east);
+    fireEvent.pointerDown(east, { clientX: 640, clientY: 750, pointerId: 71, button: 0 });
+    fireEvent.pointerMove(east, { clientX: 639, clientY: 750, pointerId: 71 });
+    fireEvent.pointerUp(east, { pointerId: 71 });
+  }
+  expect(onChange).toHaveBeenLastCalledWith({ ...value, x1: 539 });
+});
+
+it.each(['pointer', 'keyboard'] as const)('preserves untouched draft edges after a vertical snap by %s', (input) => {
+  const onChange = vi.fn();
+  const value = { x0: -10, y0: 600, x1: 610, y1: 820 };
+  render(<CropEditor {...requiredProps} value={value} preserveDraftGeometry onChange={onChange} snapPoints={[620]} snapTolerance={25} />);
+  const north = screen.getByRole('button', { name: '调整北边界' });
+  if (input === 'keyboard') fireEvent.keyDown(north, { key: 'ArrowDown' });
+  else {
+    preparePageBounds(); addPointerCaptureSpies(north);
+    fireEvent.pointerDown(north, { clientX: 400, clientY: 650, pointerId: 72, button: 0 });
+    fireEvent.pointerMove(north, { clientX: 400, clientY: 651, pointerId: 72 });
+    fireEvent.pointerUp(north, { pointerId: 72 });
+  }
+  expect(onChange).toHaveBeenLastCalledWith({ ...value, y0: 620 });
+});
+
+it.each(['pointer', 'keyboard'] as const)('does not correct vertical overflow during a horizontal move by %s', (input) => {
+  const onChange = vi.fn();
+  const value = { x0: 60, y0: 600, x1: 540, y1: 820 };
+  render(<CropEditor {...requiredProps} value={value} preserveDraftGeometry onChange={onChange} />);
+  const box = screen.getByRole('region', { name: '裁剪区域' });
+  if (input === 'keyboard') fireEvent.keyDown(box, { key: 'ArrowRight' });
+  else {
+    preparePageBounds(); addPointerCaptureSpies(box);
+    fireEvent.pointerDown(box, { clientX: 400, clientY: 750, pointerId: 73, button: 0 });
+    fireEvent.pointerMove(box, { clientX: 401, clientY: 750, pointerId: 73 });
+    fireEvent.pointerUp(box, { pointerId: 73 });
+  }
+  expect(onChange).toHaveBeenLastCalledWith({ ...value, x0: 61, x1: 541 });
+});
+
+it('preserves horizontal overflow when only moving the draft vertically', () => {
+  const onChange = vi.fn();
+  const value = { x0: -10, y0: 80, x1: 610, y1: 300 };
+  render(<CropEditor {...requiredProps} value={value} preserveDraftGeometry onChange={onChange} />);
+  fireEvent.keyDown(screen.getByRole('region', { name: '裁剪区域' }), { key: 'ArrowDown' });
+  expect(onChange).toHaveBeenLastCalledWith({ ...value, y0: 81, y1: 301 });
+});
+
 function preparePageBounds() {
   const page = screen.getByTestId('crop-editor-page');
   Object.defineProperty(page, 'getBoundingClientRect', {

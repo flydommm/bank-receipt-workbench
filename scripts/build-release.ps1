@@ -31,8 +31,9 @@ try {
         source_commit = $sourceCommit
         source_url = "https://github.com/flydommm/bank-receipt-workbench/tree/$sourceCommit"
     } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $runtime 'project-source.json') -Encoding utf8
-    # No developer-machine filenames in Python bytecode shipped in the package.
-    Get-ChildItem -LiteralPath $runtime -Recurse -File -Filter '*.pyc' | Remove-Item -Force
+    # Require the checked-hash, package-relative caches produced by runtime preparation.
+    & (Join-Path $runtime 'python.exe') -B -I (Join-Path $PSScriptRoot 'prepare-pymupdf-bytecode.py') --python-root $runtime --verify-only --strict-cache-set
+    if ($LASTEXITCODE -ne 0) { throw 'Safe PyMuPDF bytecode verification failed.' }
     # Pin output location and architecture; never pick up an old default-path asset.
     $env:CARGO_TARGET_DIR = Join-Path $projectRoot 'src-tauri/target'
     $buildStarted = [DateTime]::UtcNow
@@ -59,6 +60,7 @@ try {
     Copy-Item -LiteralPath (Join-Path $runtime 'runtime-info.json') -Destination $outputRoot
     Copy-Item -LiteralPath (Join-Path $runtime 'third-party-inventory.json') -Destination $outputRoot
     Copy-Item -LiteralPath (Join-Path $runtime 'THIRD_PARTY_LICENSES.txt') -Destination $outputRoot
+    Copy-Item -LiteralPath (Join-Path $runtime 'MSVC_RUNTIME_NOTICE.txt') -Destination $outputRoot
     Copy-Item -LiteralPath $projectLicense -Destination $outputRoot
     Copy-Item -LiteralPath (Join-Path $projectRoot 'THIRD_PARTY_NOTICES.md') -Destination $outputRoot
     $bunVersion = & bun --version

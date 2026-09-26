@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import base64
 import json
 import hashlib
 import os
@@ -399,6 +400,48 @@ def test_render_page_request_returns_png_data_url(tmp_path: Path) -> None:
     assert response["page_width"] == pytest.approx(300)
     assert response["page_height"] == pytest.approx(420)
     assert str(response["image_data"]).startswith("data:image/png;base64,")
+    pixmap = pymupdf.Pixmap(base64.b64decode(str(response["image_data"]).split(",", 1)[1]))
+    assert (pixmap.width, pixmap.height) == (600, 840)
+
+
+@pytest.mark.parametrize("width,height,rotation", [(300, 420, 0), (900, 300, 0), (612.12, 792.34, 90), (80, 120, 0)])
+def test_thumbnail_render_bounds_raster_but_preserves_pdf_geometry(
+    tmp_path: Path, width: float, height: float, rotation: int,
+) -> None:
+    source = tmp_path / "thumbnail.pdf"
+    document = pymupdf.open()
+    page = document.new_page(width=width, height=height)
+    page.set_rotation(rotation)
+    page.insert_text((10, 30), "thumbnail")
+    document.save(source)
+    document.close()
+    original_bytes = source.read_bytes()
+    request = {"op": "render_page", "path": str(source), "page": 1,
+               "source_sha256": hashlib.sha256(original_bytes).hexdigest()}
+
+    regular = handle_request(request)
+    thumbnail = handle_request({**request, "quality": "thumbnail"})
+
+    assert thumbnail["status"] == "ok"
+    assert {key: value for key, value in thumbnail.items() if key != "image_data"} == {
+        key: value for key, value in regular.items() if key != "image_data"
+    }
+    pixmap = pymupdf.Pixmap(base64.b64decode(str(thumbnail["image_data"]).split(",", 1)[1]))
+    assert 0 < pixmap.width <= 512
+    assert 0 < pixmap.height <= 512
+    assert source.read_bytes() == original_bytes
+
+
+@pytest.mark.parametrize("quality", [None, "", "preview", "high", 72, True, [], {}])
+def test_render_page_rejects_invalid_quality(tmp_path: Path, quality: object) -> None:
+    source = tmp_path / "quality.pdf"
+    _write_marker_pdf(source, "quality")
+
+    response = handle_request({"op": "render_page", "path": str(source), "page": 1,
+                               "source_sha256": _source_sha256(source), "quality": quality})
+
+    assert response["status"] == "error"
+    assert response["code"] == "invalid_request"
 
 
 def test_inspect_pdf_returns_page_count_and_source_sha256(tmp_path: Path) -> None:
@@ -476,9 +519,11 @@ def test_render_page_request_rejects_out_of_range_page(tmp_path: Path) -> None:
     assert response["code"] == "page_out_of_range"
 
 
+@pytest.mark.parametrize("quality_fields", [{}, {"quality": "thumbnail"}])
 def test_render_page_uses_one_source_snapshot_across_a_b_a_race(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    quality_fields: dict[str, str],
 ) -> None:
     source = tmp_path / "source.pdf"
     source_a = tmp_path / "source-a.pdf"
@@ -509,6 +554,7 @@ def test_render_page_uses_one_source_snapshot_across_a_b_a_race(
         "path": str(source),
         "page": 1,
         "source_sha256": hashlib.sha256(source_a_bytes).hexdigest(),
+        **quality_fields,
     })
 
     assert response["status"] == "ok"
@@ -517,7 +563,8 @@ def test_render_page_uses_one_source_snapshot_across_a_b_a_race(
     assert source.read_bytes() == source_a_bytes
 
 
-def test_render_page_rejects_source_sha256_mismatch(tmp_path: Path) -> None:
+@pytest.mark.parametrize("quality_fields", [{}, {"quality": "thumbnail"}])
+def test_render_page_rejects_source_sha256_mismatch(tmp_path: Path, quality_fields: dict[str, str]) -> None:
     source = tmp_path / "source.pdf"
     _write_marker_pdf(source, "marker-A")
     original_bytes = source.read_bytes()
@@ -528,6 +575,7 @@ def test_render_page_rejects_source_sha256_mismatch(tmp_path: Path) -> None:
         "path": str(source),
         "page": 1,
         "source_sha256": hashlib.sha256(original_bytes).hexdigest(),
+        **quality_fields,
     })
 
     assert response == {
@@ -555,8 +603,10 @@ def test_render_page_rejects_malformed_source_sha256(tmp_path: Path) -> None:
     }
 
 
+@pytest.mark.parametrize("quality_fields", [{}, {"quality": "thumbnail"}])
 def test_render_page_rejects_extreme_media_box_before_allocating_pixmap(
     tmp_path: Path,
+    quality_fields: dict[str, str],
 ) -> None:
     source = tmp_path / "huge-page.pdf"
     document = pymupdf.open()
@@ -569,6 +619,7 @@ def test_render_page_rejects_extreme_media_box_before_allocating_pixmap(
         "path": str(source),
         "page": 1,
         "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+        **quality_fields,
     })
 
     assert response == {
@@ -830,7 +881,7 @@ def test_analyze_page_exposes_page_local_candidate_identity(
     )
 
 
-def test_analyze_page_marks_full_page_when_every_receipt_is_matched(tmp_path: Path) -> None:
+def test_analyze_page_keeps_receipts_separate_when_every_receipt_is_matched(tmp_path: Path) -> None:
     pdf_path = _analysis_pdf(tmp_path)
     matches = [
         {"x0": 50, "y0": 120, "x1": 100, "y1": 140},
@@ -847,11 +898,13 @@ def test_analyze_page_marks_full_page_when_every_receipt_is_matched(tmp_path: Pa
     })
 
     assert response["status"] == "ok"
-    assert response["page_fully_matched"] is True
+    assert response["page_fully_matched"] is False
     assert all(
-        selection["rect"] == {"x0": 0.0, "y0": 0.0, "x1": 600.0, "y1": 800.0}
+        selection["rect"] == selection["candidate_rect"]
+        and selection["rect"]["y1"] - selection["rect"]["y0"] < 260
         for selection in response["selections"]
     )
+    assert len({tuple(selection["rect"].values()) for selection in response["selections"]}) == 3
 
 
 def test_analyze_page_uses_closed_frames_for_each_single_match(tmp_path: Path) -> None:

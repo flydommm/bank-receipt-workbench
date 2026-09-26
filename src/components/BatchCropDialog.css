@@ -293,6 +293,26 @@
   overflow-wrap: anywhere;
 }
 
+.batch-crop-dialog-no-target {
+  display: grid;
+  gap: 3px;
+  max-width: 32rem;
+  padding: 7px 9px;
+  border: 1px solid var(--batch-crop-line);
+  border-radius: 8px;
+  background: var(--batch-crop-wash);
+}
+
+.batch-crop-dialog-no-target strong {
+  color: var(--batch-crop-heading);
+}
+
+.batch-crop-dialog-no-target span {
+  color: var(--batch-crop-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 .batch-crop-dialog-preview-toolbar span:not(.batch-crop-dialog-section-kicker) {
   color: var(--batch-crop-muted);
   font-size: 11px;

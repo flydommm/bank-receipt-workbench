@@ -18,8 +18,10 @@ use tauri::{Emitter, Manager, RunEvent};
 mod batch_protocol;
 mod batch_service;
 mod engine_process;
+mod engine_read_service;
 mod export_bundle;
 mod feedback;
+mod feedback_channel;
 mod review_v2;
 use engine_process::{ProcessSpec, ProcessSupervisor};
 
@@ -38,11 +40,13 @@ const ENGINE_PRIVATE_TEMP_DIRECTORY_NAME: &str = "engine-temp";
 const ENGINE_PRIVATE_TEMP_ENV: &str = "PDF_SEARCH_PRIVATE_TEMP";
 const ENGINE_IO_LIMIT_BYTES: usize = 64 * 1024 * 1024;
 const ENGINE_OPERATION_TIMEOUT: Duration = Duration::from_secs(120);
+const CALIBRATION_PREVIEW_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const MAX_ENGINE_PATH_BYTES: usize = 32 * 1024;
 const MAX_ENGINE_KEYWORD_BYTES: usize = 16 * 1024;
 const MAX_ENGINE_TASK_ID_BYTES: usize = 1024;
 const MAX_ENGINE_SELECTIONS: usize = 500;
 const MAX_ENGINE_MATCHES: usize = 10_000;
+const MAX_ENGINE_INSPECTION_PAGES: usize = 32;
 const MAX_ENGINE_SEGMENTS: usize = 50_000;
 const MAX_ENGINE_ROWS: usize = 50_000;
 const MAX_ENGINE_SEARCH_CLAUSES: usize = 32;
@@ -65,6 +69,7 @@ struct EngineRuntime {
     python_executable: PathBuf,
     private_temp_root: PathBuf,
     supervisor: ProcessSupervisor,
+    read_service: std::sync::Arc<engine_read_service::EngineReadService>,
 }
 
 struct BatchServiceState(Result<std::sync::Arc<batch_service::BatchService>, String>);
@@ -294,6 +299,7 @@ fn initialize_engine_runtime(app: &tauri::AppHandle) -> Result<EngineRuntime, St
         python_executable,
         private_temp_root,
         supervisor: ProcessSupervisor::new(3, 32),
+        read_service: Default::default(),
     })
 }
 
@@ -372,12 +378,86 @@ fn is_python_launcher(program: &Path) -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(target_os = "windows")]
+fn ordinary_windows_engine_path(program: &Path) -> Result<PathBuf, String> {
+    use std::os::windows::ffi::OsStrExt;
+    use std::path::Prefix;
+
+    let unsupported = || "local engine executable path is unsupported".to_string();
+    let safe_component = |name: &std::ffi::OsStr| {
+        let units: Vec<u16> = name.encode_wide().collect();
+        let stem = units.split(|unit| *unit == 46).next().unwrap_or_default();
+        let stem = String::from_utf16_lossy(stem).to_ascii_uppercase();
+        let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+            || ["COM", "LPT"].iter().any(|prefix| stem.strip_prefix(prefix)
+                .is_some_and(|suffix| matches!(suffix,
+                    "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³")));
+        !units.is_empty()
+            && !matches!(units.last(), Some(32 | 46))
+            && !units.iter().any(|unit| matches!(unit, 0..=31 | 34 | 42 | 47 | 58 | 60 | 62 | 63 | 92 | 124))
+            && !reserved
+    };
+    let mut components = program.components();
+    let Some(Component::Prefix(prefix)) = components.next() else {
+        return Ok(program.to_path_buf());
+    };
+    let mut ordinary = match prefix.kind() {
+        Prefix::VerbatimDisk(drive) if drive.is_ascii_alphabetic() => {
+            PathBuf::from(format!("{}:\\", char::from(drive)))
+        }
+        Prefix::VerbatimUNC(server, share) if safe_component(server) && safe_component(share) => {
+            let mut root = OsString::from(r"\\");
+            root.push(server);
+            root.push(r"\");
+            root.push(share);
+            root.push(r"\");
+            PathBuf::from(root)
+        }
+        Prefix::Disk(_) | Prefix::UNC(_, _) => return Ok(program.to_path_buf()),
+        _ => return Err(unsupported()),
+    };
+    if components.next() != Some(Component::RootDir) {
+        return Err(unsupported());
+    }
+    for component in components {
+        match component {
+            Component::Normal(name) if safe_component(name) => ordinary.push(name),
+            _ => return Err(unsupported()),
+        }
+    }
+    Ok(ordinary)
+}
+
+fn engine_launch_program(program: &Path) -> Result<PathBuf, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let ordinary = ordinary_windows_engine_path(program)?;
+        if ordinary != program {
+            // The trusted resource resolver retains its canonical/reparse checks.
+            // Python must start with a normal disk/UNC path: a verbatim sys.prefix
+            // makes Paddle's package-relative `base/../libs` path invalid on Windows.
+            // Round-trip to the already validated canonical target without
+            // truncating long or non-Unicode paths. Do not accept a new target
+            // if the resource path changes after its original resolution.
+            let unsupported = || "local engine executable path is unsupported".to_string();
+            if ordinary.canonicalize().map_err(|_| unsupported())? != program {
+                return Err(unsupported());
+            }
+        }
+        Ok(ordinary)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok(program.to_path_buf())
+    }
+}
+
 fn engine_process_spec(
     runtime: &EngineRuntime,
     arguments: Vec<OsString>,
     pipe_stderr: bool,
 ) -> Result<ProcessSpec, String> {
-    let program = runtime.python_executable.clone();
+    let program = engine_launch_program(&runtime.python_executable)?;
     let mut args = Vec::<OsString>::new();
     #[cfg(all(target_os = "windows", debug_assertions))]
     if is_python_launcher(&program) {
@@ -417,8 +497,29 @@ fn engine_process_spec(
     })
 }
 
+fn engine_operation_timeout(request: &Value) -> Duration {
+    // A complete-layout preview recomputes every compatible page, including
+    // pages with no previous keyword hits. Keep its bounded whole-round
+    // deadline separate from ordinary management and single-page calls.
+    if matches!(
+        request.get("op").and_then(Value::as_str),
+        Some("batch_receipt_calibration_preview" | "batch_receipt_template_apply_preview")
+    ) {
+        CALIBRATION_PREVIEW_TIMEOUT
+    } else {
+        ENGINE_OPERATION_TIMEOUT
+    }
+}
+
 fn call_engine(runtime: &EngineRuntime, request: Value) -> Result<Value, String> {
-    call_engine_with_timeout(runtime, request, ENGINE_OPERATION_TIMEOUT)
+    let timeout = engine_operation_timeout(&request);
+    if engine_read_service::EngineReadService::supports(&request) {
+        // A single warm reader occupies at most one of the three existing
+        // process permits. Task workers and writes retain the other permits.
+        let spec = engine_process_spec(runtime, vec!["--serve".into()], false)?;
+        return runtime.read_service.request(&runtime.supervisor, spec, request, timeout);
+    }
+    call_engine_with_timeout(runtime, request, timeout)
 }
 
 fn call_engine_with_timeout(
@@ -635,13 +736,22 @@ async fn engine_search_multi(
     .await
 }
 
+fn validate_render_quality(quality: Option<&str>) -> Result<(), String> {
+    if quality.is_some_and(|value| value != "thumbnail") {
+        return Err("render quality must be thumbnail when specified".to_string());
+    }
+    Ok(())
+}
+
 #[tauri::command]
 async fn engine_render_page(
     app: tauri::AppHandle,
     path: String,
     page: u32,
     source_sha256: String,
+    quality: Option<String>,
 ) -> Result<Value, String> {
+    validate_render_quality(quality.as_deref())?;
     run_engine_blocking("render_page", move || {
         let runtime = engine_runtime(&app)?;
         let resolved = canonical_pdf_path(path)?;
@@ -651,12 +761,15 @@ async fn engine_render_page(
         if !valid_source_sha256(&source_sha256) {
             return Err("source SHA-256 is invalid".to_string());
         }
-        let request = serde_json::json!({
+        let mut request = serde_json::json!({
             "op": "render_page",
             "path": resolved,
             "page": page,
             "source_sha256": source_sha256,
         });
+        if let Some(quality) = quality {
+            request["quality"] = serde_json::json!(quality);
+        }
         call_engine(&runtime, request)
     })
     .await
@@ -672,6 +785,35 @@ async fn engine_inspect_pdf(app: tauri::AppHandle, path: String) -> Result<Value
             serde_json::json!({
                 "op": "inspect_pdf",
                 "path": resolved,
+            }),
+        )
+    })
+    .await
+}
+
+#[tauri::command]
+async fn engine_inspect_pages(
+    app: tauri::AppHandle,
+    path: String,
+    pages: Vec<u32>,
+    source_sha256: String,
+    include_crop_template: Option<bool>,
+) -> Result<Value, String> {
+    run_engine_blocking("inspect_pages", move || {
+        validate_inspection_pages(&pages)?;
+        if !valid_source_sha256(&source_sha256) {
+            return Err("source SHA-256 is invalid".to_string());
+        }
+        let runtime = engine_runtime(&app)?;
+        let resolved = canonical_pdf_path(path)?;
+        call_engine(
+            &runtime,
+            serde_json::json!({
+                "op": "inspect_pages",
+                "path": resolved,
+                "pages": pages,
+                "source_sha256": source_sha256,
+                "include_crop_template": include_crop_template.unwrap_or(false),
             }),
         )
     })
@@ -1104,6 +1246,19 @@ fn valid_export_token(token: &str) -> bool {
 
 fn valid_source_sha256(value: &str) -> bool {
     value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn validate_inspection_pages(pages: &[u32]) -> Result<(), String> {
+    if !(1..=MAX_ENGINE_INSPECTION_PAGES).contains(&pages.len())
+        || pages.contains(&0)
+        || pages
+            .iter()
+            .enumerate()
+            .any(|(index, page)| pages[..index].contains(page))
+    {
+        return Err("pages must contain 1 to 32 unique positive page numbers".to_string());
+    }
+    Ok(())
 }
 
 fn ensure_text_limit(value: &str, max_bytes: usize, field_error: &str) -> Result<(), String> {
@@ -2157,6 +2312,7 @@ fn main() {
             engine_search_multi,
             engine_render_page,
             engine_inspect_pdf,
+            engine_inspect_pages,
             engine_analyze_page,
             engine_export_index,
             engine_export_pdf,
@@ -2178,7 +2334,8 @@ fn main() {
             create_export_preview_path,
             pick_output_folder,
             open_output_folder,
-            feedback::save_feedback_report
+            feedback::save_feedback_report,
+            feedback_channel::open_feedback_channel
         ])
         .build(tauri::generate_context!());
     let Ok(application) = application else {
@@ -2193,6 +2350,7 @@ fn main() {
                 }
             }
             if let Some(runtime) = app.try_state::<EngineRuntime>() {
+                runtime.read_service.shutdown();
                 runtime.supervisor.shutdown();
             }
             if let Some(lifecycle) = app.try_state::<PreviewLifecycle>() {
@@ -2210,20 +2368,31 @@ mod tests {
     use super::ENGINE_PRIVATE_TEMP_DIRECTORY_NAME;
     use super::{
         apply_pdf_file_limit, canonical_pdf_path, cleanup_preview_directory, collect_pdf_files,
-        collect_pdf_files_with_limits, engine_inspect_pdf, ensure_array_limit,
+        collect_pdf_files_with_limits, engine_inspect_pdf, engine_operation_timeout, ensure_array_limit,
         ensure_engine_private_temp_directory, ensure_managed_preview_directory, ensure_text_limit,
         managed_preview_path, operation_timed_out, parse_max_pdf_files, picker_dialog_directory,
         read_bounded_engine_response, resolve_bundled_engine_python, resolve_bundled_engine_script,
         resolve_engine_python, valid_export_token, valid_source_sha256, validate_directory,
-        windows_final_path_is_direct_child, PreviewLifecycle, BUNDLED_ENGINE_RUNTIME_ERROR,
-        DEFAULT_MAX_PDF_FILES, ENGINE_PYTHON_EXECUTABLE_FILE_NAME, ENGINE_RUNTIME_DIRECTORY_NAME,
-        EXPORT_PREVIEW_DIRECTORY_NAME, MAX_ENGINE_MATCHES, MAX_ENGINE_PATH_BYTES,
-        MAX_ENGINE_SELECTIONS, MAX_PREVIEW_CLEANUP_ENTRIES, WINDOWS_CREATE_NO_WINDOW,
+        validate_inspection_pages, validate_render_quality, windows_final_path_is_direct_child, PreviewLifecycle,
+        BUNDLED_ENGINE_RUNTIME_ERROR, DEFAULT_MAX_PDF_FILES, ENGINE_OPERATION_TIMEOUT,
+        ENGINE_PYTHON_EXECUTABLE_FILE_NAME,
+        ENGINE_RUNTIME_DIRECTORY_NAME, EXPORT_PREVIEW_DIRECTORY_NAME, MAX_ENGINE_MATCHES,
+        MAX_ENGINE_PATH_BYTES, MAX_ENGINE_SELECTIONS, MAX_PREVIEW_CLEANUP_ENTRIES,
+        WINDOWS_CREATE_NO_WINDOW,
     };
-    use serde_json::Value;
+    use serde_json::{json, Value};
     use std::io::Cursor;
     use std::path::PathBuf;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn render_quality_allows_only_default_or_thumbnail() {
+        assert!(validate_render_quality(None).is_ok());
+        assert!(validate_render_quality(Some("thumbnail")).is_ok());
+        for quality in ["", "preview", "high", "THUMBNAIL", " thumbnail ", "72"] {
+            assert!(validate_render_quality(Some(quality)).is_err());
+        }
+    }
 
     #[test]
     fn review_geometry_survives_json_bridge_roundtrip() {
@@ -2384,6 +2553,140 @@ mod tests {
         std::fs::remove_dir_all(root).expect("test runtime tree should be removed");
     }
 
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn engine_launch_path_converts_only_verbatim_disk_and_unc_prefixes() {
+        for (canonical, ordinary) in [
+            (r"\\?\C:\app\runtime\python.exe", r"C:\app\runtime\python.exe"),
+            (r"\\?\D:\测试 应用\runtime\python.exe", r"D:\测试 应用\runtime\python.exe"),
+            (r"\\?\UNC\server\共享 目录\runtime\python.exe", r"\\server\共享 目录\runtime\python.exe"),
+        ] {
+            assert_eq!(
+                super::ordinary_windows_engine_path(std::path::Path::new(canonical)).unwrap(),
+                PathBuf::from(ordinary)
+            );
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn engine_launch_path_rejects_device_namespaces_and_ambiguous_components() {
+        for unsupported in [
+            r"\\.\C:\runtime\python.exe",
+            r"\\?\GLOBALROOT\Device\HarddiskVolume1\runtime\python.exe",
+            r"\\?\Volume{00000000-0000-0000-0000-000000000000}\runtime\python.exe",
+            r"\\?\C:\app.\runtime\python.exe",
+            r"\\?\C:\app \runtime\python.exe",
+            r"\\?\C:\app\..\runtime\python.exe",
+            r"\\?\C:\app\.\runtime\python.exe",
+            r"\\?\C:\app\runtime\python.exe:stream",
+            r"\\?\C:\app\CON.exe\python.exe",
+            r"\\?\C:\app\Lpt1\python.exe",
+            r"\\?\C:\app\COM¹\python.exe",
+            r"\\?\UNC\server\share.\runtime\python.exe",
+            r"\\?\UNC\server \share\runtime\python.exe",
+        ] {
+            assert!(
+                super::ordinary_windows_engine_path(std::path::Path::new(unsupported)).is_err(),
+                "unsupported path should fail: {unsupported}"
+            );
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn engine_launch_path_keeps_normal_development_paths_unchanged() {
+        for path in [r"C:\Windows\py.exe", r"C:\app\runtime\python.exe", r"\\server\share\python.exe"] {
+            let path = PathBuf::from(path);
+            assert_eq!(super::engine_launch_program(&path).unwrap(), path);
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn engine_launch_path_roundtrips_existing_unicode_and_long_paths() {
+        use std::os::windows::ffi::OsStrExt;
+
+        let root = test_resource_root("launch-path");
+        let mut directory = root.join("测试 应用");
+        for length in [0, 4] {
+            for _ in 0..length {
+                directory.push("long-directory-component-with-spaces-abcdefghijklmnopqrstuv");
+            }
+            std::fs::create_dir_all(&directory).unwrap();
+            let python = directory.join("python.exe");
+            std::fs::write(&python, b"synthetic runtime executable").unwrap();
+            let canonical = python.canonicalize().unwrap();
+            let launch = super::engine_launch_program(&canonical).unwrap();
+            assert_eq!(launch, python);
+            assert_eq!(launch.canonicalize().unwrap(), canonical);
+            if length > 0 {
+                assert!(launch.as_os_str().encode_wide().count() > 260);
+            }
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn engine_launch_path_rejects_a_missing_canonical_executable() {
+        let root = test_resource_root("launch-missing");
+        std::fs::create_dir_all(&root).unwrap();
+        let missing = root.canonicalize().unwrap().join("python.exe");
+        assert!(super::engine_launch_program(&missing).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn engine_process_spec_uses_normal_path_after_trusted_runtime_resolution() {
+        let root = test_resource_root("launch-spec");
+        let runtime_dir = root.join(ENGINE_RUNTIME_DIRECTORY_NAME);
+        std::fs::create_dir_all(&runtime_dir).unwrap();
+        let python = runtime_dir.join(ENGINE_PYTHON_EXECUTABLE_FILE_NAME);
+        std::fs::write(&python, b"synthetic runtime executable").unwrap();
+        let runtime = super::EngineRuntime {
+            python_executable: resolve_bundled_engine_python(&root).unwrap(),
+            script_path: root.canonicalize().unwrap().join("engine").join("engine.py"),
+            private_temp_root: root.canonicalize().unwrap().join("engine-temp"),
+            supervisor: super::ProcessSupervisor::new(1, 1),
+            read_service: Default::default(),
+        };
+        let spec = super::engine_process_spec(&runtime, vec!["--serve".into()], true).unwrap();
+        assert_eq!(spec.program, python);
+        assert!(spec.args.contains(&runtime.script_path.as_os_str().to_owned()));
+        assert!(spec.env.contains(&(
+            super::ENGINE_PRIVATE_TEMP_ENV.into(),
+            Some(runtime.private_temp_root.as_os_str().to_owned())
+        )));
+        assert!(spec.pipe_stderr);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    #[ignore = "requires PDF_SEARCH_TEST_RUNTIME_ROOT pointing to a prepared OCR resource tree"]
+    fn bundled_ocr_health_runs_through_the_desktop_process_spec() {
+        let root = PathBuf::from(std::env::var_os("PDF_SEARCH_TEST_RUNTIME_ROOT")
+            .expect("set PDF_SEARCH_TEST_RUNTIME_ROOT to a prepared OCR resource tree"));
+        let cache = test_resource_root("bundled-ocr-health");
+        let runtime = super::EngineRuntime {
+            python_executable: resolve_bundled_engine_python(&root).unwrap(),
+            script_path: resolve_bundled_engine_script(&root).unwrap(),
+            private_temp_root: ensure_engine_private_temp_directory(&cache).unwrap(),
+            supervisor: super::ProcessSupervisor::new(1, 1),
+            read_service: Default::default(),
+        };
+        let result = super::call_engine(&runtime, serde_json::json!({
+            "op": "ocr_health", "verify": true
+        }));
+        runtime.supervisor.shutdown();
+        std::fs::remove_dir_all(cache).unwrap();
+        let response = result.expect("bundled OCR must respond through the desktop process supervisor");
+        assert_eq!(response["status"], "ok");
+        assert_eq!(response["readiness"], "ready");
+    }
+
     #[cfg(unix)]
     #[test]
     fn bundled_engine_python_resolution_rejects_runtime_directory_escape() {
@@ -2434,6 +2737,7 @@ mod tests {
             python_executable: PathBuf::from(python_executable),
             private_temp_root: PathBuf::from(r"C:\\app\\engine-temp"),
             supervisor: super::ProcessSupervisor::new(1, 1),
+            read_service: Default::default(),
         };
 
         let launcher = super::engine_process_spec(
@@ -2838,11 +3142,77 @@ mod tests {
     }
 
     #[test]
+    fn complete_layout_preview_can_outlive_two_minutes_but_remains_bounded() {
+        let started = Instant::now();
+        for op in ["batch_receipt_calibration_preview", "batch_receipt_template_apply_preview"] {
+            let timeout = engine_operation_timeout(&json!({"op": op}));
+            assert!(!operation_timed_out(
+                started,
+                started + Duration::from_secs(121),
+                timeout,
+            ));
+            assert!(!operation_timed_out(
+                started,
+                started + Duration::from_secs(30 * 60 - 1),
+                timeout,
+            ));
+            assert!(operation_timed_out(
+                started,
+                started + Duration::from_secs(30 * 60),
+                timeout,
+            ));
+        }
+    }
+
+    #[test]
+    fn preview_deadline_does_not_relax_other_operations_or_accept_a_caller_timeout() {
+        let started = Instant::now();
+        for op in [
+            "batch_receipt_calibration_prepare",
+            "batch_receipt_calibration_save",
+            "batch_receipt_calibration_status",
+            "batch_receipt_calibration_cancel",
+            "batch_receipt_calibration_undo",
+            "batch_control",
+            "batch_snapshot",
+            "batch_storage_maintain",
+            "render_page",
+            "health",
+            "batch_receipt_calibration_preview_extra",
+        ] {
+            let timeout = engine_operation_timeout(&json!({"op": op, "timeout": 1800}));
+            assert!(
+                operation_timed_out(started, started + Duration::from_secs(120), timeout),
+                "ordinary operation must keep its deadline: {op}"
+            );
+        }
+        assert_eq!(
+            engine_operation_timeout(&json!({})),
+            ENGINE_OPERATION_TIMEOUT
+        );
+        assert_eq!(
+            engine_operation_timeout(&json!({"op": 123})),
+            ENGINE_OPERATION_TIMEOUT
+        );
+    }
+
+    #[test]
     fn source_sha256_validation_requires_exact_hex_digest() {
         assert!(valid_source_sha256(&"a".repeat(64)));
         assert!(valid_source_sha256(&"B".repeat(64)));
         assert!(!valid_source_sha256("short"));
         assert!(!valid_source_sha256(&format!("{}z", "a".repeat(63))));
+    }
+
+    #[test]
+    fn page_inspection_requires_a_bounded_unique_positive_page_set() {
+        assert!(validate_inspection_pages(&[3, 1, 2]).is_ok());
+        assert!(validate_inspection_pages(&(1..=32).collect::<Vec<_>>()).is_ok());
+        assert!(validate_inspection_pages(&[u32::MAX]).is_ok());
+        assert!(validate_inspection_pages(&[]).is_err());
+        assert!(validate_inspection_pages(&[0]).is_err());
+        assert!(validate_inspection_pages(&[1, 1]).is_err());
+        assert!(validate_inspection_pages(&(1..=33).collect::<Vec<_>>()).is_err());
     }
 
     #[test]

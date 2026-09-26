@@ -22,7 +22,7 @@ except ImportError:
     from batch_models import normalize_criteria, validate_page_result  # type: ignore[no-redef]
 
 
-ASSEMBLY_VERSION = "batch-assembly-v1"
+ASSEMBLY_VERSION = "batch-assembly-v2-receipt-layout"
 MAX_SOURCES = 10_000
 MAX_SEGMENTS = 50_000
 MIN_CROP_SIZE = 12
@@ -154,12 +154,20 @@ def _assemble_page(
     width, height, page = payload["page_width"], payload["page_height"], payload["page"]
     analysis = payload["analysis"]
     selections = analysis["selections"]
+    # The flag now describes a single-receipt source layout. Do not let a
+    # legacy or inconsistent page payload collapse distinct candidate regions.
+    candidate_regions = {
+        tuple((selection.get("candidate_rect") or selection.get("rect") or {}).get(key)
+              for key in ("x0", "y0", "x1", "y1"))
+        for selection in selections
+    }
+    auto_full_page = bool(analysis.get("page_fully_matched", False)) and len(candidate_regions) == 1
     legacy = len(criteria["include"]) == 1 and criteria["includeMode"] == "all" and not criteria["exclude"]
     candidates: list[tuple[list[int], dict[str, Any], dict[str, Any] | None, float, bool]] = []
     if legacy:
         for index, selection in enumerate(selections):
-            candidates.append(([index], selection, selection["rect"], selection["confidence"],
-                               analysis.get("page_fully_matched", False)))
+            candidates.append(([index], selection, selection.get("candidate_rect", selection["rect"]), selection["confidence"],
+                               auto_full_page))
     else:
         entries: dict[int, list[int]] = defaultdict(list)
         candidate_selections: dict[int, dict[str, Any]] = {}
@@ -185,7 +193,8 @@ def _assemble_page(
                      "multi-condition candidate geometry disagrees")
             confidence = min(value for index in indices if hits[index]["role"] == "include"
                              for value in (hits[index]["confidence"], selections[index]["confidence"]))
-            candidates.append((indices, selection, candidate_rect, confidence, False))
+            candidates.append((indices, selection, candidate_rect, confidence,
+                               auto_full_page))
 
     items = []
     for number, (indices, selection, candidate_rect, confidence, full_page) in enumerate(candidates, 1):

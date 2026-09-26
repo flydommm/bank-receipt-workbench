@@ -20,6 +20,13 @@ export type ExportResultSummary = {
   pdfCount?: number;
 };
 
+export type CropDraftControls = {
+  syncEnabled: boolean;
+  disabled: boolean;
+  onSave: () => void;
+  onCancel: () => void;
+};
+
 type BaseProps = {
   feedback: ActionFeedback;
   result: ExportResultSummary | null;
@@ -47,6 +54,9 @@ type ReviewProps = BaseProps & {
   reviewFrozenReason?: string;
   operationTools?: ReactNode;
   scopeSelectionEnabled?: boolean;
+  cropDraft?: CropDraftControls;
+  onOpenHelp?: () => void;
+  fragmentGuidance?: string;
 };
 
 type ExportProps = BaseProps & {
@@ -92,7 +102,7 @@ function Feedback({ feedback }: { feedback: ActionFeedback }) {
   );
 }
 
-function ResultSummary({ result, onOpenResult }: Pick<BaseProps, 'result' | 'onOpenResult'>) {
+export function ReviewExportResultSummary({ result, onOpenResult }: Pick<BaseProps, 'result' | 'onOpenResult'>) {
   if (!result) return null;
 
   return (
@@ -126,6 +136,8 @@ function ReviewActionCardView(props: ReviewProps) {
   const mainActionRef = useRef<HTMLButtonElement | null>(null);
   const phaseHeadingRef = useRef<HTMLHeadingElement | null>(null);
   const frozen = Boolean(props.reviewFrozenReason);
+  const draftPending = Boolean(props.cropDraft);
+  const draftDisabled = frozen || Boolean(props.cropDraft?.disabled);
   const fragmentTargetAvailable = Boolean(props.currentSegment) && props.fragmentActionsEnabled;
   const fragmentActionsDisabled = frozen
     || !fragmentTargetAvailable
@@ -167,11 +179,22 @@ function ReviewActionCardView(props: ReviewProps) {
     : !props.canGeneratePreview
       ? props.scopeSelectionEnabled ? '任务和审核保存完成后，可进入导出设置' : '整组确认和页面校验完成后才能生成 PDF 导出预览'
       : null;
+  const draftDisabledText = !draftPending
+    ? undefined
+    : frozen
+      ? props.reviewFrozenReason
+      : props.cropDraft?.disabled
+        ? '正在保存或检查微调，请稍候。'
+        : undefined;
+  const fragmentGuidance = props.fragmentGuidance?.trim();
 
   useEffect(() => {
     if (props.feedback?.kind === 'error') setDetailsOpen(true);
-    else setDetailsOpen(false);
   }, [props.feedback?.kind, props.feedback?.message]);
+
+  useEffect(() => {
+    if (draftPending) setDetailsOpen(false);
+  }, [draftPending]);
 
   useEffect(() => {
     const previousPhase = previousPhaseRef.current;
@@ -201,24 +224,33 @@ function ReviewActionCardView(props: ReviewProps) {
     : previewDisabled && previewDisabledText
       ? 'review-action-card-preview-disabled-reason'
       : undefined;
+  const draftDescription = draftDisabled && draftDisabledText
+    ? 'review-action-card-draft-disabled-reason'
+    : undefined;
 
   return (
     <section
       className="review-action-card"
       data-mode="review"
-      data-phase={phase}
+      data-phase={draftPending ? 'draft' : phase}
       data-expanded={detailsOpen ? 'true' : 'false'}
       aria-labelledby="review-action-card-title"
     >
       <div className="review-action-card-main">
         <div className="review-action-card-context">
           <h3 ref={phaseHeadingRef} id="review-action-card-title" tabIndex={-1}>当前审核操作</h3>
-          {phase === 'confirmed' ? (
+          {draftPending ? (
+            <>
+              <span className="review-action-card-draft-status" role="status">微调尚未保存，可继续拖动边框</span>
+              <small>点击“完成微调”后才会检查版式；同步完成后无需再次点击应用。</small>
+            </>
+          ) : phase === 'confirmed' ? (
             <span>{`已确认 ${props.totalCount} / ${props.totalCount}`}</span>
           ) : (
             <>
               <span>{props.currentSegment ? `已选中第 ${props.currentSegment.sourcePage} 页片段 ${props.currentSegment.segmentNo}` : '未选择片段'}</span>
               {props.currentSegment && <span role="status">当前状态：{STATUS_LABELS[props.currentSegment.reviewStatus]}</span>}
+              {fragmentGuidance && <small className="review-action-card-fragment-guidance">{fragmentGuidance}</small>}
             </>
           )}
           {props.reviewFrozenReason && <small id="review-action-card-frozen-reason" role="status" aria-live="polite" title={props.reviewFrozenReason}>{props.reviewFrozenReason}</small>}
@@ -235,45 +267,79 @@ function ReviewActionCardView(props: ReviewProps) {
           {fragmentDisabledText && <small id="review-action-card-fragment-disabled-reason" className="sr-only">{fragmentDisabledText}</small>}
           {groupDisabledText && <small id="review-action-card-group-disabled-reason" className="sr-only">{groupDisabledText}</small>}
           {previewDisabledText && <small id="review-action-card-preview-disabled-reason" className="sr-only">{previewDisabledText}</small>}
+          {draftDisabledText && <small id="review-action-card-draft-disabled-reason" className="sr-only">{draftDisabledText}</small>}
         </div>
 
         <div className="review-action-card-actions">
-          {phase === 'review' ? (
+          {draftPending ? (
             <>
-              <button className="ghost-button" type="button" disabled={fragmentActionsDisabled} aria-describedby={keepDescription} onClick={props.onKeepFullPage}>保留整页</button>
-              <button className="ghost-button" type="button" disabled={fragmentActionsDisabled || currentAlreadyConfirmed} aria-describedby={confirmDescription} onClick={props.onConfirmCurrent}>确认当前片段</button>
-              <button ref={mainActionRef} className="primary-button" type="button" disabled={groupDisabled} aria-describedby={groupDescription} aria-busy={props.groupSavePending || undefined} onClick={props.onConfirmGroup}>
-                {props.groupSavePending ? '保存中…' : '确认整组'}
+              <button
+                ref={mainActionRef}
+                className="primary-button review-action-card-draft-save"
+                type="button"
+                disabled={draftDisabled}
+                aria-describedby={draftDescription}
+                aria-busy={props.cropDraft?.disabled || undefined}
+                onClick={() => props.cropDraft?.onSave()}
+              >
+                {props.cropDraft?.syncEnabled ? '完成微调并同步' : '完成微调并保存'}
               </button>
+              <button
+                className="ghost-button review-action-card-draft-cancel"
+                type="button"
+                disabled={draftDisabled}
+                aria-describedby={draftDescription}
+                onClick={() => props.cropDraft?.onCancel()}
+              >
+                取消微调
+              </button>
+              {props.onOpenHelp && (
+                <button className="review-action-card-help" type="button" onClick={props.onOpenHelp}>查看微调说明</button>
+              )}
+            </>
+          ) : phase === 'review' ? (
+            <>
+              <button className="ghost-button" type="button" disabled={fragmentActionsDisabled || currentAlreadyConfirmed} aria-describedby={confirmDescription} onClick={props.onConfirmCurrent}>确认当前片段</button>
             </>
           ) : null}
-          {(phase === 'confirmed' || props.scopeSelectionEnabled) && (
+          {!draftPending && (phase === 'confirmed' || props.scopeSelectionEnabled) && (
             <button ref={phase === 'confirmed' ? mainActionRef : undefined} className="review-action-card-preview-button" type="button" disabled={previewDisabled} aria-describedby={previewDescription} aria-busy={props.previewGenerating || undefined} onClick={props.onGeneratePreview}>
               {props.previewGenerating ? '正在生成 PDF 导出预览…' : phase === 'review' ? '选择导出范围' : '生成 PDF 导出预览'}
               <span aria-hidden="true">→</span>
             </button>
           )}
-          <button className="review-action-card-toggle" type="button" aria-expanded={detailsOpen} aria-controls="review-action-card-details" onClick={() => setDetailsOpen((open) => !open)}>
-            {detailsOpen ? '收起详情' : '查看详情'}
-          </button>
+          {!draftPending && <button className="review-action-card-toggle" type="button" aria-expanded={detailsOpen} aria-controls="review-action-card-details" onClick={() => setDetailsOpen((open) => !open)}>
+            {detailsOpen ? '收起更多操作' : '更多操作'}
+          </button>}
         </div>
       </div>
 
       {props.operationTools}
-      {phase === 'review' && props.hasLegacySuggestion && props.onRestoreLegacySuggestion && (
-        <div className="review-action-card-history">
-          <span>旧版本裁剪记录可供参考，恢复后需重新确认。</span>
-          <button className="review-action-card-link" type="button" disabled={fragmentActionsDisabled} aria-describedby={keepDescription} onClick={props.onRestoreLegacySuggestion}>恢复历史裁剪建议</button>
-        </div>
-      )}
 
       <div id="review-action-card-details" className="review-action-card-details" data-testid="review-action-card-details" hidden={!detailsOpen}>
         <p className="review-action-card-summary">{phase === 'confirmed' ? '整组审核已确认。' : unresolvedLabel}</p>
+        {detailsOpen && phase === 'review' && (
+          <div className="review-action-card-more-actions" aria-label="更多操作">
+            <p className="review-action-card-more-hint">这些操作会修改当前片段或整组状态，请完成后再继续导出。</p>
+            <div className="review-action-card-more-action-buttons">
+              <button className="ghost-button" type="button" disabled={fragmentActionsDisabled} aria-describedby={keepDescription} onClick={props.onKeepFullPage}>保留整页</button>
+              <button ref={phase === 'review' ? mainActionRef : undefined} className="primary-button" type="button" disabled={groupDisabled} aria-describedby={groupDescription} aria-busy={props.groupSavePending || undefined} onClick={props.onConfirmGroup}>
+                {props.groupSavePending ? '保存中…' : '确认整组'}
+              </button>
+              {props.hasLegacySuggestion && props.onRestoreLegacySuggestion && (
+                <div className="review-action-card-history">
+                  <span>旧版本裁剪记录可供参考，恢复后需重新确认。</span>
+                  <button className="review-action-card-link" type="button" disabled={fragmentActionsDisabled} aria-describedby={keepDescription} onClick={props.onRestoreLegacySuggestion}>恢复历史裁剪建议</button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
         {detailsOpen && phase === 'review' && fragmentDisabledText && <p>片段操作：{fragmentDisabledText}</p>}
         {detailsOpen && phase === 'review' && groupDisabledText && <p>整组操作：{groupDisabledText}</p>}
         {detailsOpen && phase === 'confirmed' && previewDisabledText && <p>预览操作：{previewDisabledText}</p>}
         {detailsOpen && <Feedback feedback={props.feedback} />}
-        <ResultSummary result={props.result} onOpenResult={props.onOpenResult} />
+      <ReviewExportResultSummary result={props.result} onOpenResult={props.onOpenResult} />
       </div>
     </section>
   );
@@ -295,7 +361,6 @@ function ExportActionCardView(props: ExportProps) {
 
   useEffect(() => {
     if (props.feedback?.kind === 'error') setDetailsOpen(true);
-    else setDetailsOpen(false);
   }, [props.feedback?.kind, props.feedback?.message]);
 
   useEffect(() => {
@@ -337,7 +402,7 @@ function ExportActionCardView(props: ExportProps) {
       <div id="review-action-card-details" className="review-action-card-details" data-testid="review-action-card-details" hidden={!detailsOpen}>
         <p>{props.optionsFrozen ? '导出范围、输出形式和 XLSX 选项已固定；更改选项请返回调整。' : '用于批量核查、留痕或交给 AI 复查；日常导出无需勾选。'}</p>
         {detailsOpen && <Feedback feedback={props.feedback} />}
-        <ResultSummary result={props.result} onOpenResult={props.onOpenResult} />
+      <ReviewExportResultSummary result={props.result} onOpenResult={props.onOpenResult} />
       </div>
     </section>
   );

@@ -196,7 +196,11 @@ export class PersistentBatchController {
       if (index >= 0) jobs[index] = summary;
       else jobs.push(summary);
     }
-    this.update({ current: job, jobs });
+    // A successful authoritative snapshot supersedes any transport/request
+    // error shown by the controller.  Without clearing this field, a
+    // transient "任务快照无效" response can remain visible while the same
+    // task has already recovered to a running/ready state.
+    this.update({ current: job, jobs, error: null });
   }
 
   clearSelection(): void {

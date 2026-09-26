@@ -64,6 +64,12 @@ function abortError(): Error {
   return error;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
 function withAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
   if (!signal) return promise;
   if (signal.aborted) {
@@ -110,7 +116,7 @@ function parseOperationData(request: BatchRequest, data: unknown): BatchOperatio
     case 'batch_relocate':
       return parseBatchJobSnapshot(data);
     case 'batch_list':
-      return parseBatchList(data);
+      return parseLegacyBatchList(data);
     case 'batch_control':
       return parseBatchControlResult(data);
     case 'batch_results_page':
@@ -118,6 +124,41 @@ function parseOperationData(request: BatchRequest, data: unknown): BatchOperatio
     default:
       throw new BatchTaskValidationError('任务操作无效。');
   }
+}
+
+/**
+ * The host keeps schema-1 and receipt (schema-2) jobs in one persistent
+ * namespace.  The legacy controller still asks for `batch_list`, so a page
+ * containing a receipt job must not make its strict schema-1 parser fail.
+ * Receipt history is read through ReceiptBatchClient; here we deliberately
+ * expose only the legacy entries and stop the legacy cursor at this page.
+ * This preserves strict validation for legacy data while safely skipping
+ * records that the old controller cannot select or control.
+ */
+function parseLegacyBatchList(value: unknown): BatchListResult {
+  if (!isRecord(value) || !Array.isArray(value.items)) return parseBatchList(value);
+  const legacyItems = value.items.filter((item) =>
+    !isRecord(item) || item.page_result_schema !== 2);
+  if (legacyItems.length === value.items.length) return parseBatchList(value);
+
+  // Validate the list envelope and every retained legacy item.  A terminal
+  // cursor avoids pretending that the filtered offset still matches the
+  // host's mixed-schema pagination.
+  const offset = value.offset;
+  const limit = value.limit;
+  if (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0
+    || typeof limit !== 'number' || !Number.isSafeInteger(limit) || limit < 1 || limit > 50) {
+    return parseBatchList(value);
+  }
+  const pageOffset = offset as number;
+  const pageLimit = limit as number;
+  return parseBatchList({
+    items: legacyItems,
+    offset: pageOffset,
+    limit: pageLimit,
+    total: pageOffset + legacyItems.length,
+    next_offset: null,
+  });
 }
 
 function ensureOk<T>(response: BatchResponse<T>): T {

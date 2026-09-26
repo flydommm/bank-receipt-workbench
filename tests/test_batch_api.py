@@ -10,8 +10,108 @@ from engine.batch_store import BatchStore
 from engine.engine import handle_request
 
 
+_TEMPLATE_GEOMETRY = {
+    "pdf_box": {"x0": 0, "y0": 0, "x1": 600, "y1": 900},
+    "rotation": 0,
+    "user_unit": 1,
+    "width_pt": 600,
+    "height_pt": 900,
+}
+_TEMPLATE_SLOTS = [
+    {"slot_id": "top", "position_index": 1, "rect": {"x0": 0, "y0": 0, "x1": 600, "y1": 440}},
+    {"slot_id": "bottom", "position_index": 2, "rect": {"x0": 0, "y0": 460, "x1": 600, "y1": 900}},
+]
+
+
 def request(database, op, **fields):
     return handle_request({"op": op, "database_path": str(database), **fields})
+
+
+def test_layout_template_management_uses_host_private_path_and_scopes_matches(tmp_path):
+    database = tmp_path / "batch.sqlite3"
+    template_database = tmp_path / "pdf-search.sqlite3"
+    value = {
+        "source_scope": "issuer-a|layout-1",
+        "layout_fingerprint": "a" * 64,
+        "page_geometry": _TEMPLATE_GEOMETRY,
+        "slots": _TEMPLATE_SLOTS,
+        "evidence_summary": {"title_digest": "b" * 64, "line_count": 2},
+        "source_operation_id": "review-1",
+        "name": "two-column",
+    }
+    saved = handle_batch_request({
+        "op": "batch_layout_template_save", "database_path": str(database),
+        "template_database_path": str(template_database), "template": value,
+    })
+    assert saved["status"] == "ok"
+    assert saved["data"]["source_scope"] == value["source_scope"]
+    assert "text" not in saved["data"]
+
+    matched = handle_batch_request({
+        "op": "batch_layout_template_match", "database_path": str(database),
+        "template_database_path": str(template_database),
+        "source_scope": value["source_scope"], "page_geometry": _TEMPLATE_GEOMETRY,
+        "layout_fingerprint": value["layout_fingerprint"], "slots": _TEMPLATE_SLOTS,
+    })
+    assert matched["status"] == "ok" and matched["data"]["id"] == saved["data"]["id"]
+
+    # A different source scope or geometry cannot reuse a saved reference.
+    isolated = handle_batch_request({
+        "op": "batch_layout_template_match", "database_path": str(database),
+        "template_database_path": str(template_database), "source_scope": "issuer-b",
+        "page_geometry": _TEMPLATE_GEOMETRY, "layout_fingerprint": "a" * 64, "slots": _TEMPLATE_SLOTS,
+    })
+    assert isolated == {"status": "ok", "data": None}
+
+    deactivated = handle_batch_request({
+        "op": "batch_layout_template_deactivate", "database_path": str(database),
+        "template_database_path": str(template_database), "template_id": saved["data"]["id"],
+        "operation_id": "undo-1",
+    })
+    assert deactivated == {"status": "ok", "data": {"deactivated": True}}
+    assert handle_batch_request({
+        "op": "batch_layout_template_match", "database_path": str(database),
+        "template_database_path": str(template_database), "source_scope": value["source_scope"],
+        "page_geometry": _TEMPLATE_GEOMETRY, "layout_fingerprint": "a" * 64, "slots": _TEMPLATE_SLOTS,
+    }) == {"status": "ok", "data": None}
+
+
+def test_layout_template_withdraw_operation_uses_host_private_path(tmp_path):
+    database = tmp_path / "batch.sqlite3"
+    template_database = tmp_path / "pdf-search.sqlite3"
+    value = {
+        "source_scope": "issuer-a|layout-withdraw",
+        "layout_fingerprint": "c" * 64,
+        "page_geometry": _TEMPLATE_GEOMETRY,
+        "slots": _TEMPLATE_SLOTS,
+        "evidence_summary": {"line_count": 2},
+        "source_operation_id": "review-withdraw",
+    }
+    saved = handle_batch_request({
+        "op": "batch_layout_template_save", "database_path": str(database),
+        "template_database_path": str(template_database), "template": value,
+    })
+    assert saved["status"] == "ok"
+    withdrawn = handle_batch_request({
+        "op": "batch_layout_template_withdraw_operation", "database_path": str(database),
+        "template_database_path": str(template_database), "operation_id": "review-withdraw", "undo_id": "undo-1",
+    })
+    assert withdrawn["status"] == "ok" and withdrawn["data"]["deactivated_count"] == 1
+    repeated = handle_batch_request({
+        "op": "batch_layout_template_withdraw_operation", "database_path": str(database),
+        "template_database_path": str(template_database), "operation_id": "review-withdraw", "undo_id": "undo-2",
+    })
+    assert repeated["status"] == "ok" and repeated["data"]["undo_id"] == "undo-1"
+
+
+def test_layout_template_management_rejects_task_database_as_private_path(tmp_path):
+    database = tmp_path / "batch.sqlite3"
+    response = handle_batch_request({
+        "op": "batch_layout_template_match", "database_path": str(database),
+        "template_database_path": str(database), "source_scope": "issuer-a",
+        "page_geometry": _TEMPLATE_GEOMETRY, "layout_fingerprint": "a" * 64, "slots": None,
+    })
+    assert response["status"] == "error" and response["code"] == "batch_invalid_request"
 
 
 def test_short_management_creates_persisted_job_without_opening_pdf(tmp_path, monkeypatch):

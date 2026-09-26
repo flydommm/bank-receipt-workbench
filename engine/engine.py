@@ -34,6 +34,7 @@ if __package__:
     from .error_codes import DEFAULT_ERROR_MESSAGES, ErrorCode, error_response
     from .logging_utils import get_logger, log_event, log_exception
     from .pdf_parser import iter_pages, page_count, parse_loaded_page
+    from .pdf_geometry import read_page_geometry
     from .private_temp import private_storage_directory, private_temporary_directory
     from .search import (
         MAX_SEARCH_CLAUSES,
@@ -48,6 +49,7 @@ if __package__:
     from .exporter import export_index
     from .crop import MIN_EXPORT_RECT_SIZE, PdfSegment, export_merged_segments, region_from_points
     from .crop_templates import describe_crop_page
+    from .source_layout import SourceLayoutIndex, SourceLayoutPolicy, without_vacant_markers
     from .ocr import runtime_status, recognize_image, is_scanned_page, OcrUnavailableError, OcrRuntimeError
     from .ocr_cache import cache_info as ocr_cache_info, clear_cache as ocr_cache_clear
     from .ocr_pdf import render_page_to_png
@@ -86,6 +88,7 @@ else:  # Running as ``python engine/engine.py`` from the project root.
     from engine.error_codes import DEFAULT_ERROR_MESSAGES, ErrorCode, error_response  # type: ignore[no-redef]
     from engine.logging_utils import get_logger, log_event, log_exception  # type: ignore[no-redef]
     from engine.pdf_parser import iter_pages, page_count, parse_loaded_page  # type: ignore[no-redef]
+    from engine.pdf_geometry import read_page_geometry  # type: ignore[no-redef]
     from engine.private_temp import (  # type: ignore[no-redef]
         private_storage_directory,
         private_temporary_directory,
@@ -108,6 +111,7 @@ else:  # Running as ``python engine/engine.py`` from the project root.
         region_from_points,
     )
     from engine.crop_templates import describe_crop_page  # type: ignore[no-redef]
+    from engine.source_layout import SourceLayoutIndex, SourceLayoutPolicy, without_vacant_markers  # type: ignore[no-redef]
     from engine.ocr import runtime_status, recognize_image, is_scanned_page, OcrUnavailableError, OcrRuntimeError  # type: ignore[no-redef]
     from engine.ocr_cache import cache_info as ocr_cache_info, clear_cache as ocr_cache_clear  # type: ignore[no-redef]
     from engine.ocr_pdf import render_page_to_png  # type: ignore[no-redef]
@@ -141,12 +145,13 @@ class _V2InvalidStoreResponse(RuntimeError):
     """Raised when the real v2 store returns an invalid response shape."""
 
 
-ENGINE_VERSION = "0.1.27"
+ENGINE_VERSION = "0.1.57"
 EXPORT_TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{15,127}$")
 SOURCE_SHA256_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
 RENDER_DPI = 144
 RENDER_MAX_PIXELS_PER_SIDE = 16_384
 RENDER_MAX_PIXELS = 64_000_000
+MAX_INSPECTION_PAGES = 32
 EXPORT_OWNERSHIP_VERSION = 1
 EXPORT_OWNERSHIP_DIR: Path | None = None
 OCR_CACHE_MAX_BYTES = 268_435_456
@@ -1250,6 +1255,9 @@ def _render_pixel_dimensions(page_rect: object) -> tuple[int, int] | None:
 def _render_page_response(request: dict[str, object]) -> dict[str, object]:
     """Render one source page for the review UI without modifying the PDF."""
 
+    quality = request.get("quality")
+    if "quality" in request and quality != "thumbnail":
+        return _safe_error(ErrorCode.INVALID_REQUEST, "quality must be thumbnail when specified")
     validated = _validated_pdf_page(request)
     if isinstance(validated, dict):
         return validated
@@ -1268,17 +1276,25 @@ def _render_page_response(request: dict[str, object]) -> dict[str, object]:
                         f"page must be between 1 and {document.page_count}",
                     )
                 page = document.load_page(raw_page - 1)
+                geometry = read_page_geometry(page)
                 if _render_pixel_dimensions(page.rect) is None:
                     return _safe_error(ErrorCode.RENDER_FAILED)
                 scale = RENDER_DPI / 72
+                if quality == "thumbnail":
+                    # Keep the existing page safety budget and PDF-point geometry.
+                    # Only the transient raster used by the grid is reduced.
+                    scale = min(scale, 512 / max(page.rect.width, page.rect.height))
                 pixmap = page.get_pixmap(matrix=pymupdf.Matrix(scale, scale), alpha=False)
                 image_data = base64.b64encode(pixmap.tobytes("png")).decode("ascii")
                 return {
                     "status": "ok",
                     "page": raw_page,
                     "page_count": document.page_count,
-                    "page_width": page.rect.width,
-                    "page_height": page.rect.height,
+                    # Use the same canonical PDF-box dimensions as analysis.
+                    # Native page.rect uses float32 values and can differ even
+                    # for a valid decimal MediaBox on an unchanged source.
+                    "page_width": geometry["width_pt"],
+                    "page_height": geometry["height_pt"],
                     "source_sha256": copied.sha256,
                     "image_data": f"data:image/png;base64,{image_data}",
                 }
@@ -1316,6 +1332,95 @@ def _inspect_pdf_response(request: dict[str, object]) -> dict[str, object]:
             LOGGER,
             40,
             operation="inspect_pdf",
+            code=ErrorCode.RENDER_FAILED.value,
+            error=error,
+            public_message=DEFAULT_ERROR_MESSAGES[ErrorCode.RENDER_FAILED.value],
+        )
+        return _safe_error(ErrorCode.RENDER_FAILED)
+
+
+def _inspect_pages_response(request: dict[str, object]) -> dict[str, object]:
+    """Verify bounded page geometry against one immutable snapshot, without rasterizing."""
+
+    raw_pages = request.get("pages")
+    if (
+        not isinstance(raw_pages, list)
+        or not 1 <= len(raw_pages) <= MAX_INSPECTION_PAGES
+        or any(
+            not isinstance(page, int) or isinstance(page, bool) or not 1 <= page <= 0xFFFFFFFF
+            for page in raw_pages
+        )
+        or len(set(raw_pages)) != len(raw_pages)
+    ):
+        return _safe_error(ErrorCode.INVALID_PAGE)
+    include_crop_template = request.get("include_crop_template", False)
+    if not isinstance(include_crop_template, bool):
+        return _safe_error(ErrorCode.INVALID_REQUEST, "include_crop_template must be a boolean")
+    validated = _validated_pdf_page({**request, "page": raw_pages[0]})
+    if isinstance(validated, dict):
+        return validated
+    path, _, expected_sha256 = validated
+
+    try:
+        with private_temporary_directory("source") as snapshot_dir:
+            # The opened snapshot below checks the source page budget itself;
+            # _snapshot_request_source would open it once more just to count pages.
+            try:
+                copied = _snapshot_pdf_source(path, expected_sha256, snapshot_dir)
+            except ValueError:
+                return _safe_error(ErrorCode.SOURCE_CHANGED)
+            if isinstance(copied, dict):
+                return copied
+            with pymupdf.open(str(copied.path)) as document:
+                total_pages = int(document.page_count)
+                if total_pages > ENGINE_CONFIG.max_pages:
+                    return {
+                        **_safe_error(ErrorCode.PAGE_LIMIT_EXCEEDED),
+                        "page_count": total_pages,
+                        "max_pages": ENGINE_CONFIG.max_pages,
+                    }
+                if total_pages < 1:
+                    return _safe_error(ErrorCode.RENDER_FAILED)
+                results: list[dict[str, object]] = []
+                for page_number in raw_pages:
+                    if page_number > total_pages:
+                        results.append({"page": page_number, **_safe_error(ErrorCode.PAGE_OUT_OF_RANGE)})
+                        continue
+                    try:
+                        page = document.load_page(page_number - 1)
+                        geometry = read_page_geometry(page)
+                        if _render_pixel_dimensions(page.rect) is None:
+                            results.append({"page": page_number, **_safe_error(ErrorCode.RENDER_FAILED)})
+                            continue
+                        result: dict[str, object] = {
+                            "status": "ok",
+                            "page": page_number,
+                            "page_count": total_pages,
+                            "page_width": geometry["width_pt"],
+                            "page_height": geometry["height_pt"],
+                            "source_sha256": copied.sha256,
+                        }
+                    except Exception:
+                        results.append({"page": page_number, **_safe_error(ErrorCode.RENDER_FAILED)})
+                        continue
+                    if include_crop_template:
+                        try:
+                            result["crop_template"] = describe_crop_page(page)
+                        except Exception:
+                            results.append({"page": page_number, **_safe_error(ErrorCode.ANALYZE_FAILED)})
+                            continue
+                    results.append(result)
+                return {
+                    "status": "ok",
+                    "page_count": total_pages,
+                    "source_sha256": copied.sha256,
+                    "pages": results,
+                }
+    except Exception as error:
+        log_exception(
+            LOGGER,
+            40,
+            operation="inspect_pages",
             code=ErrorCode.RENDER_FAILED.value,
             error=error,
             public_message=DEFAULT_ERROR_MESSAGES[ErrorCode.RENDER_FAILED.value],
@@ -1409,7 +1514,7 @@ def _analyze_page_geometry(
         visual_anchors = []
         layout_budget_exceeded = True
     candidates = infer_receipt_candidates(
-        parsed,
+        without_vacant_markers(parsed),
         separators=separators,
         visual_anchors=visual_anchors,
     )
@@ -1428,6 +1533,8 @@ def _selection_payloads(
     page_width: float,
     page_height: float,
     layout_budget_exceeded: bool = False,
+    *,
+    source_layout_policy: SourceLayoutPolicy = "unknown",
 ) -> tuple[bool, list[dict[str, object]]]:
     selected_candidates = [
         select_candidate_for_match(candidates, match_rect)
@@ -1448,7 +1555,9 @@ def _selection_payloads(
     ]
     page_fully_matched = (
         not layout_budget_exceeded
-        and bool(candidates)
+        and len(candidates) == 1
+        and source_layout_policy != "multiple"
+        and all(candidate is not None for candidate in selected_candidates)
         and len({
             candidate for candidate in selected_candidates if candidate is not None
         }) == len(candidates)
@@ -1481,6 +1590,12 @@ def _selection_payloads(
             confidence = min(confidence, 0.89)
             if "layout_budget_exceeded" not in evidence:
                 evidence.append("layout_budget_exceeded")
+        uncertain_source_layout = len(candidates) == 1 and source_layout_policy == "unknown"
+        if uncertain_source_layout:
+            confidence = min(confidence, 0.89)
+            evidence.append("source_layout_uncertain")
+        if source_layout_policy == "multiple":
+            evidence.append("source_multi_receipt_layout")
         if page_fully_matched and selected is not None:
             evidence.append("page_fully_matched")
         selections.append({
@@ -1520,13 +1635,13 @@ def _crop_template_page_response(
         if page_number > total_pages:
             return _safe_error(ErrorCode.PAGE_OUT_OF_RANGE)
         page = document.load_page(page_number - 1)
-        geometry = page.rect
+        geometry = read_page_geometry(page)
         return {
             "status": "ok",
             "page": page_number,
             "page_count": total_pages,
-            "page_width": float(geometry.width),
-            "page_height": float(geometry.height),
+            "page_width": geometry["width_pt"],
+            "page_height": geometry["height_pt"],
             "source_sha256": source_sha256,
             "crop_template": describe_crop_page(page),
         }
@@ -1586,6 +1701,10 @@ def _analyze_page_response(request: dict[str, object]) -> dict[str, object]:
                 page_number,
                 parsed,
             )
+            source_layout_policy: SourceLayoutPolicy = "multiple"
+            if len(candidates) == 1:
+                with pymupdf.open(str(copied.path)) as layout_document:
+                    source_layout_policy = SourceLayoutIndex(layout_document).policy(page_number, parsed)
             page_fully_matched, selections = _selection_payloads(
                 match_rects,
                 separators,
@@ -1594,6 +1713,7 @@ def _analyze_page_response(request: dict[str, object]) -> dict[str, object]:
                 parsed.width,
                 parsed.height,
                 layout_budget_exceeded,
+                source_layout_policy=source_layout_policy,
             )
 
             return {
@@ -1770,10 +1890,11 @@ def _parse_pdf_segments(
             raise ValueError("every exported segment must be confirmed")
         keep_full_page = item.get("keep_full_page") is True
         source_page = source_document.load_page(page_number - 1)
+        geometry = read_page_geometry(source_page)
         rect = None if keep_full_page else _export_rect_from_payload(
             item.get("rect"),
-            source_page.rect.width,
-            source_page.rect.height,
+            geometry["width_pt"],
+            geometry["height_pt"],
         )
         segments.append(PdfSegment(
             page_number=page_number,
@@ -2685,6 +2806,8 @@ def handle_request(request: object) -> dict[str, object]:
         return _render_page_response(request)
     if request.get("op") == "inspect_pdf":
         return _inspect_pdf_response(request)
+    if request.get("op") == "inspect_pages":
+        return _inspect_pages_response(request)
     if request.get("op") == "analyze_page":
         return _analyze_page_response(request)
     if request.get("op") == "export_index":

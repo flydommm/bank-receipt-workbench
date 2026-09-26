@@ -17,7 +17,7 @@ import os
 from pathlib import Path
 import re
 import sqlite3
-from typing import Iterator, Iterable, Mapping, Sequence
+from typing import Any, Iterator, Iterable, Mapping, Sequence
 import unicodedata
 from uuid import uuid4
 
@@ -44,9 +44,11 @@ from .batch_models import (
     validate_budget,
     validate_page_result,
 )
+from .receipt_layout_models import ReceiptLayoutError, parse_processing_options
+from .validated_read_cache import ValidatedReadCache, sqlite_content_fingerprint
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 DEFAULT_QUOTA_BYTES = 2 * 1024 * 1024 * 1024
 PAGE_STAGE = "page"
 MAX_PAGE_COUNT = BUDGET_LIMITS["processed_pages"]
@@ -63,6 +65,20 @@ _START_METADATA_RESERVE_BYTES = 16 * 1024
 _PAGE_CLAIM_RESERVE_BYTES = 4 * 1024
 _MAX_SOURCE_SNAPSHOT_BYTES = 128 * 1024
 _MAX_SOURCE_COLLECTION_BYTES = MAX_JSON_BYTES
+_UNSET = object()
+_REVIEW_SNAPSHOT_CACHE = ValidatedReadCache()
+
+
+def _receipt_options(value: object) -> dict[str, object]:
+    try:
+        return parse_processing_options(value)
+    except ReceiptLayoutError as exc:
+        raise BatchStoreError("receipt processing options are invalid") from exc
+
+
+def _receipt_fingerprint(options: dict[str, object], match_mode: str) -> str:
+    from .receipt_snapshot import processing_fingerprint
+    return processing_fingerprint(options, match_mode)
 
 _SNAPSHOT_SEGMENT_FIELDS = frozenset({
     "id", "source_key", "source_path", "source_sha256", "source_page", "segment_no",
@@ -97,7 +113,8 @@ class BatchSchemaIncompatible(BatchStoreError):
     """The database is from a newer or otherwise unsupported schema."""
 
 
-_DDL: tuple[str, ...] = (
+# Immutable supported legacy schema, also used to verify migration inputs.
+_DDL_V1: tuple[str, ...] = (
     """
     CREATE TABLE IF NOT EXISTS batch_jobs (
         id TEXT PRIMARY KEY,
@@ -241,6 +258,18 @@ _DDL: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS idx_batch_pages_state ON batch_pages(job_id, state, source_id, page)",
     "CREATE INDEX IF NOT EXISTS idx_batch_commands_job ON batch_commands(job_id, generation, created_at)",
     "CREATE INDEX IF NOT EXISTS idx_batch_cleanup_job ON batch_cleanup(job_id, updated_at)",
+)
+
+
+_PAGE_ENCODING_COLUMN = "page_result_schema INTEGER NOT NULL DEFAULT 1 CHECK (page_result_schema IN (1, 2))"
+_PROCESSING_OPTIONS_COLUMN = """processing_options_json TEXT CHECK (
+    (page_result_schema = 1 AND processing_options_json IS NULL) OR
+    (page_result_schema = 2 AND processing_options_json IS NOT NULL))"""
+_DDL: tuple[str, ...] = tuple(
+    statement.replace("criteria_json TEXT NOT NULL,", "criteria_json TEXT NOT NULL,\n        "
+                      + _PAGE_ENCODING_COLUMN + ",\n        " + _PROCESSING_OPTIONS_COLUMN + ",")
+    .replace("CHECK (schema = 1)", "CHECK (schema IN (1, 2))")
+    for statement in _DDL_V1
 )
 
 
@@ -428,7 +457,18 @@ class BatchStore:
         existing_tables = {name for object_type, name in existing if object_type == "table"}
         if version == SCHEMA_VERSION:
             if not required.issubset(existing_tables):
-                raise BatchSchemaIncompatible("schema version 1 is missing required tables")
+                raise BatchSchemaIncompatible("batch schema is missing required tables")
+            columns = {row[1] for row in self.connection.execute("PRAGMA table_info(batch_jobs)")}
+            if not {"page_result_schema", "processing_options_json"}.issubset(columns):
+                raise BatchSchemaIncompatible("batch schema is missing processing options")
+            return
+        if version == 1:
+            from .batch_schema import BatchMigrationError, migrate_v1
+            try:
+                migrate_v1(self.connection, _DDL_V1, _DDL, self._backup_before_migration,
+                           (_PAGE_ENCODING_COLUMN, _PROCESSING_OPTIONS_COLUMN))
+            except (BatchMigrationError, sqlite3.DatabaseError) as exc:
+                raise BatchSchemaIncompatible("batch schema migration failed and was rolled back") from exc
             return
         if existing:
             # There is no supported v0 migration.  Refuse any non-empty
@@ -450,15 +490,24 @@ class BatchStore:
             f"{self._path.name}.pre-v{SCHEMA_VERSION}-{uuid4().hex}.sqlite3"
         )
         backup_connection: sqlite3.Connection | None = None
+        reader: sqlite3.Connection | None = None
         try:
             backup_connection = sqlite3.connect(str(backup_path))
-            self.connection.backup(backup_connection)
+            # A separate reader snapshots committed data while our IMMEDIATE
+            # transaction excludes writers. Backing up the writing connection
+            # itself would wait forever on its own pending transaction.
+            if self.connection.in_transaction:
+                reader = sqlite3.connect(self.path)
+                reader.execute("PRAGMA query_only = ON")
+            (reader or self.connection).backup(backup_connection)
             backup_connection.commit()
         except sqlite3.DatabaseError as exc:
             raise BatchSchemaIncompatible("could not create a pre-migration backup") from exc
         finally:
             if backup_connection is not None:
                 backup_connection.close()
+            if reader is not None:
+                reader.close()
 
     @contextmanager
     def _transaction(self, *, immediate: bool = True) -> Iterator[sqlite3.Connection]:
@@ -614,11 +663,7 @@ class BatchStore:
         *,
         include_sources: bool = True,
     ) -> dict[str, object]:
-        criteria = _decode_json(row["criteria_json"], "job.criteria")
-        try:
-            criteria = normalize_criteria(criteria)
-        except BatchModelError as exc:
-            raise BatchStoreError(str(exc)) from None
+        criteria, options = self._job_processing(row)
         error = _decode_json(row["error_json"], "job.error") if row["error_json"] is not None else None
         sources: list[dict[str, object]] = []
         source_summary: dict[str, int] | None = None
@@ -692,6 +737,9 @@ class BatchStore:
             "page_summary": page_summary,
             "total_pages": sum(page_summary.values()),
         }
+        if options is not None:
+            snapshot["page_result_schema"] = 2
+            snapshot["processing_options"] = options
         if include_sources:
             snapshot["sources"] = sources
         else:
@@ -707,6 +755,35 @@ class BatchStore:
         except BatchModelError as exc:
             raise BatchStoreError(str(exc)) from None
 
+    @staticmethod
+    def _job_processing(row: sqlite3.Row) -> tuple[object, dict[str, object] | None]:
+        criteria = _decode_json(row["criteria_json"], "job.criteria")
+        schema = row["page_result_schema"]
+        if schema == 1:
+            if row["processing_options_json"] is not None:
+                raise BatchStoreError("legacy job contains receipt processing options")
+            try:
+                return normalize_criteria(criteria), None
+            except BatchModelError as exc:
+                raise BatchStoreError(str(exc)) from exc
+        if schema != 2 or row["processing_options_json"] is None:
+            raise BatchStoreError("job page result schema is invalid")
+        options = _receipt_options(_decode_json(row["processing_options_json"], "job.processing_options"))
+        if canonical_json(criteria) != canonical_json(options["criteria"]):
+            raise BatchStoreError("job criteria does not match processing options")
+        mode = normalize_match_mode(row["match_mode"])
+        if _receipt_fingerprint(options, mode) != row["criteria_fingerprint"]:
+            raise BatchStoreError("job processing fingerprint is invalid")
+        return criteria, options
+
+    def create_receipt_job(
+        self, name: object, sources: object, processing_options: object,
+        match_mode: object, computation_version: object, *, historical_reference: dict[str, Any] | None = None,
+    ) -> dict[str, object]:
+        """Internal receipt entry; public capability waits for the full codec chain."""
+        return self.create_job(name, sources, None, match_mode, computation_version,
+                               processing_options=processing_options, _historical_reference=historical_reference)
+
     def create_job(
         self,
         name: object,
@@ -714,6 +791,9 @@ class BatchStore:
         criteria: object,
         match_mode: object,
         computation_version: object,
+        *,
+        processing_options: object = _UNSET,
+        _historical_reference: dict[str, Any] | None = None,
     ) -> dict[str, object]:
         job_name = _text(name, "name", max_bytes=MAX_NAME_BYTES)
         if not isinstance(sources, Sequence) or isinstance(sources, (str, bytes, bytearray)):
@@ -732,23 +812,34 @@ class BatchStore:
                 raise BatchConflict("sources cannot contain duplicate logical paths")
             source_keys.add(key)
             normalized_sources.append({"source_path": source_path, "name": source_name})
-        try:
-            normalized_criteria = normalize_criteria(criteria)
-        except BatchModelError as exc:
-            raise BatchStoreError(str(exc)) from None
+        options = None
+        if processing_options is not _UNSET:
+            if criteria is not None:
+                raise BatchStoreError("criteria and processing options cannot be combined")
+            options = _receipt_options(processing_options)
+            normalized_criteria = options["criteria"]
+        else:
+            try:
+                normalized_criteria = normalize_criteria(criteria)
+            except BatchModelError as exc:
+                raise BatchStoreError(str(exc)) from None
         normalized_mode = normalize_match_mode(match_mode)
         computation = _text(computation_version, "computation_version", max_bytes=256)
         criteria_payload = canonical_json(normalized_criteria).decode("utf-8")
-        fingerprint_payload = {
-            "criteria": normalized_criteria,
-            "match_mode": normalized_mode,
-            "clauses": criteria_clauses(normalized_criteria),
-        }
-        criteria_fingerprint = hashlib.sha256(canonical_json(fingerprint_payload)).hexdigest()
+        options_payload = canonical_json(options).decode("utf-8") if options is not None else None
+        if options is not None:
+            criteria_fingerprint = _receipt_fingerprint(options, normalized_mode)
+        else:
+            fingerprint_payload = {
+                "criteria": normalized_criteria, "match_mode": normalized_mode,
+                "clauses": criteria_clauses(normalized_criteria),
+            }
+            criteria_fingerprint = hashlib.sha256(canonical_json(fingerprint_payload)).hexdigest()
         job_id = str(uuid4())
         now = _utc_now()
         zero_budget = self._budget_json({field: 0 for field in BUDGET_FIELDS})
         estimated_bytes = _CREATE_METADATA_RESERVE_BYTES + len(criteria_payload.encode("utf-8"))
+        estimated_bytes += len(options_payload.encode("utf-8")) if options_payload is not None else 0
         estimated_bytes += len(zero_budget.encode("utf-8")) * len(normalized_sources)
         for source in normalized_sources:
             estimated_bytes += 2_048 + 4 * (
@@ -764,8 +855,8 @@ class BatchStore:
                     id, name, generation, state, resume_target, criteria_json,
                     criteria_fingerprint, match_mode, computation_version,
                     result_revision, owner, error_json, created_at, updated_at,
-                    deletion_pending
-                ) VALUES (?, ?, 0, 'queued', NULL, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, 0)
+                    deletion_pending, page_result_schema, processing_options_json
+                ) VALUES (?, ?, 0, 'queued', NULL, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, 0, ?, ?)
                 """,
                 (
                     job_id,
@@ -776,6 +867,8 @@ class BatchStore:
                     computation,
                     now,
                     now,
+                    2 if options is not None else 1,
+                    options_payload,
                 ),
             )
             for position, source in enumerate(normalized_sources):
@@ -800,6 +893,11 @@ class BatchStore:
                         zero_budget,
                     ),
                 )
+            if _historical_reference is not None:
+                if options is None:
+                    raise BatchStoreError("historical layout requires receipt job")
+                from .receipt_layout_history import _write_history_pin_connection
+                _write_history_pin_connection(self, connection, job_id, [_historical_reference])
             return self._job_snapshot_connection(connection, self._job_row(connection, job_id))
 
     def get_job(self, job_id: object) -> dict[str, object]:
@@ -1303,6 +1401,7 @@ class BatchStore:
             if job["state"] == "cancel_requested":
                 raise BatchConflict("cancelled page cannot be committed")
             source = self._source_row(connection, identifier, source_identifier)
+            self._validate_page_binding(validated_payload, job, source, page_number)
             page_row = self._page_row(connection, identifier, source_identifier, page_number)
             if (
                 page_row["state"] != "processing"
@@ -1322,9 +1421,9 @@ class BatchStore:
                 """
                 INSERT INTO batch_page_results (
                     job_id, source_id, page, stage, schema, payload_json, sha256, created_at
-                ) VALUES (?, ?, ?, 'page', 1, ?, ?, ?)
+                ) VALUES (?, ?, ?, 'page', ?, ?, ?, ?)
                 """,
-                (identifier, source_identifier, page_number, payload_json, digest, now),
+                (identifier, source_identifier, page_number, validated_payload["schema"], payload_json, digest, now),
             )
             budget_json = canonical_json(validated_budget).decode("utf-8")
             connection.execute(
@@ -1465,22 +1564,69 @@ class BatchStore:
                 "budget": settled_budget,
             }
 
-    def read_page_results(self, job_id: object) -> list[dict[str, object]]:
+    @classmethod
+    def _validate_page_binding(
+        cls, payload: dict[str, object], job: sqlite3.Row, source: sqlite3.Row,
+        page: int, stored_schema: object = _UNSET,
+    ) -> None:
+        criteria, options = cls._job_processing(job)
+        expected = job["page_result_schema"]
+        if payload["schema"] != expected or (stored_schema is not _UNSET and stored_schema != expected):
+            raise BatchStoreError("page codec does not match its task or database row")
+        if payload["page"] != page or source["page_count"] is None or page > source["page_count"]:
+            raise BatchStoreError("page does not match the registered source")
+        if expected == 1:
+            return
+        receipt = payload["receipt_page"]
+        if (receipt["source_sha256"] != source["sha256"]
+                or receipt["processing_mode"] != options["processing_mode"]):
+            raise BatchStoreError("receipt source or processing mode does not match its task")
+        includes = set() if criteria is None else {f"include-{i}" for i in range(len(criteria["include"]))}
+        excludes = set() if criteria is None else {f"exclude-{i}" for i in range(len(criteria["exclude"]))}
+        for candidate in receipt["candidates"]:
+            query_ids = {item["query_id"] for item in candidate["evidence"]}
+            if not query_ids <= includes:
+                raise BatchStoreError("receipt evidence refers to an unknown include query")
+            if criteria is not None and (not query_ids or (criteria["includeMode"] == "all" and query_ids != includes)):
+                raise BatchStoreError("receipt evidence does not satisfy its task include clauses")
+        for diagnostic in payload["diagnostics"]:
+            query = diagnostic.get("query_id")
+            if query is not None and query not in includes | excludes:
+                raise BatchStoreError("receipt diagnostic refers to an unknown query")
+
+    def read_page_results(self, job_id: object, *, page_keys: Sequence[tuple[str, int]] | None = None) -> list[dict[str, object]]:
         identifier = _text(job_id, "job_id", max_bytes=MAX_IDENTIFIER_BYTES)
-        self._job_row(self.connection, identifier)
+        job = self._job_row(self.connection, identifier)
+        parameters: list[object] = [identifier]
+        selected = ""
+        if page_keys is not None:
+            if not isinstance(page_keys, (list, tuple)) or len(page_keys) > MAX_RESULTS_PAGE_ITEMS:
+                raise BatchStoreError("selected pages exceed one result-page budget")
+            if not page_keys:
+                return []
+            for key in page_keys:
+                if not isinstance(key, (list, tuple)) or len(key) != 2:
+                    raise BatchStoreError("selected page key is invalid")
+                page = _integer(key[1], "page", minimum=1)
+                if page > MAX_PAGE_COUNT:
+                    raise BatchStoreError("selected page exceeds the page budget")
+                parameters.extend([_text(key[0], "source_id", max_bytes=MAX_IDENTIFIER_BYTES),
+                                   page])
+            selected = " AND (p.source_id, p.page) IN (" + ",".join("(?,?)" for _key in page_keys) + ")"
         results: list[dict[str, object]] = []
         rows = self.connection.execute(
             """
-            SELECT p.source_id, p.page, p.budget_json, r.payload_json, r.sha256
+            SELECT p.source_id, p.page, p.budget_json, r.payload_json, r.sha256, r.schema
               FROM batch_pages p
               LEFT JOIN batch_page_results r
                 ON r.job_id = p.job_id AND r.source_id = p.source_id
                AND r.page = p.page AND r.stage = p.stage
               JOIN batch_sources s ON s.job_id = p.job_id AND s.source_id = p.source_id
              WHERE p.job_id = ? AND p.stage = 'page' AND p.state = 'succeeded'
-             ORDER BY s.position ASC, p.page ASC
+            """ + selected + """
+              ORDER BY s.position ASC, p.page ASC
             """,
-            (identifier,),
+            parameters,
         ).fetchall()
         for row in rows:
             if row["payload_json"] is None:
@@ -1494,6 +1640,8 @@ class BatchStore:
                 raise BatchStoreError("stored page result is invalid") from exc
             if payload["page"] != row["page"]:
                 raise BatchStoreError("stored page result page does not match its row")
+            self._validate_page_binding(payload, job, self._source_row(self.connection, identifier, row["source_id"]),
+                                        row["page"], row["schema"])
             if hashlib.sha256(encoded).hexdigest() != row["sha256"]:
                 raise BatchStoreError("stored page result checksum is invalid")
             results.append({
@@ -1513,10 +1661,17 @@ class BatchStore:
             value = clone_json(dict(context), max_bytes=MAX_JSON_BYTES)
         except BatchModelError as exc:
             raise BatchStoreError(str(exc)) from None
-        if not isinstance(value, dict) or set(value) != {
-            "version", "sources", "criteria_fingerprint", "computation_version"
-        } or type(value.get("version")) is not int or value["version"] != 2:
+        fields = {"version", "sources", "criteria_fingerprint", "computation_version"}
+        receipt = job["page_result_schema"] == 2
+        if receipt:
+            fields |= {"processing_options", "match_mode"}
+        if not isinstance(value, dict) or set(value) != fields or type(value.get("version")) is not int or value["version"] != (3 if receipt else 2):
             raise BatchStoreError("snapshot context version is invalid")
+        if receipt:
+            _, options = BatchStore._job_processing(job)
+            if (canonical_json(value["processing_options"]) != canonical_json(options)
+                    or value["match_mode"] != job["match_mode"]):
+                raise BatchStoreError("snapshot processing options do not match the job")
         raw_sources = value.get("sources")
         if not isinstance(raw_sources, list) or len(raw_sources) != len(sources):
             raise BatchStoreError("snapshot context source set is incomplete")
@@ -1862,9 +2017,10 @@ class BatchStore:
             yield index, detached, payload
 
     def _assert_complete_pages(self, connection: sqlite3.Connection, job_id: str) -> None:
+        job = self._job_row(connection, job_id)
         rows = connection.execute(
             """
-            SELECT p.source_id, p.page, p.state, r.payload_json, r.sha256
+            SELECT p.source_id, p.page, p.state, r.payload_json, r.sha256, r.schema
               FROM batch_pages p
               LEFT JOIN batch_page_results r
                 ON r.job_id = p.job_id AND r.source_id = p.source_id
@@ -1882,11 +2038,43 @@ class BatchStore:
                 parsed = validate_page_result(json.loads(row["payload_json"]))
                 if parsed["page"] != row["page"]:
                     raise BatchModelError("stored page result page does not match its row")
+                self._validate_page_binding(parsed, job, self._source_row(connection, job_id, row["source_id"]),
+                                            row["page"], row["schema"])
                 digest = hashlib.sha256(canonical_json(parsed, max_bytes=MAX_PAGE_RESULT_BYTES)).hexdigest()
             except (json.JSONDecodeError, BatchModelError) as exc:
                 raise BatchConflict("stored page result is invalid") from exc
             if digest != row["sha256"]:
                 raise BatchConflict("stored page result checksum is invalid")
+
+    def _receipt_snapshot(self, job: sqlite3.Row, sources: Sequence[sqlite3.Row]) -> dict[str, object]:
+        """Reconstruct from durable pages while the caller holds its transaction."""
+        from .receipt_snapshot import ReceiptSnapshotError, assemble_receipt_results
+        _, options = self._job_processing(job)
+        try:
+            return assemble_receipt_results(
+                job["id"], [dict(source) for source in sources], options,
+                job["match_mode"], job["computation_version"], self.read_page_results(job["id"]),
+            )
+        except ReceiptSnapshotError as exc:
+            raise BatchStoreError("durable receipt snapshot is invalid") from exc
+
+    @staticmethod
+    def _receipt_items(items: object, originals: object, expected: dict[str, object]):
+        """Compare each proposed item to its computation, not to caller signatures."""
+        expected_items = expected["items"]
+        if (not isinstance(items, list) or not isinstance(originals, list)
+                or len(items) != len(expected_items) or len(originals) != len(expected_items)):
+            raise BatchStoreError("receipt snapshot items are incomplete")
+        for position, (item, original, reference) in enumerate(zip(items, originals, expected_items, strict=True)):
+            try:
+                payload = canonical_json(item, max_bytes=MAX_PAGE_RESULT_BYTES)
+                if (payload != canonical_json(reference, max_bytes=MAX_PAGE_RESULT_BYTES)
+                        or canonical_json(original, max_bytes=MAX_PAGE_RESULT_BYTES)
+                        != canonical_json(reference["original"], max_bytes=MAX_PAGE_RESULT_BYTES)):
+                    raise BatchStoreError("receipt snapshot differs from durable computation")
+            except BatchModelError as exc:
+                raise BatchStoreError("receipt snapshot item is invalid") from exc
+            yield position, reference, payload
 
     def publish_snapshot(
         self,
@@ -1917,7 +2105,15 @@ class BatchStore:
                 raise BatchConflict("all sources require final generation verification")
             self._assert_complete_pages(connection, identifier)
             validated_context = self._validate_context(context, sources, job)
-            validated_originals = self._validate_originals(originals, sources)
+            if job["page_result_schema"] == 2:
+                expected = self._receipt_snapshot(job, sources)
+                if canonical_json(validated_context) != canonical_json(expected["context"]):
+                    raise BatchStoreError("receipt snapshot context differs from durable computation")
+                validated_originals = expected["originals"]
+                validated_items = self._receipt_items(items, originals, expected)
+            else:
+                validated_originals = self._validate_originals(originals, sources)
+                validated_items = self._validate_snapshot_items(items, validated_originals, sources)
             source_summary = [
                 {
                     "source_id": source["source_id"],
@@ -1956,11 +2152,12 @@ class BatchStore:
                     job_id, result_revision, schema, source_summary_json,
                     context_json, originals_count, originals_digest,
                     source_count, item_count, created_at
-                ) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     identifier,
                     revision,
+                    job["page_result_schema"],
                     source_summary_json,
                     context_json,
                     len(validated_originals),
@@ -1972,7 +2169,7 @@ class BatchStore:
             )
             item_bytes = 0
             item_count = 0
-            for position, item, payload in self._validate_snapshot_items(items, validated_originals, sources):
+            for position, item, payload in validated_items:
                 item_count += 1
                 item_bytes += len(payload)
                 if base_usage + static_bytes + item_bytes + item_count * 1_024 > self.quota_bytes:
@@ -2030,17 +2227,27 @@ class BatchStore:
         if job["state"] not in {"ready_for_review", "archived"} or job["result_revision"] != revision or job["deletion_pending"]:
             raise BatchConflict("result revision is stale or unpublished")
         snapshot = self.connection.execute(
-            "SELECT item_count FROM batch_snapshots WHERE job_id = ? AND result_revision = ?",
+            "SELECT item_count, schema, context_json FROM batch_snapshots WHERE job_id = ? AND result_revision = ?",
             (identifier, revision),
         ).fetchone()
         if snapshot is None:
             raise BatchStoreError("published snapshot is missing")
+        if snapshot["schema"] != job["page_result_schema"]:
+            raise BatchStoreError("published snapshot codec does not match its job")
+        receipt = snapshot["schema"] == 2
+        codec_fields = {"schema": 2} if receipt else {}
+        if receipt:
+            sources = list(self.connection.execute(
+                "SELECT * FROM batch_sources WHERE job_id=? ORDER BY position", (identifier,),
+            ))
+            _context, published_paths = self._receipt_context(snapshot["context_json"], sources, job)
+            source_by_key = {source["source_key"]: source for source in sources}
         total = int(snapshot["item_count"])
         if start > total:
             raise _error("offset", "is beyond the result set")
         rows = self.connection.execute(
             """
-            SELECT position, payload_json FROM batch_snapshot_items
+            SELECT position, item_id, source_key, payload_json FROM batch_snapshot_items
              WHERE job_id = ? AND result_revision = ?
              ORDER BY position ASC LIMIT ? OFFSET ?
             """,
@@ -2058,9 +2265,12 @@ class BatchStore:
             parsed = _decode_json(row["payload_json"], "snapshot.item")
             if not isinstance(parsed, dict):
                 raise BatchStoreError("stored snapshot item is invalid")
+            if receipt:
+                parsed = self._checked_receipt_item(parsed, row, job, source_by_key, published_paths)
             encoded = canonical_json(parsed, max_bytes=MAX_PAGE_RESULT_BYTES)
             count = len(items) + 1
             envelope = {
+                **codec_fields,
                 "result_revision": revision,
                 "offset": start,
                 "limit": page_size,
@@ -2080,6 +2290,7 @@ class BatchStore:
             items.append(parsed)
         next_offset = start + len(items) if start + len(items) < total else None
         return {
+            **codec_fields,
             "result_revision": revision,
             "offset": start,
             "limit": page_size,
@@ -2087,6 +2298,40 @@ class BatchStore:
             "next_offset": next_offset,
             "items": items,
         }
+
+    @staticmethod
+    def _receipt_context(encoded: object, sources: Sequence[sqlite3.Row], job: sqlite3.Row):
+        context = _decode_json(encoded, "snapshot.context")
+        if (not isinstance(context, dict) or not isinstance(context.get("sources"), list)
+                or len(context["sources"]) != len(sources)):
+            raise BatchStoreError("receipt snapshot sources are incomplete")
+        paths = {}
+        for declared, source in zip(context["sources"], sources, strict=True):
+            if not isinstance(declared, dict) or set(declared) != {"source_key", "source_path", "source_sha256"}:
+                raise BatchStoreError("receipt snapshot source is invalid")
+            paths[source["source_key"]] = _text(declared["source_path"], "source_path", max_bytes=MAX_PATH_BYTES)
+            declared["source_path"] = source["access_path"]
+        return BatchStore._validate_context(context, sources, job), paths
+
+    def _checked_receipt_item(self, item: object, row: sqlite3.Row, job: sqlite3.Row,
+                              sources: Mapping[str, sqlite3.Row], published_paths: Mapping[str, str]) -> dict[str, object]:
+        from .receipt_snapshot import ReceiptSnapshotError, validate_receipt_snapshot_item
+        try:
+            checked = validate_receipt_snapshot_item(item)
+        except ReceiptSnapshotError as exc:
+            raise BatchStoreError("stored receipt snapshot item is invalid") from exc
+        segment = checked["segment"]
+        source = sources.get(segment["source_key"])
+        if source is None:
+            raise BatchStoreError("receipt snapshot refers to an unknown source")
+        expected_id = hashlib.sha256(canonical_json([job["id"], source["source_id"], segment["instance_id"]])).hexdigest()
+        if (row["item_id"] != segment["id"] or row["source_key"] != segment["source_key"]
+                or segment["id"] != expected_id or segment["source_sha256"] != source["sha256"]
+                or segment["source_path"] != published_paths[source["source_key"]]
+                or source["page_count"] is None or segment["source_page"] > source["page_count"]):
+            raise BatchStoreError("receipt snapshot item source binding is invalid")
+        segment["source_path"] = source["access_path"]
+        return checked
 
     def review_snapshot(self, job_id: object, result_revision: object) -> dict[str, object]:
         """Read the authoritative original manifest, never one supplied by UI.
@@ -2104,9 +2349,31 @@ class BatchStore:
             header = connection.execute(
                 "SELECT * FROM batch_snapshots WHERE job_id = ? AND result_revision = ?", (identifier, revision),
             ).fetchone()
-            if header is None or header["schema"] != 1 or not 0 <= header["item_count"] <= 50_000:
+            if header is None or header["schema"] != job["page_result_schema"] or not 0 <= header["item_count"] <= 50_000:
                 raise BatchStoreError("review snapshot metadata is invalid")
+            receipt = header["schema"] == 2
+            cache_key = None
+            if receipt:
+                # All inputs to reconstruction and the public job summary are
+                # hashed under this same read transaction. Result revisions
+                # alone would miss corruption or an in-place review update.
+                fingerprint = sqlite_content_fingerprint(connection, [
+                    ("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name", ()),
+                    ("SELECT * FROM batch_jobs WHERE id=?", (identifier,)),
+                    ("SELECT * FROM batch_sources WHERE job_id=? ORDER BY position", (identifier,)),
+                    ("SELECT * FROM batch_pages WHERE job_id=? ORDER BY source_id,page,stage", (identifier,)),
+                    ("SELECT * FROM batch_page_results WHERE job_id=? ORDER BY source_id,page,stage", (identifier,)),
+                    ("SELECT * FROM batch_snapshots WHERE job_id=? AND result_revision=?", (identifier, revision)),
+                    ("SELECT * FROM batch_snapshot_items WHERE job_id=? AND result_revision=? ORDER BY position", (identifier, revision)),
+                ])
+                cache_key = (self.path, identifier, revision, fingerprint)
+                cached = _REVIEW_SNAPSHOT_CACHE.get(cache_key)
+                if cached is not None:
+                    return cached
             sources = list(connection.execute("SELECT * FROM batch_sources WHERE job_id = ? ORDER BY position", (identifier,)))
+            if receipt:
+                _context, published_paths = self._receipt_context(header["context_json"], sources, job)
+                source_by_key = {source["source_key"]: source for source in sources}
             context = _decode_json(header["context_json"], "snapshot.context")
             if not isinstance(context, dict) or not isinstance(context.get("sources"), list) or len(context["sources"]) != len(sources):
                 raise BatchStoreError("review snapshot sources are incomplete")
@@ -2118,10 +2385,13 @@ class BatchStore:
                 # second relocation must not revive or try reading that path.
                 declared["source_path"] = current["access_path"]
             context = self._validate_context(context, sources, job)
+            expected = self._receipt_snapshot(job, sources) if receipt else None
+            if receipt and canonical_json(context) != canonical_json(expected["context"]):
+                raise BatchStoreError("stored receipt context differs from durable computation")
             originals = []
             digest = hashlib.sha256()
             for position, row in enumerate(connection.execute(
-                "SELECT position, payload_json FROM batch_snapshot_items WHERE job_id = ? AND result_revision = ? ORDER BY position",
+                "SELECT position, item_id, source_key, payload_json FROM batch_snapshot_items WHERE job_id = ? AND result_revision = ? ORDER BY position",
                 (identifier, revision),
             )):
                 if position >= header["item_count"] or row["position"] != position:
@@ -2129,13 +2399,28 @@ class BatchStore:
                 item = _decode_json(row["payload_json"], "snapshot.item")
                 if not isinstance(item, dict) or not isinstance(item.get("original"), dict):
                     raise BatchStoreError("review snapshot original is missing")
+                if receipt:
+                    item = self._checked_receipt_item(item, row, job, source_by_key, published_paths)
+                    if position >= len(expected["items"]):
+                        raise BatchStoreError("stored receipt count differs from durable computation")
+                    # Access paths may be relocated after publication. Only
+                    # the logical source SHA/key participates in the manifest.
+                    reference = expected["items"][position]
+                    item["segment"]["source_path"] = reference["segment"]["source_path"]
+                    if canonical_json(item) != canonical_json(reference):
+                        raise BatchStoreError("stored receipt differs from durable computation")
                 original = item["original"]
                 digest.update(canonical_json(original, max_bytes=MAX_PAGE_RESULT_BYTES))
                 originals.append(original)
             if len(originals) != header["item_count"] or len(originals) != header["originals_count"] or digest.hexdigest() != header["originals_digest"]:
                 raise BatchStoreError("review snapshot original digest is invalid")
-            return {"job": self._job_snapshot_connection(connection, job), "context": context,
-                    "originals": self._validate_originals(originals, sources)}
+            if receipt and len(originals) != len(expected["originals"]):
+                raise BatchStoreError("stored receipt manifest is incomplete")
+            result = {"job": self._job_snapshot_connection(connection, job), "context": context,
+                      "originals": originals if receipt else self._validate_originals(originals, sources)}
+            if cache_key is not None:
+                _REVIEW_SNAPSHOT_CACHE.put(cache_key, result)
+            return result
 
     @contextmanager
     def hold_review_binding(self, expected_job: dict[str, object]):
