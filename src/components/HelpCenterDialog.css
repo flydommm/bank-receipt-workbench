@@ -526,6 +526,143 @@
   line-height: 1.6;
 }
 
+.help-center-guide-detail {
+  display: grid;
+  gap: 13px;
+  border: 1px solid var(--help-line);
+  border-radius: 11px;
+  padding: 15px;
+  background: #fbfcfd;
+}
+
+.help-center-guide-detail-heading {
+  display: grid;
+  gap: 2px;
+}
+
+.help-center-guide-detail-heading h4 {
+  margin: 4px 0 0;
+  color: var(--help-ink);
+  font-size: 15px;
+  line-height: 1.35;
+}
+
+.help-center-guide-detail-heading p {
+  margin: 5px 0 0;
+  color: var(--help-muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.help-center-fine-tune-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.help-center-fine-tune-list li {
+  display: grid;
+  grid-template-columns: 27px minmax(0, 1fr);
+  gap: 9px;
+  align-items: start;
+  border-top: 1px solid #e6edf1;
+  padding-top: 9px;
+}
+
+.help-center-fine-tune-list li:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.help-center-fine-tune-number {
+  display: grid;
+  width: 25px;
+  height: 25px;
+  place-items: center;
+  border-radius: 7px;
+  background: #eaf6f2;
+  color: var(--help-moss-dark);
+  font-size: 10px;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+
+.help-center-fine-tune-list h5,
+.help-center-action-group h5 {
+  margin: 0;
+  color: var(--help-ink);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.help-center-fine-tune-list p,
+.help-center-action-group > p {
+  margin: 4px 0 0;
+  color: var(--help-muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.help-center-action-group-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.help-center-action-group {
+  min-width: 0;
+  border: 1px solid #e0e9ee;
+  border-radius: 9px;
+  padding: 11px;
+  background: #fff;
+}
+
+.help-center-action-group:nth-child(1) {
+  border-top: 3px solid var(--help-moss);
+}
+
+.help-center-action-group:nth-child(2) {
+  border-top: 3px solid var(--help-gold);
+}
+
+.help-center-action-group:nth-child(3) {
+  border-top: 3px solid var(--help-navy);
+}
+
+.help-center-action-group ul,
+.help-center-check-list {
+  display: grid;
+  gap: 7px;
+  margin: 10px 0 0;
+  padding-left: 16px;
+  color: var(--help-muted);
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.help-center-action-group li {
+  padding-left: 1px;
+}
+
+.help-center-action-group li strong {
+  display: block;
+  color: var(--help-ink);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.help-center-action-group li span {
+  display: block;
+  margin-top: 2px;
+}
+
+.help-center-check-list {
+  margin-top: 7px;
+  padding-left: 17px;
+}
+
 .help-center-callout {
   border: 1px solid #ead9b9;
   border-radius: 10px;
@@ -650,6 +787,7 @@
 
 .help-center-feedback-preview-heading {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
@@ -705,6 +843,71 @@
 
 .help-center-feedback-status.is-error {
   color: #9a4b45;
+}
+
+.help-center-feedback-channels {
+  display: grid;
+  min-width: 0;
+  gap: 12px;
+  border-top: 1px solid var(--help-line);
+  padding-top: 20px;
+}
+
+.help-center-feedback-channels-heading h4 {
+  margin: 0;
+  color: var(--help-ink);
+  font-size: 15px;
+}
+
+.help-center-feedback-channels-heading p,
+.help-center-feedback-channel p {
+  margin: 7px 0 0;
+  color: var(--help-muted);
+  font-size: 11px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.help-center-feedback-channel-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.help-center-feedback-channel {
+  min-width: 0;
+  border: 1px solid var(--help-line);
+  border-radius: 11px;
+  padding: 14px;
+  background: #f8fafb;
+}
+
+.help-center-feedback-channel.is-public {
+  grid-column: 1 / -1;
+}
+
+.help-center-feedback-channel h5 {
+  margin: 0;
+  color: var(--help-ink);
+  font-size: 13px;
+}
+
+.help-center-feedback-channel .help-center-feedback-contact {
+  color: var(--help-moss-dark);
+  font-size: 12px;
+  font-weight: 700;
+  user-select: text;
+}
+
+.help-center-feedback-channel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.help-center-feedback-channels .help-center-feedback-status {
+  overflow-wrap: anywhere;
 }
 
 .help-center-release-list {
@@ -813,7 +1016,8 @@
   }
 
   .help-center-feature-grid,
-  .help-center-feedback-layout {
+  .help-center-feedback-layout,
+  .help-center-action-group-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 }
@@ -886,7 +1090,8 @@
     font-size: 19px;
   }
 
-  .help-center-two-column {
+  .help-center-two-column,
+  .help-center-feedback-channel-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 }

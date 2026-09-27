@@ -16,6 +16,12 @@ def main() -> None:
     parser.add_argument('--manifest', type=Path, required=True)
     parser.add_argument('--lock', type=Path, required=True)
     args = parser.parse_args()
+    manifest = json.loads(args.manifest.read_text(encoding='utf-8'))
+    native_runtime = manifest['msvc_runtime']
+    for name, expected_hash in native_runtime['files'].items():
+        actual_hash = hashlib.sha256((args.output.parent / name).read_bytes()).hexdigest()
+        if actual_hash != expected_hash:
+            raise ValueError(f'Bundled Visual C++ runtime checksum mismatch: {name}')
     packages = []
     for dist in importlib.metadata.distributions():
         license_files = [str(p).replace('\\', '/') for p in (dist.files or [])
@@ -30,7 +36,8 @@ def main() -> None:
         })
     data = {
         'edition': args.edition, 'python_version': platform.python_version(),
-        'python_distribution': json.loads(args.manifest.read_text(encoding='utf-8'))['python'],
+        'python_distribution': manifest['python'],
+        'msvc_runtime': native_runtime,
         'dependency_lock': args.lock.name,
         'dependency_lock_sha256': hashlib.sha256(args.lock.read_bytes()).hexdigest(),
         'packages': sorted(packages, key=lambda p: p['name'].lower()),

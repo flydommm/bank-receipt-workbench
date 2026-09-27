@@ -9,6 +9,9 @@ import {
 } from 'react';
 
 import {
+  GUIDE_FINE_TUNE_STEPS,
+  GUIDE_REVIEW_ACTION_GROUPS,
+  GUIDE_REVIEW_CHECKS,
   GUIDE_STEPS,
   HELP_TABS,
   OVERVIEW_FEATURES,
@@ -30,6 +33,13 @@ import type {
   OcrHealthCode,
 } from './localEngineAdapter';
 import { copyFeedbackReport, saveFeedbackReport } from '../services/localFeedback';
+import {
+  copyFeedbackContact,
+  openFeedbackChannel,
+  type FeedbackChannel,
+  type FeedbackContact,
+} from '../services/feedbackChannels';
+import feedbackChannels from '../domain/feedbackChannels.json';
 import './HelpCenterDialog.css';
 
 export type HelpCenterOcrState = {
@@ -44,6 +54,8 @@ export type HelpCenterOcrCacheClearResult = OcrCacheClearResult;
 export type HelpCenterDialogProps = {
   open: boolean;
   onClose: () => void;
+  /** Open the guide at a specific section when the caller is explaining an action. */
+  focusSection?: 'fine-tune';
   /** Optional legacy props retained for other HelpCenterDialog callers. */
   engineStatus?: 'checking' | 'ready' | 'unavailable';
   ocrReady?: boolean | null;
@@ -157,6 +169,7 @@ function isOcrCacheClearResult(value: unknown): value is HelpCenterOcrCacheClear
 export function HelpCenterDialog({
   open,
   onClose,
+  focusSection,
   engineStatus = 'checking',
   ocrReady = null,
   ocrState,
@@ -168,12 +181,16 @@ export function HelpCenterDialog({
 }: HelpCenterDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const initialFocusRef = useRef<HTMLButtonElement>(null);
+  const fineTuneTitleRef = useRef<HTMLHeadingElement>(null);
   const openerRef = useRef<HTMLElement | null>(null);
   const wasOpenRef = useRef(false);
+  const appliedFocusSectionRef = useRef<HelpCenterDialogProps['focusSection']>(undefined);
   const [activeTab, setActiveTab] = useState<HelpTabId>('overview');
   const [feedback, setFeedback] = useState<FeedbackFormState>(INITIAL_FEEDBACK);
   const [previewRequested, setPreviewRequested] = useState(false);
-  const [feedbackAction, setFeedbackAction] = useState<'idle' | 'copying' | 'saving'>('idle');
+  const [feedbackAction, setFeedbackAction] = useState<'idle' | 'copying' | 'saving' | 'opening' | 'contact'>('idle');
+  const [feedbackActionArea, setFeedbackActionArea] = useState<'preview' | 'channels'>('preview');
+  const feedbackBusyRef = useRef(false);
   const [ocrCheckBusy, setOcrCheckBusy] = useState(false);
   const ocrCheckBusyRef = useRef(false);
   const ocrCheckMountedRef = useRef(true);
@@ -306,6 +323,31 @@ export function HelpCenterDialog({
     const first = initialFocusRef.current ?? dialogRef.current;
     first?.focus();
   }, [open]);
+
+  useEffect(() => {
+    if (!open) {
+      appliedFocusSectionRef.current = undefined;
+      return;
+    }
+    if (focusSection !== 'fine-tune') {
+      appliedFocusSectionRef.current = undefined;
+      return;
+    }
+    if (appliedFocusSectionRef.current === focusSection) return;
+    appliedFocusSectionRef.current = focusSection;
+    setActiveTab('guide');
+  }, [focusSection, open]);
+
+  useEffect(() => {
+    if (!open || focusSection !== 'fine-tune' || activeTab !== 'guide') return;
+    const title = fineTuneTitleRef.current;
+    if (!title || typeof title.scrollIntoView !== 'function') return;
+
+    const frame = requestAnimationFrame(() => {
+      title.scrollIntoView({ block: 'start', behavior: 'auto' });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [activeTab, focusSection, open]);
 
   function closeDialog(): void {
     onClose();
@@ -456,8 +498,10 @@ export function HelpCenterDialog({
   }
 
   async function copyFeedback(): Promise<void> {
-    if (!previewRequested || feedbackError || !feedbackPreview || feedbackAction !== 'idle') return;
+    if (!previewRequested || feedbackError || !feedbackPreview || feedbackBusyRef.current) return;
+    feedbackBusyRef.current = true;
     setFeedbackAction('copying');
+    setFeedbackActionArea('preview');
     setFeedbackActionMessage(null);
     try {
       await copyFeedbackReport(feedbackPreview);
@@ -468,13 +512,16 @@ export function HelpCenterDialog({
         text: copyError instanceof Error ? copyError.message : '无法自动复制反馈内容，请在预览文本框中手动复制。',
       });
     } finally {
+      feedbackBusyRef.current = false;
       setFeedbackAction('idle');
     }
   }
 
   async function saveFeedback(): Promise<void> {
-    if (!previewRequested || feedbackError || !feedbackPreview || feedbackAction !== 'idle') return;
+    if (!previewRequested || feedbackError || !feedbackPreview || feedbackBusyRef.current) return;
+    feedbackBusyRef.current = true;
     setFeedbackAction('saving');
+    setFeedbackActionArea('preview');
     setFeedbackActionMessage(null);
     try {
       const result = await saveFeedbackReport(feedbackPreview);
@@ -489,6 +536,61 @@ export function HelpCenterDialog({
         text: saveError instanceof Error ? saveError.message : '保存反馈失败，请重试。',
       });
     } finally {
+      feedbackBusyRef.current = false;
+      setFeedbackAction('idle');
+    }
+  }
+
+  async function contactMaintainer(channel: FeedbackChannel): Promise<void> {
+    if (!previewRequested || feedbackError || !feedbackPreview || feedbackBusyRef.current) return;
+    feedbackBusyRef.current = true;
+    setFeedbackAction('opening');
+    setFeedbackActionArea('channels');
+    setFeedbackActionMessage(null);
+    let copied = false;
+    try {
+      await copyFeedbackReport(feedbackPreview);
+      copied = true;
+      await openFeedbackChannel(channel);
+      setFeedbackActionMessage({
+        kind: 'status',
+        text: channel === 'email'
+          ? `反馈已复制，已请求打开邮件客户端。请粘贴正文并发送至 ${feedbackChannels.email}，我们会回复你的来信。当前尚未发送。`
+          : '反馈已复制，已请求打开 GitHub。请登录后填写标题、粘贴正文并提交，在该 Issue 查看回复。当前尚未提交。',
+      });
+    } catch {
+      setFeedbackActionMessage({
+        kind: 'error',
+        text: copied
+          ? (channel === 'email'
+            ? `反馈已复制，但未能打开邮件客户端。请在常用邮箱中新建邮件，收件人填写 ${feedbackChannels.email}，粘贴正文后发送。`
+            : `反馈已复制，但未能打开 GitHub。请在浏览器中访问 ${feedbackChannels.githubUrl}，粘贴正文后提交。`)
+          : '未能复制反馈，尚未打开反馈入口。请手动复制上方预览文本，或保存为 TXT，再通过下方邮箱、微信或 GitHub 联系我们。',
+      });
+    } finally {
+      feedbackBusyRef.current = false;
+      setFeedbackAction('idle');
+    }
+  }
+
+  async function copyContact(contact: FeedbackContact): Promise<void> {
+    if (feedbackBusyRef.current) return;
+    feedbackBusyRef.current = true;
+    setFeedbackAction('contact');
+    setFeedbackActionArea('channels');
+    setFeedbackActionMessage(null);
+    try {
+      await copyFeedbackContact(contact);
+      setFeedbackActionMessage({
+        kind: 'status',
+        text: contact === 'email'
+          ? '已复制邮箱地址。请在常用邮箱中新建邮件并粘贴收件人，再复制反馈正文发送。'
+          : '已复制微信号。请在微信中搜索并添加，注明“银行回单工作台反馈”，通过好友验证后发送反馈；我们会在微信会话中回复。',
+      });
+    } catch {
+      setFeedbackActionMessage({ kind: 'error', text: '无法自动复制联系方式，请手动选择并复制下方显示的邮箱或微信号。' });
+    } finally {
+      feedbackBusyRef.current = false;
       setFeedbackAction('idle');
     }
   }
@@ -537,7 +639,7 @@ export function HelpCenterDialog({
         <div className="help-center-intro compact">
           <span className="help-center-section-kicker">FROM SOURCE TO RESULT</span>
           <h3>六步完成一次回单查找。</h3>
-          <p>建议先在少量脱敏样本上熟悉流程，再处理较大的批量任务。</p>
+          <p>建议先在少量脱敏样本上熟悉流程，再处理较大的批量任务。当前流程是“导入预览 → 分析处理 → 导出结果”：导入后可在分析前查看原页总览；分析完成后在片段/原页总览中筛选并处理；所有未排除的待复核清零后，进入导出设置并选择目录直接导出。</p>
         </div>
         <ol className="help-center-guide-list">
           {GUIDE_STEPS.map((step) => (
@@ -550,22 +652,94 @@ export function HelpCenterDialog({
             </li>
           ))}
         </ol>
-          <aside className="help-center-callout" role="note">
-            <strong>常见问题：OCR 和页数限制</strong>
-            <p>基础版只处理文字型 PDF；扫描件请安装 OCR 版，无需配置全局 Python。首次识别可能联网下载公开模型。“OCR 已安装，待验证”只代表运行库可以导入；点击“检测 OCR”后才会确认实际识别能力。没有文字层的扫描 PDF 才会实际进入 OCR 流程；默认每份 PDF 最多 5,000 页。</p>
+        <section className="help-center-guide-detail" aria-labelledby="help-guide-fine-tune-title">
+          <div className="help-center-guide-detail-heading">
+            <span className="help-center-section-kicker">FINE-TUNE WORKFLOW</span>
+            <h4 ref={fineTuneTitleRef} id="help-guide-fine-tune-title">微调与确认：预览本轮后再保存</h4>
+            <p>需要修正边界或统一打印尺寸时，单选片段或打开详情后点击“调整所选边界”；自动候选和已确认片段也可以微调。应用会按同出具银行、同凭证类型、同实际版式的页面确定本轮范围，保留当前样本；调整整页栏位后点击“确认并预览本轮”，逐项勾选风险，确认没有阻断问题后“保存本轮 N 处”。可选保存版式模板和名称，完成后点击“完成微调，返回结果”。</p>
+          </div>
+          <ol className="help-center-fine-tune-list">
+            {GUIDE_FINE_TUNE_STEPS.map((step) => (
+              <li key={step.number}>
+                <span className="help-center-fine-tune-number" aria-hidden="true">{step.number}</span>
+                <div>
+                  <h5>{step.title}</h5>
+                  <p>{step.body}</p>
+                </div>
+              </li>
+            ))}
+          </ol>
+          <aside className="help-center-callout is-neutral" role="note" aria-labelledby="help-guide-stages-title">
+            <strong id="help-guide-stages-title">审核区会显示的阶段状态</strong>
+            <p>微调是分析处理阶段中的可选步骤。边界正确时继续查看和处理；所有未排除的待复核清零后才显示“导出回单”。打开版式调整时会保留进入前选中的样本，并按本轮实际范围处理，不跳到默认栏位。</p>
+            <ul className="help-center-check-list">
+              <li><strong>第 1 轮 · 调整中</strong>：编辑整页栏位，修改只在当前轮保留。</li>
+              <li><strong>确认并预览本轮</strong>：查看本轮实际处数、变化和风险；风险逐项勾选，存在阻断问题时不能保存。</li>
+              <li><strong>本轮已保存</strong>：结果已写入并核实，可以点击“完成微调，返回结果”或继续所选位置。</li>
+              <li><strong>写入结果不明确</strong>：只点击“核实并完成保存”或“核实并完成撤销”读取权威结果，不用取消或重复操作猜测。</li>
+            </ul>
+            <p>预览尚未保存时需要修改，点击“返回调整”；放弃当前预览时取消本轮。已保存轮次需要回退时点击“撤销本轮”，系统会恢复本轮调整前的边界和复核状态。保存模板是可选的，模板只供同银行、同凭证类型、同实际版式的新文件参考。</p>
           </aside>
+        </section>
+
+        <section className="help-center-guide-detail" aria-labelledby="help-guide-actions-title">
+          <div className="help-center-guide-detail-heading">
+            <span className="help-center-section-kicker">REVIEW ACTIONS</span>
+            <h4 id="help-guide-actions-title">审核按钮怎么选</h4>
+            <p>按“片段/原页总览 → 筛选与选择 → 单项处理或批量处理 → 必要时调整所选边界 → 确认并预览本轮 → 风险勾选 → 保存本轮 → 完成微调，返回结果”的顺序操作。待复核清零后使用“导出回单”，在“导出设置”填写名称、选择导出方式和可选索引，再选择目录直接导出；失败时可重试同次导出。</p>
+          </div>
+          <div className="help-center-action-group-grid">
+            {GUIDE_REVIEW_ACTION_GROUPS.map((group) => (
+              <article className="help-center-action-group" key={group.title}>
+                <h5>{group.title}</h5>
+                <p>{group.description}</p>
+                <ul>
+                  {group.actions.map((action) => (
+                    <li key={action.label}>
+                      <strong>{action.label}</strong>
+                      <span>{action.description}</span>
+                    </li>
+                  ))}
+                </ul>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <aside className="help-center-callout" role="note">
+          <strong>复核时快速检查</strong>
+          <ul className="help-center-check-list">
+            {GUIDE_REVIEW_CHECKS.map((check) => <li key={check}>{check}</li>)}
+          </ul>
+        </aside>
+
+        <aside className="help-center-callout" role="note">
+          <strong>常见问题：OCR 和页数限制</strong>
+          <p>基础版只处理文字型 PDF；扫描件请安装 OCR 版，无需配置全局 Python。首次识别可能联网下载公开模型。“OCR 已安装，待验证”只代表运行库可以导入；点击“检测 OCR”后才会确认实际识别能力。没有文字层的扫描 PDF 才会实际进入 OCR 流程；默认每份 PDF 最多 5,000 页。</p>
+        </aside>
       </div>
     );
   }
 
   function renderFeedback() {
     const descriptionMissing = feedback.description.trim().length === 0;
+    const actionMessage = (
+      <div aria-live="polite" aria-atomic="true">
+        {feedbackAction !== 'idle' && <p className="help-center-feedback-status">正在处理，请稍候…</p>}
+        {feedbackActionMessage && (
+          <p className={`help-center-feedback-status${feedbackActionMessage.kind === 'error' ? ' is-error' : ''}`} role={feedbackActionMessage.kind === 'error' ? 'alert' : 'status'}>
+            {feedbackActionMessage.text}
+          </p>
+        )}
+      </div>
+    );
     return (
       <div className="help-center-content-section help-center-feedback-section">
         <div className="help-center-intro compact">
-          <span className="help-center-section-kicker">LOCAL FEEDBACK DRAFT</span>
+          <span className="help-center-section-kicker">FEEDBACK & CONTACT</span>
           <h3>把遇到的问题整理成一段可复制的反馈。</h3>
-          <p>反馈只在当前设备上整理，不会自动发送。草稿在本次运行中保留，退出前请复制或保存。</p>
+          <p>先生成并检查反馈预览，再选择下方渠道联系维护者。复制或打开入口不代表已发送，请在邮箱、微信或 GitHub 中完成发送，并在原渠道查看回复。</p>
+          <p>草稿只在本次运行中保留，退出前请复制或保存。</p>
         </div>
 
         <div className="help-center-feedback-layout">
@@ -673,13 +847,56 @@ export function HelpCenterDialog({
             />
             <p className="help-center-feedback-privacy">{PRIVACY_NOTE}</p>
             {previewRequested && feedbackError && <p className="help-center-feedback-status is-error" role="alert">{feedbackError}</p>}
-            {feedbackActionMessage && (
-              <p className={`help-center-feedback-status${feedbackActionMessage.kind === 'error' ? ' is-error' : ''}`} role={feedbackActionMessage.kind === 'error' ? 'alert' : 'status'}>
-                {feedbackActionMessage.text}
-              </p>
-            )}
+            {feedbackActionArea === 'preview' && actionMessage}
           </section>
         </div>
+
+        <section className="help-center-feedback-channels" aria-labelledby="help-feedback-channels-title" aria-busy={feedbackAction !== 'idle'}>
+          <div className="help-center-feedback-channels-heading">
+            <h4 id="help-feedback-channels-title">发送反馈与查看回复</h4>
+            <p>下面是维护者的接收渠道。分享前请删除真实账号、客户信息和业务内容；GitHub Issue 会公开展示。</p>
+          </div>
+          <div className="help-center-feedback-channel-grid">
+            <article className="help-center-feedback-channel">
+              <h5>邮箱反馈</h5>
+              <p className="help-center-feedback-contact">{feedbackChannels.email}</p>
+              <p>无需 GitHub 账号。发送后，我们会回复你的来信，请留意收件箱和垃圾邮件。</p>
+              <div className="help-center-feedback-channel-actions">
+                <button type="button" className="help-center-primary-button" disabled={!previewRequested || Boolean(feedbackError) || !feedbackPreview || feedbackAction !== 'idle'} onClick={() => void contactMaintainer('email')}>
+                  复制反馈并写邮件
+                </button>
+                <button type="button" className="help-center-ghost-button" disabled={feedbackAction !== 'idle'} onClick={() => void copyContact('email')}>
+                  复制邮箱
+                </button>
+              </div>
+              <p>需要系统配置默认邮件应用；也可用常用网页邮箱手动发送。</p>
+            </article>
+            <article className="help-center-feedback-channel">
+              <h5>微信联系</h5>
+              <p className="help-center-feedback-contact">{feedbackChannels.wechat}</p>
+              <p>搜索并添加微信，注明“银行回单工作台反馈”。通过后发送反馈，我们会在微信会话中回复。</p>
+              <div className="help-center-feedback-channel-actions">
+                <button type="button" className="help-center-ghost-button" disabled={feedbackAction !== 'idle'} onClick={() => void copyContact('wechat')}>
+                  复制微信号
+                </button>
+              </div>
+              <p>添加完成后，可返回上方复制反馈文本或保存为 TXT。</p>
+            </article>
+            <article className="help-center-feedback-channel is-public">
+              <h5>GitHub 公开反馈</h5>
+              <p className="help-center-feedback-contact">{feedbackChannels.githubUrl}</p>
+              <p>适合脱敏的问题和功能建议。需要登录 GitHub；提交后，在同一条 Issue 中查看处理进展和回复。</p>
+              <div className="help-center-feedback-channel-actions">
+                <button type="button" className="help-center-ghost-button" disabled={!previewRequested || Boolean(feedbackError) || !feedbackPreview || feedbackAction !== 'idle'} onClick={() => void contactMaintainer('github')}>
+                  复制反馈并打开 GitHub
+                </button>
+              </div>
+              <p>请勿公开提交原始 PDF、真实回单、账号或含业务正文的截图。</p>
+            </article>
+          </div>
+          {!previewRequested && <p className="help-center-feedback-privacy">填写问题描述并生成反馈预览后，即可使用“复制反馈并写邮件”或“复制反馈并打开 GitHub”。</p>}
+          {feedbackActionArea === 'channels' && actionMessage}
+        </section>
       </div>
     );
   }
@@ -711,7 +928,7 @@ export function HelpCenterDialog({
         </div>
         <aside className="help-center-callout is-neutral" role="note">
           <strong>如何更新</strong>
-          <p>当前没有在线更新服务器。获得新的 NSIS 安装包后，关闭应用并运行新安装包即可；历史任务和本地设置按安装兼容规则保留。请从可信的项目交付目录获取安装包。</p>
+          <p>当前没有在线更新服务器。获得新的 NSIS 安装包后，关闭应用并运行新安装包即可；已保存版式模板和本地设置按安装兼容规则保留。请从可信的项目交付目录获取安装包。</p>
         </aside>
       </div>
     );

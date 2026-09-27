@@ -1,0 +1,162 @@
+.receipt-risk-review {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  color: #355970;
+  font-size: 12px;
+}
+
+.receipt-risk-review__toolbar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 9px;
+  border: 1px solid #d8e6e2;
+  border-radius: 7px;
+  background: #f7fbfa;
+}
+
+.receipt-risk-review__master,
+.receipt-risk-review__item label {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 7px;
+  cursor: pointer;
+}
+
+.receipt-risk-review__master {
+  align-items: center;
+  font-weight: 650;
+}
+
+.receipt-risk-review input[type='checkbox'] {
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  margin: 1px 0 0;
+  accent-color: #398c7f;
+}
+
+.receipt-risk-review__master input[type='checkbox'] { margin-top: 0; }
+
+.receipt-risk-review__count {
+  flex: 0 0 auto;
+  color: #638093;
+  font-variant-numeric: tabular-nums;
+}
+
+.receipt-risk-review__explanation {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 6px 9px 3px;
+  color: #638093;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.receipt-risk-review__list {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  margin: 0;
+  padding: 4px 0 0;
+  list-style: none;
+  overscroll-behavior: contain;
+}
+
+.receipt-risk-review__item {
+  min-width: 0;
+  border-bottom: 1px solid #edf1f3;
+}
+
+.receipt-risk-review__item label {
+  padding: 6px 4px;
+}
+
+.receipt-risk-review__item label:hover {
+  background: #f7fbfa;
+}
+
+.receipt-risk-review input[type='checkbox']:focus-visible {
+  outline: 2px solid #3f90d5;
+  outline-offset: 2px;
+}
+
+.receipt-risk-review input[type='checkbox']:disabled {
+  cursor: not-allowed;
+}
+
+.receipt-risk-review__content {
+  display: grid;
+  min-width: 0;
+  flex: 1 1 auto;
+  gap: 2px;
+}
+
+.receipt-risk-review__meta {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 7px;
+  line-height: 1.4;
+}
+
+.receipt-risk-review__meta strong {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  color: #355970;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.receipt-risk-review__meta > span {
+  flex: 0 0 auto;
+  color: #638093;
+}
+
+.receipt-risk-review__meta > .is-acknowledged { color: #398579; }
+.receipt-risk-review__meta > .is-pending { color: #a97739; }
+
+.receipt-risk-review__reason-list {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.receipt-risk-review__reason {
+  min-width: 0;
+  color: #526b7c;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.receipt-risk-review__reason b {
+  color: #638093;
+  font-weight: 600;
+}
+
+.receipt-risk-review__total {
+  color: #8094a0;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.receipt-risk-review__meta > .receipt-risk-review__outcome { font-weight: 650; }
+.receipt-risk-review__meta > .receipt-risk-review__outcome.is-hit { color: #398579; }
+.receipt-risk-review__meta > .receipt-risk-review__outcome.is-miss { color: #a97739; }
+.receipt-risk-review__meta > .receipt-risk-review__outcome.is-removed { color: #7d6d72; }
+.receipt-risk-review__meta > .receipt-risk-review__outcome.is-retained { color: #638093; }
+
+@media (max-width: 520px) {
+  .receipt-risk-review__toolbar { flex-wrap: wrap; }
+  .receipt-risk-review__count { margin-left: 22px; }
+}

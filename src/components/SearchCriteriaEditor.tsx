@@ -92,7 +92,6 @@ export function SearchCriteriaEditor({
         <div className="criteria-group-header">
           <div>
             <h3>包含关键词</h3>
-            <p>匹配方式</p>
           </div>
           <fieldset className="criteria-mode">
             <legend className="sr-only">包含关键词匹配方式</legend>

@@ -30,7 +30,8 @@ from .export_directory import (
     rename_directory_no_replace as _rename_directory_handle,
     writable_directory,
 )
-from .export_scope import ExportScopeError, hold_export_scope
+from .export_scope import ExportScopeError, hold_export_scope, _digest
+from .export_plan import _normalise_output_name
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle guard
     from .export_bundle import ExportBundleService
@@ -312,6 +313,10 @@ def _scope_rows(scope: dict[str, Any]) -> list[dict[str, object]]:
         "expected_pages",
     ):
         rows.append({"item": key, "value": summary.get(key)})
+    if scope.get("schema") == 2:
+        rows.append({"item": "processing_mode", "value": scope["processing_options"]["processing_mode"]})
+        rows.append({"item": "excluded_count", "value": summary["excluded_count"]})
+        rows.append({"item": "excluded_digest", "value": scope["excluded_digest"]})
     return rows
 
 
@@ -337,6 +342,20 @@ def _manifest_source_name(value: object) -> object:
     return value
 
 
+def _include_manifest(entry: dict[str, Any]) -> bool:
+    """Keep the immutable contract after the verbose scope has been retired."""
+
+    present = "include_manifest" in entry
+    included = entry.get("include_manifest", True)
+    if type(included) is not bool:
+        raise ExportPublishError("export manifest option is invalid")
+    scope = entry.get("scope")
+    if isinstance(scope, dict) and (("include_manifest" in scope) != present
+            or (present and scope["include_manifest"] is not included)):
+        raise ExportPublishError("export manifest option does not match frozen scope")
+    return included
+
+
 def _build_manifest(entry: dict[str, Any], attempt: dict[str, Any]) -> dict[str, object]:
     scope = entry.get("scope")
     plan = entry.get("plan")
@@ -355,11 +374,15 @@ def _build_manifest(entry: dict[str, Any], attempt: dict[str, Any]) -> dict[str,
                 "sha256": source.get("source_sha256"),
             })
     mappings: list[dict[str, object]] = []
+    mapping_headers = exporter.MAPPING_HEADERS
+    if scope.get("schema") == 2:
+        from .receipt_export_plan import RECEIPT_MAPPING_HEADERS
+        mapping_headers = RECEIPT_MAPPING_HEADERS
     for mapping in plan.get("mappings", []):
         if isinstance(mapping, dict):
             mappings.append({
                 key: mapping.get(key)
-                for key in ("segment_id", "source_file", "source_page", "segment_no", "output_file", "output_page")
+                for key in mapping_headers
             })
             mappings[-1]["source_file"] = _manifest_source_name(mappings[-1].get("source_file"))
     output_files = [
@@ -371,7 +394,7 @@ def _build_manifest(entry: dict[str, Any], attempt: dict[str, Any]) -> dict[str,
     if not isinstance(summary, dict):
         summary = {}
     return {
-        "version": 1,
+        "version": 2 if scope.get("schema") == 2 else 1,
         "intent_id": entry.get("intent_id"),
         "job_id": entry.get("job_id"),
         "result_revision": scope.get("result_revision"),
@@ -382,6 +405,10 @@ def _build_manifest(entry: dict[str, Any], attempt: dict[str, Any]) -> dict[str,
             "summary": summary,
             "output_mode": scope.get("output_mode"),
             "include_xlsx": scope.get("include_xlsx"),
+            **({"include_manifest": scope["include_manifest"]} if "include_manifest" in scope else {}),
+            **({"processing_mode": scope["processing_options"]["processing_mode"]} if scope.get("schema") == 2 else {}),
+            **({"excluded": deepcopy(scope["excluded"]), "excluded_digest": scope["excluded_digest"]}
+               if entry.get("receipt_schema") == 2 else {}),
             **({"output_name": scope["output_name"]} if "output_name" in scope else {}),
         },
         "sources": sources,
@@ -391,6 +418,7 @@ def _build_manifest(entry: dict[str, Any], attempt: dict[str, Any]) -> dict[str,
 
 
 def _receipt(entry: dict[str, Any], attempt: dict[str, Any], final_directory: Path) -> dict[str, object]:
+    _include_manifest(entry)
     scope = entry["scope"]
     plan = entry["plan"]
     files: list[dict[str, object]] = []
@@ -415,10 +443,14 @@ def _receipt(entry: dict[str, Any], attempt: dict[str, Any], final_directory: Pa
         summary = {}
     return {
         "intent_id": entry["intent_id"],
+        **({"receipt_schema": entry["receipt_schema"]} if "receipt_schema" in entry else {}),
+        **({"include_manifest": entry["include_manifest"]} if "include_manifest" in entry else {}),
         "state": "published",
         "directory": str(final_directory),
         "files": files,
         "summary": summary,
+        **({"excluded": deepcopy(scope["excluded"]), "excluded_digest": scope["excluded_digest"]}
+           if entry.get("receipt_schema") == 2 else {}),
         "merged_pages": plan.get("merged_pages", 0),
         "source_pages": plan.get("source_pages", 0),
         "total_pages": plan.get("total_pages", 0),
@@ -441,6 +473,15 @@ def _validated_receipt(entry: dict[str, Any]) -> dict[str, object]:
         raise ExportPublishError("published receipt is unavailable")
     if value.get("intent_id") != entry.get("intent_id") or value.get("state") != "published":
         raise ExportPublishError("published receipt identity is invalid")
+    include_manifest = _include_manifest(entry)
+    if (("include_manifest" in value) != ("include_manifest" in entry)
+            or ("include_manifest" in value and value["include_manifest"] is not include_manifest)):
+        raise ExportPublishError("published manifest option does not match its intent")
+    receipt_schema = entry.get("receipt_schema")
+    if (("receipt_schema" in entry and (type(receipt_schema) is not int or receipt_schema != 2))
+            or value.get("receipt_schema") != receipt_schema
+            or ("receipt_schema" in value and type(value["receipt_schema"]) is not int)):
+        raise ExportPublishError("published receipt schema does not match its intent")
     directory_raw = value.get("directory")
     files = value.get("files")
     if not isinstance(directory_raw, str) or not Path(directory_raw).is_absolute() or not isinstance(files, list):
@@ -486,13 +527,38 @@ def _validated_receipt(entry: dict[str, Any]) -> dict[str, object]:
             json_count += 1
             if name != "导出清单.json" or "page_count" in item:
                 raise ExportPublishError("published manifest receipt is invalid")
-    if pdf_count < 1 or xlsx_count > 1 or json_count != 1:
+    if pdf_count < 1 or xlsx_count > 1 or json_count != int(include_manifest):
         raise ExportPublishError("published receipt file set is incomplete")
     for key in ("summary", "merged_pages", "source_pages", "total_pages", "row_count"):
         if key not in value:
             raise ExportPublishError("published receipt is incomplete")
     if not isinstance(value.get("summary"), dict):
         raise ExportPublishError("published receipt summary is invalid")
+    exclusion_fields = {"excluded", "excluded_digest"}
+    scope = entry.get("scope")
+    has_exclusions_contract = (receipt_schema == 2 or bool(exclusion_fields.intersection(value)) or "excluded_count" in value["summary"]
+                              or isinstance(scope, dict) and "excluded" in scope)
+    if has_exclusions_contract:
+        from .receipt_export_plan import validate_receipt_exclusion_audit
+        from .receipt_review_models import ReceiptReviewError
+        try:
+            excluded = validate_receipt_exclusion_audit(value.get("excluded"))
+        except (ReceiptReviewError, ValueError, TypeError):
+            raise ExportPublishError("published receipt exclusion audit is invalid") from None
+        summary = value["summary"]
+        count_fields = ("total_segments", "selected_count", "selected_source_count", "omitted_count",
+                        "omitted_unresolved_count", "excluded_count", "expected_pages")
+        if (value.get("excluded_digest") != _digest(excluded)
+                or any(type(summary.get(key)) is not int or summary[key] < 0 for key in count_fields)
+                or summary["excluded_count"] != len(excluded)
+                or summary["omitted_count"] != len(excluded) or summary["omitted_unresolved_count"] != 0
+                or summary["total_segments"] != summary["selected_count"] + len(excluded)
+                or not 1 <= summary["selected_source_count"] <= summary["selected_count"]
+                or not 1 <= summary["expected_pages"] <= summary["selected_count"]):
+            raise ExportPublishError("published receipt exclusion totals or digest are invalid")
+        if isinstance(scope, dict) and "excluded" in scope and any(
+                value.get(key) != scope.get(key) for key in ("excluded", "excluded_digest", "summary")):
+            raise ExportPublishError("published receipt exclusion audit does not match frozen scope")
     if any(type(value[key]) is not int or value[key] < 0 for key in ("merged_pages", "source_pages", "total_pages", "row_count")):
         raise ExportPublishError("published receipt totals are invalid")
     pdf_files = [item for item in files if isinstance(item, dict) and item.get("kind") == "pdf"]
@@ -509,12 +575,15 @@ def _validated_receipt(entry: dict[str, Any]) -> dict[str, object]:
     return deepcopy(value)
 
 
-def _allocate_names(parent: Path) -> tuple[Path, Path]:
+def _allocate_names(parent: Path, output_name: object = None) -> tuple[Path, Path]:
+    # The validated 120 UTF-16-unit base leaves space for both unique suffixes
+    # within Windows' component limit. Never accept a caller-supplied path.
+    prefix = "PDF查找" if output_name is None else _normalise_output_name(output_name)
     stamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
     for _ in range(64):
         short = uuid4().hex[:8]
-        final = parent / f"PDF查找_{stamp}_{short}"
-        temporary = parent / f".PDF查找_{stamp}_{short}_{uuid4().hex[:12]}"
+        final = parent / f"{prefix}_{stamp}_{short}"
+        temporary = parent / f".{prefix}_{stamp}_{short}_{uuid4().hex[:12]}"
         if not os.path.lexists(final) and not os.path.lexists(temporary):
             return final, temporary
     raise ExportPublishError("unable to allocate a unique export directory")
@@ -574,11 +643,16 @@ def _write_xlsx(path: Path, plan: dict[str, Any], scope: dict[str, Any]) -> dict
         # foreign hardlink/file created after _reserve_file returned.
         output = path.open("x+b")
         before = os.fstat(output.fileno())
+        index_options = {}
+        if scope.get("schema") == 2:
+            from .receipt_export_plan import RECEIPT_INDEX_HEADERS, RECEIPT_MAPPING_HEADERS
+            index_options = {"headers": RECEIPT_INDEX_HEADERS, "mapping_headers": RECEIPT_MAPPING_HEADERS}
         result = exporter.export_bundle_index(
             output,
             plan.get("index_rows", []),
             plan.get("mappings", []),
             _scope_rows(scope),
+            **index_options,
         )
         if result is not None and result is not output:
             try:
@@ -872,35 +946,37 @@ def _verify_final_attempt(entry: dict[str, Any], attempt: dict[str, Any]) -> tup
     residuals = _verify_attempt_files(attempt, final)
     if residuals:
         raise ExportPublishError("final export directory contents do not match the recorded attempt", residuals)
-    manifest_path = final / "导出清单.json"
-    try:
-        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError):
-        raise ExportPublishError("final export manifest cannot be read", [_residual(manifest_path, "manifest is invalid")]) from None
-    # The first complete verification precedes this read.  Recheck the
-    # manifest identity afterwards so a concurrent replacement cannot turn a
-    # valid first hash into a different payload that is accepted for recovery.
-    manifest_record = next(
-        (
-            item
-            for item in attempt.get("files", [])
-            if isinstance(item, dict) and item.get("name") == "导出清单.json" and item.get("kind") == "json"
-        ),
-        None,
-    )
-    try:
-        manifest_identity = _file_identity(manifest_path)
-    except (OSError, ValueError):
-        raise ExportPublishError("final export manifest cannot be read", [_residual(manifest_path, "manifest identity changed")]) from None
-    if not isinstance(manifest_record, dict) or not _identity_equal(manifest_identity, manifest_record.get("identity")):
-        raise ExportPublishError("final export manifest identity changed", [_residual(manifest_path, "manifest identity changed")])
-    expected_manifest = _build_manifest(entry, attempt)
-    if payload != expected_manifest or payload.get("intent_id") != entry.get("intent_id"):
-        raise ExportPublishError("final export manifest does not match the intent", [_residual(manifest_path, "manifest intent mismatch")])
+    if _include_manifest(entry):
+        manifest_path = final / "导出清单.json"
+        try:
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            raise ExportPublishError("final export manifest cannot be read", [_residual(manifest_path, "manifest is invalid")]) from None
+        # Recheck after reading so replacement cannot turn the verified hash
+        # into a different payload accepted for recovery.
+        manifest_record = next(
+            (item for item in attempt.get("files", [])
+             if isinstance(item, dict) and item.get("name") == "导出清单.json" and item.get("kind") == "json"),
+            None,
+        )
+        try:
+            manifest_identity = _file_identity(manifest_path)
+        except (OSError, ValueError):
+            raise ExportPublishError("final export manifest cannot be read", [_residual(manifest_path, "manifest identity changed")]) from None
+        if not isinstance(manifest_record, dict) or not _identity_equal(manifest_identity, manifest_record.get("identity")):
+            raise ExportPublishError("final export manifest identity changed", [_residual(manifest_path, "manifest identity changed")])
+        expected_manifest = _build_manifest(entry, attempt)
+        if payload != expected_manifest or payload.get("intent_id") != entry.get("intent_id"):
+            raise ExportPublishError("final export manifest does not match the intent", [_residual(manifest_path, "manifest intent mismatch")])
     expected_receipt = attempt.get("expected_receipt")
     if not isinstance(expected_receipt, dict):
         raise ExportPublishError("publication receipt is unavailable", [_residual(final, "expected receipt is missing")])
-    receipt = deepcopy(expected_receipt)
+    # Recovery reaches this path before the normal published-receipt reader.
+    # Validate against the immutable intent contract and frozen scope before
+    # promoting state, then bind all file identities/totals to the attempt.
+    receipt = _validated_receipt({**entry, "receipt": expected_receipt})
+    if receipt != _receipt(entry, attempt, final):
+        raise ExportPublishError("publication receipt does not match the frozen intent", [_residual(final, "receipt mismatch")])
     if receipt.get("directory") != str(final) or receipt.get("intent_id") != entry.get("intent_id"):
         raise ExportPublishError("publication receipt does not match the final directory", [_residual(final, "receipt mismatch")])
     # The source path is intentionally unused after the rename.  Keeping this
@@ -987,7 +1063,7 @@ def _recover_before_rename(record: Any, entry: dict[str, Any]) -> None:
 
 
 def _start_attempt(record: Any, entry: dict[str, Any], parent: Path, parent_identity: dict[str, int | str]) -> dict[str, Any]:
-    final, temporary = _allocate_names(parent)
+    final, temporary = _allocate_names(parent, entry["scope"].get("output_name"))
     attempt: dict[str, Any] = {
         "version": 1,
         "attempt_id": str(uuid4()),
@@ -1092,12 +1168,13 @@ def _build_attempt_outputs(record: Any, entry: dict[str, Any], attempt: dict[str
         output["identity"] = identity
         record.save(entry)
 
-    manifest_output = _reserve_file(attempt, temporary, "导出清单.json", "json")
-    record.save(entry)
-    identity = _write_json_exclusive(Path(str(manifest_output["path"])), _build_manifest(entry, attempt))
-    manifest_output["state"] = "created"
-    manifest_output["identity"] = identity
-    record.save(entry)
+    if _include_manifest(entry):
+        manifest_output = _reserve_file(attempt, temporary, "导出清单.json", "json")
+        record.save(entry)
+        identity = _write_json_exclusive(Path(str(manifest_output["path"])), _build_manifest(entry, attempt))
+        manifest_output["state"] = "created"
+        manifest_output["identity"] = identity
+        record.save(entry)
 
     attempt["expected_receipt"] = _receipt(entry, attempt, Path(str(attempt["final_path"])))
     attempt["state"] = "ready"

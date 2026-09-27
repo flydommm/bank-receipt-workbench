@@ -44,6 +44,22 @@ function renderNavigator(overrides: Partial<React.ComponentProps<typeof ReviewNa
 afterEach(cleanup);
 
 describe('ReviewNavigator', () => {
+  it('keeps the selected candidate visible while preparing without presenting an empty round', () => {
+    const { rerender } = renderNavigator({
+      guidedMode: true, guidedPreparing: true, navigationDisabled: true, selectedId: 'segment-1',
+    });
+    expect(screen.getByText('正在准备微调，将从当前选中片段开始')).toBeTruthy();
+    expect(screen.getByText('第 1 页 / 片段 1')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /第 1 页 \/ 片段 1/ }).hasAttribute('disabled')).toBe(true);
+    expect(screen.queryByText(/本轮 \d+ 处/)).toBeNull();
+    expect(screen.queryByText('暂无命中片段')).toBeNull();
+    expect(screen.queryByText(/焦点在命中片段上时/)).toBeNull();
+    rerender(<ReviewNavigator rows={[]} selectedId={null} activeFilter="all" onFilterChange={vi.fn()}
+      onSelect={vi.fn()} showSourceName={false} guidedMode guidedPreparing navigationDisabled />);
+    expect(screen.getByText('正在准备微调，请稍候。')).toBeTruthy();
+    expect(screen.queryByText('暂无命中片段')).toBeNull();
+  });
+
   it('reports controlled filter changes and only summarizes a non-all filter', async () => {
     const user = userEvent.setup();
     const onFilterChange = vi.fn();
@@ -700,5 +716,12 @@ describe('ReviewNavigator', () => {
     expect(styles).toMatch(/\.review-navigator-list\s*\{[^}]*min-height:\s*0;[^}]*flex:\s*1 1 auto;[^}]*overflow-y:\s*auto;/s);
     expect(styles).toMatch(/\.review-navigator-filter-row\s*\{[^}]*display:\s*flex;[^}]*flex-wrap:\s*nowrap;/s);
     expect(styles).toMatch(/\.review-navigator-filter\s*\{[^}]*min-width:\s*0;[^}]*flex:\s*1 1 0;/s);
+  });
+
+  it('keeps narrow-window controls readable and touch-sized', () => {
+    const styles = readFileSync('src/styles.css', 'utf8');
+    expect(styles).toMatch(/@media \(max-width:\s*560px\)[\s\S]*\.review-navigator-filter\s*\{[^}]*min-height:\s*36px;[^}]*flex:\s*1 1 calc\(50% - 4px\);[^}]*font-size:\s*11px;/s);
+    expect(styles).toMatch(/@media \(max-width:\s*560px\)[\s\S]*\.review-navigator-row\s*\{[^}]*min-height:\s*56px;/s);
+    expect(styles).toMatch(/@media \(max-width:\s*420px\)[\s\S]*\.source-panel-actions\s*\{[^}]*grid-template-columns:\s*1fr;/s);
   });
 });

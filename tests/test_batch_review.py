@@ -14,6 +14,7 @@ from engine.batch_processor import BatchProcessor, BatchProgress
 from engine.batch_store import BatchConflict, BatchStore
 from engine.computation import current_computation_version
 from engine.engine import handle_request
+from engine.review_read import read_review_snapshot
 
 
 @pytest.fixture
@@ -78,6 +79,41 @@ def test_prepare_uses_published_manifest_and_restores_saved_review(ready):
     restored = prepare(ready)["data"]["prepared"]
     assert restored["segments"][0]["review_status"] == "confirmed"
     assert restored["record_revisions"][0]["record_revision"] == 1
+
+
+def test_version_change_reports_new_analysis_without_creating_a_review_database(ready, monkeypatch):
+    _, review, _, _ = ready
+    monkeypatch.setattr(batch_review, "current_computation_version", lambda: "new-receipt-layout-version")
+    monkeypatch.setattr(batch_review, "ReviewStoreV2", lambda *_args, **_kwargs: pytest.fail("old review must not be opened for writing"))
+    result = prepare(ready)
+    assert result == {
+        "status": "error", "code": "computation_version_changed",
+        "message": "计算版本已变化，请重新选择原始 PDF 开始新的分析任务",
+    }
+    assert not review.exists()
+
+
+def test_version_change_keeps_saved_review_crop_and_published_analysis_unchanged(ready, monkeypatch):
+    database, review, job, _ = ready
+    data = prepare(ready)["data"]
+    request = save_record(ready, data)
+    # Preserve a real saved manual crop, rather than testing an empty review.
+    record = request["segments"][0]
+    record.update(crop_mode="manual", final_rect=deepcopy(record["candidate_rect"]), manual_adjusted=True)
+    assert handle_request(request)["status"] == "ok"
+    context_key = data["prepared"]["context_key"]
+    before_review = read_review_snapshot(review, context_key, job["result_revision"])
+    before_bytes = review.read_bytes()
+    with BatchStore(database) as store:
+        before_results = store.results_page(job["id"], job["result_revision"])
+    monkeypatch.setattr(batch_review, "current_computation_version", lambda: "new-receipt-layout-version")
+    monkeypatch.setattr(batch_review, "ReviewStoreV2", lambda *_args, **_kwargs: pytest.fail("old review must not be rebound"))
+    assert prepare(ready)["code"] == "computation_version_changed"
+    assert read_review_snapshot(review, context_key, job["result_revision"]) == before_review
+    assert review.read_bytes() == before_bytes
+    with BatchStore(database) as store:
+        assert store.results_page(job["id"], job["result_revision"]) == before_results
+        assert store.get_job(job["id"])["state"] == "ready_for_review"
 
 
 def test_archived_snapshot_can_reopen_and_registers_batch_review_owner(ready):

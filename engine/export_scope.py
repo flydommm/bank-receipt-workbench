@@ -26,7 +26,7 @@ from .export_plan import _normalise_output_name
 MAX_SCOPE_ITEMS = 50_000
 _REQUEST_FIELDS = {"job_id", "result_revision", "scope_kind", "selected_segment_ids",
                    "expected_records", "output_mode", "include_xlsx"}
-_REQUEST_FIELDS_WITH_NAME = _REQUEST_FIELDS | {"output_name"}
+_OPTIONAL_REQUEST_FIELDS = {"output_name", "include_manifest"}
 _CONFIRMED = {"confirmed", "page_confirmed", "group_confirmed"}
 
 
@@ -48,8 +48,8 @@ def _identifier(value: object) -> bool:
 
 
 def validate_scope_request(request: object) -> dict[str, Any]:
-    if (not isinstance(request, dict)
-            or (set(request) != _REQUEST_FIELDS and set(request) != _REQUEST_FIELDS_WITH_NAME)):
+    if (not isinstance(request, dict) or not _REQUEST_FIELDS.issubset(request)
+            or set(request) - _REQUEST_FIELDS - _OPTIONAL_REQUEST_FIELDS):
         raise ExportScopeError("export scope fields are invalid")
     if not _identifier(request["job_id"]) or not _identifier(request["result_revision"]):
         raise ExportScopeError("a published task and result revision are required")
@@ -57,6 +57,8 @@ def validate_scope_request(request: object) -> dict[str, Any]:
         raise ExportScopeError("export scope kind is invalid")
     if request["output_mode"] not in ("merged", "by_source", "both") or type(request["include_xlsx"]) is not bool:
         raise ExportScopeError("export output options are invalid")
+    if "include_manifest" in request and type(request["include_manifest"]) is not bool:
+        raise ExportScopeError("export manifest option is invalid")
     selected = request["selected_segment_ids"]
     if not isinstance(selected, list) or not 1 <= len(selected) <= MAX_SCOPE_ITEMS or not all(map(_identifier, selected)):
         raise ExportScopeError("selected export ids must be a nonempty bounded set")
@@ -69,7 +71,7 @@ def validate_scope_request(request: object) -> dict[str, Any]:
     for row in expected:
         if (not isinstance(row, dict) or set(row) != {"id", "record_revision"}
                 or not _identifier(row["id"]) or row["id"] in seen
-                or type(row["record_revision"]) is not int or not 1 <= row["record_revision"] < 2 ** 53):
+                    or type(row["record_revision"]) is not int or not 0 <= row["record_revision"] < 2 ** 53):
             raise ExportScopeError("persisted selected record revisions are invalid")
         seen.add(row["id"])
     if seen != set(selected):
@@ -141,6 +143,10 @@ def _published_items(store: BatchStore, snapshot: dict[str, Any]) -> list[dict[s
     if current_pages != expected_pages:
         raise ExportScopeError("all task pages must be present before export")
     store._assert_complete_pages(store.connection, job["id"])
+    if job.get("page_result_schema") == 2:
+        job_row = store._job_row(store.connection, job["id"])
+        expected = store._receipt_snapshot(job_row, source_rows)
+        return [item for _, item, _ in store._receipt_items(items, snapshot["originals"], expected)]
     return [item for _, item, _ in store._validate_snapshot_items(items, snapshot["originals"], source_rows)]
 
 
@@ -159,7 +165,15 @@ def _check_sources(snapshot: dict[str, Any]) -> set[str]:
                 page = original["source_page"]
                 if page not in page_sizes:
                     loaded = opened._document.load_page(page - 1)
-                    page_sizes[page] = (float(loaded.rect.width), float(loaded.rect.height))
+                    if snapshot["job"].get("page_result_schema") == 2:
+                        from .pdf_geometry import read_page_geometry
+                        page_sizes[page] = read_page_geometry(loaded)
+                    else:
+                        page_sizes[page] = (float(loaded.rect.width), float(loaded.rect.height))
+                if snapshot["job"].get("page_result_schema") == 2:
+                    if page_sizes[page] == original["page_geometry"]:
+                        geometry_valid.add(original["id"])
+                    continue
                 width, height = page_sizes[page]
                 if (original["persistable"] and abs(width - original["page_width"]) <= 1e-6
                         and abs(height - original["page_height"]) <= 1e-6):
@@ -169,6 +183,11 @@ def _check_sources(snapshot: dict[str, Any]) -> set[str]:
 
 def _build_scope(store: BatchStore, connection: sqlite3.Connection, review_database: Path,
                  snapshot: dict[str, Any], request: dict[str, Any], geometry_valid: set[str]) -> dict[str, Any]:
+    if snapshot["job"].get("page_result_schema") == 2:
+        from .receipt_export_scope import build_receipt_export_scope
+        return build_receipt_export_scope(
+            connection, review_database, snapshot, request, geometry_valid, _published_items(store, snapshot),
+        )
     descriptor, source_shas, context_key = _validate_context(snapshot["context"], trusted_aliases=True)
     _, expected_manifest, _ = _validate_originals(snapshot["originals"], source_shas)
     context_row, _, _, stored_descriptor, _ = _stored_context(connection, context_key)
@@ -247,6 +266,8 @@ def _build_scope(store: BatchStore, connection: sqlite3.Connection, review_datab
     }
     if "output_name" in request:
         result["output_name"] = request["output_name"]
+    if "include_manifest" in request:
+        result["include_manifest"] = request["include_manifest"]
     result["snapshot_digest"] = _digest(result)
     return result
 

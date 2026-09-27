@@ -164,7 +164,7 @@ def _budget(processed_pages: int = 1, **overrides: int) -> dict[str, int]:
 def test_new_schema_is_versioned_foreign_keyed_and_wal_enabled(tmp_path: Path) -> None:
     database = tmp_path / "batch-tasks.sqlite3"
     with BatchStore(database) as store:
-        assert store.connection.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert store.connection.execute("PRAGMA user_version").fetchone()[0] == 2
         assert store.connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         assert store.connection.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
         tables = {
@@ -721,3 +721,165 @@ def test_supervisor_takeover_interrupts_old_owner_but_preserves_succeeded_pages(
         ).fetchone()
         assert page["state"] == "succeeded"
         assert len(list(store.read_page_results(job["id"]))) == 1
+
+
+def _legacy_database(path: Path, *, previews: bool = False):
+    """Build a v1 disk database carrying an actual legacy-codec snapshot."""
+    with BatchStore() as seed:
+        job, snapshot = _complete_snapshot(seed)
+        published = seed.publish_snapshot(job["id"], 1, "owner-a", **snapshot)
+        expected_job = seed.get_job(job["id"])
+        expected_pages = seed.read_page_results(job["id"])
+        expected_results = seed.results_page(job["id"], published["result_revision"])
+        with sqlite3.connect(path) as legacy:
+            for statement in batch_store_module._DDL_V1:
+                legacy.execute(statement)
+            tables = [row[0] for row in legacy.execute("SELECT name FROM sqlite_master WHERE type = 'table'")]
+            for table in tables:
+                columns = [row[1] for row in legacy.execute(f"PRAGMA table_info({table})")]
+                names = ",".join(columns)
+                legacy.executemany(f"INSERT INTO {table} ({names}) VALUES ({','.join('?' for _ in columns)})",
+                                   [tuple(row) for row in seed.connection.execute(f"SELECT {names} FROM {table}")])
+            legacy.execute("""INSERT INTO batch_cleanup
+                (id,job_id,scope_json,created_at,updated_at) VALUES ('cleanup',?, '{}','now','now')""", (job["id"],))
+            if previews:
+                legacy.execute("""CREATE TABLE batch_preview_owners (
+                    token TEXT PRIMARY KEY, job_id TEXT NOT NULL, root TEXT NOT NULL,
+                    root_identity TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)""")
+                legacy.execute("CREATE INDEX idx_batch_preview_job ON batch_preview_owners(job_id)")
+                legacy.execute("INSERT INTO batch_preview_owners(token,job_id,root,root_identity) VALUES ('token',?,'test','{}')",
+                               (job["id"],))
+            legacy.execute("PRAGMA user_version = 1")
+    return expected_job, expected_pages, expected_results
+
+
+@pytest.mark.parametrize("previews", [False, True])
+def test_v1_migration_preserves_completed_snapshot_and_backup(tmp_path, previews):
+    database = tmp_path / "legacy.sqlite3"
+    job, pages, results = _legacy_database(database, previews=previews)
+    with BatchStore(database) as migrated:
+        assert migrated.connection.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert migrated.connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+        assert migrated.connection.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert migrated.get_job(job["id"]) == job
+        assert migrated.read_page_results(job["id"]) == pages
+        assert migrated.results_page(job["id"], job["result_revision"]) == results
+        columns = migrated.connection.execute("SELECT page_result_schema,processing_options_json FROM batch_jobs").fetchone()
+        assert tuple(columns) == (1, None)
+        with migrated._transaction() as connection:
+            connection.execute("DELETE FROM batch_jobs WHERE id=?", (job["id"],))
+        assert migrated.connection.execute("SELECT COUNT(*) FROM batch_snapshot_items").fetchone()[0] == 0
+        assert migrated.connection.execute("SELECT COUNT(*) FROM batch_cleanup").fetchone()[0] == 1
+        if previews:
+            assert migrated.connection.execute("SELECT COUNT(*) FROM batch_preview_owners").fetchone()[0] == 1
+            assert migrated.connection.execute("SELECT name FROM sqlite_master WHERE name='idx_batch_preview_job'").fetchone()
+    backups = list(tmp_path.glob("legacy.sqlite3.pre-v2-*.sqlite3"))
+    assert len(backups) == 1
+    with sqlite3.connect(backups[0]) as backup:
+        assert backup.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert backup.execute("SELECT COUNT(*) FROM batch_snapshot_items").fetchone()[0] == len(results["items"])
+        assert "page_result_schema" not in {row[1] for row in backup.execute("PRAGMA table_info(batch_jobs)")}
+
+
+def test_v1_migration_failure_rolls_back_payloads_and_keeps_backup(tmp_path, monkeypatch):
+    database = tmp_path / "legacy.sqlite3"
+    job, pages, results = _legacy_database(database, previews=True)
+    with sqlite3.connect(database) as before:
+        dump = "\n".join(before.iterdump())
+    monkeypatch.setattr(batch_store_module, "_DDL", tuple(
+        statement.replace("source_count INTEGER", "BROKEN SYNTAX ( INTEGER")
+        if "CREATE TABLE IF NOT EXISTS batch_snapshots" in statement else statement
+        for statement in batch_store_module._DDL))
+    with pytest.raises(BatchSchemaIncompatible):
+        BatchStore(database)
+    with sqlite3.connect(database) as after:
+        assert after.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert "\n".join(after.iterdump()) == dump
+    assert len(list(tmp_path.glob("legacy.sqlite3.pre-v2-*.sqlite3"))) == 1
+
+
+@pytest.mark.parametrize("change", [
+    "ALTER TABLE batch_jobs ADD COLUMN unknown TEXT",
+    "CREATE INDEX custom_result_created_at ON batch_page_results(created_at)",
+    "CREATE TRIGGER custom_job AFTER UPDATE ON batch_jobs BEGIN SELECT 1; END",
+])
+def test_unknown_legacy_shape_refuses_before_backup_or_mutation(tmp_path, change):
+    from hashlib import sha256
+    database = tmp_path / "legacy.sqlite3"
+    _legacy_database(database)
+    with sqlite3.connect(database) as connection:
+        connection.execute(change)
+    original = sha256(database.read_bytes()).hexdigest()
+    with pytest.raises(BatchSchemaIncompatible):
+        BatchStore(database)
+    assert sha256(database.read_bytes()).hexdigest() == original
+    assert not list(tmp_path.glob("legacy.sqlite3.pre-v2-*.sqlite3"))
+
+
+def test_two_openers_migrate_legacy_once_without_losing_snapshot(tmp_path):
+    database = tmp_path / "legacy.sqlite3"
+    job, pages, results = _legacy_database(database)
+    barrier = Barrier(2)
+    def open_and_read(_):
+        barrier.wait(timeout=10)
+        with BatchStore(database) as store:
+            return store.get_job(job["id"]), store.read_page_results(job["id"])
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        assert list(pool.map(open_and_read, range(2))) == [(job, pages), (job, pages)]
+    assert len(list(tmp_path.glob("legacy.sqlite3.pre-v2-*.sqlite3"))) == 1
+
+
+def test_backup_failure_leaves_v1_database_unchanged(tmp_path, monkeypatch):
+    database = tmp_path / "legacy.sqlite3"
+    _legacy_database(database)
+    with sqlite3.connect(database) as connection:
+        before = "\n".join(connection.iterdump())
+    def fail_backup(self):
+        raise BatchSchemaIncompatible("synthetic backup failure")
+    monkeypatch.setattr(BatchStore, "_backup_before_migration", fail_backup)
+    with pytest.raises(BatchSchemaIncompatible):
+        BatchStore(database)
+    with sqlite3.connect(database) as connection:
+        assert "\n".join(connection.iterdump()) == before
+
+
+def test_migration_backup_includes_committed_wal_rows(tmp_path):
+    database = tmp_path / "legacy.sqlite3"
+    _legacy_database(database)
+    writer = sqlite3.connect(database)
+    try:
+        writer.execute("PRAGMA journal_mode = WAL")
+        writer.execute("PRAGMA wal_autocheckpoint = 0")
+        writer.execute("INSERT INTO batch_cleanup(id,scope_json,created_at,updated_at) VALUES ('wal-only','{}','now','now')")
+        writer.commit()
+        assert Path(str(database) + "-wal").stat().st_size > 0
+        with BatchStore(database) as migrated:
+            assert migrated.connection.execute("SELECT id FROM batch_cleanup WHERE id='wal-only'").fetchone()
+        backup = next(tmp_path.glob("legacy.sqlite3.pre-v2-*.sqlite3"))
+        with sqlite3.connect(backup) as saved:
+            assert saved.execute("PRAGMA user_version").fetchone()[0] == 1
+            assert saved.execute("SELECT id FROM batch_cleanup WHERE id='wal-only'").fetchone()
+    finally:
+        writer.close()
+
+
+def test_migration_restores_foreign_keys_after_injected_failure():
+    from engine.batch_schema import migrate_v1
+    connection = sqlite3.connect(":memory:", isolation_level=None)
+    try:
+        for statement in batch_store_module._DDL_V1:
+            connection.execute(statement)
+        connection.execute("PRAGMA user_version = 1")
+        connection.execute("PRAGMA foreign_keys = ON")
+        def fail():
+            assert connection.in_transaction
+            assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 0
+            raise RuntimeError("synthetic failure")
+        with pytest.raises(RuntimeError):
+            migrate_v1(connection, batch_store_module._DDL_V1, batch_store_module._DDL, fail,
+                       (batch_store_module._PAGE_ENCODING_COLUMN, batch_store_module._PROCESSING_OPTIONS_COLUMN))
+        assert not connection.in_transaction
+        assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+    finally:
+        connection.close()

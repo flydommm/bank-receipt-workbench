@@ -4,7 +4,7 @@
   "referenceCommit": "01997cb47b1ada744713afeb286e9419163e037e",
   "fixtures": [
     {
-      "name": "legacy per hit uses selection confidence and full page mode",
+      "name": "legacy per hit uses selection confidence and keeps receipt candidates separate",
       "criteria": {
         "include": [
           "fee"
@@ -63,7 +63,7 @@
               "page": 1,
               "page_width": 600,
               "page_height": 800,
-              "page_fully_matched": true,
+              "page_fully_matched": false,
               "selections": [
                 {
                   "match_rect": {
@@ -76,7 +76,7 @@
                     "x0": 0,
                     "y0": 0,
                     "x1": 600,
-                    "y1": 800
+                    "y1": 300
                   },
                   "candidate_index": 0,
                   "candidate_rect": {
@@ -106,9 +106,9 @@
                   },
                   "rect": {
                     "x0": 0,
-                    "y0": 0,
+                    "y0": 300,
                     "x1": 600,
-                    "y1": 800
+                    "y1": 600
                   },
                   "candidate_index": 1,
                   "candidate_rect": {
@@ -151,9 +151,14 @@
             "x0": 0,
             "y0": 0,
             "x1": 600,
-            "y1": 800
+            "y1": 300
           },
-          "finalRect": null,
+          "finalRect": {
+            "x0": 0,
+            "y0": 0,
+            "x1": 600,
+            "y1": 300
+          },
           "pageWidth": 600,
           "pageHeight": 800,
           "confidence": 0.96,
@@ -163,8 +168,8 @@
             300,
             600
           ],
-          "layoutFingerprint": "geometry:600x800:unknown,unknown,600,800",
-          "mode": "full_page",
+          "layoutFingerprint": "geometry:600x800:unknown,unknown,600,300",
+          "mode": "candidate",
           "reviewStatus": "confirmed",
           "manualAdjusted": false
         },
@@ -182,11 +187,16 @@
           },
           "candidateRect": {
             "x0": 0,
-            "y0": 0,
+            "y0": 300,
             "x1": 600,
-            "y1": 800
+            "y1": 600
           },
-          "finalRect": null,
+          "finalRect": {
+            "x0": 0,
+            "y0": 300,
+            "x1": 600,
+            "y1": 600
+          },
           "pageWidth": 600,
           "pageHeight": 800,
           "confidence": 0.73,
@@ -196,8 +206,8 @@
             300,
             600
           ],
-          "layoutFingerprint": "geometry:600x800:unknown,unknown,600,800",
-          "mode": "full_page",
+          "layoutFingerprint": "geometry:600x800:unknown,300,600,600",
+          "mode": "candidate",
           "reviewStatus": "needs_review",
           "manualAdjusted": false
         }

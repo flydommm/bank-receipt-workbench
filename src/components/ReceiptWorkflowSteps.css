@@ -1,0 +1,8 @@
+.receipt-workflow-steps{display:flex;flex:none;align-items:center;gap:9px;min-width:0;color:#205f58;font-size:13px;line-height:1.35}
+.receipt-workflow-steps__number{display:grid;flex:none;place-items:center;width:23px;height:23px;border-radius:50%;background:#398c7f;color:#fff;font-size:11px;font-weight:700}
+.receipt-workflow-steps strong{min-width:0;font-weight:700;overflow-wrap:anywhere}
+.receipt-workspace{display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr);width:100%;min-height:0;flex:1;padding:16px 24px;gap:16px;overflow:hidden}
+.receipt-workspace--calibration{grid-template-columns:minmax(0,1fr) minmax(260px,320px)}.receipt-workspace>.panel{min-height:0;height:100%;max-height:none}.receipt-workspace>.receipt-calibration-pane>.receipt-export-workspace{border:0;border-radius:0;flex:1;min-height:0}
+.receipt-calibration-overview{display:flex;flex-direction:column;flex:1;min-height:0}.receipt-calibration-overview[hidden]{display:none}
+@media(max-width:1250px){.receipt-workspace{padding:12px 16px;gap:12px}.receipt-workspace--calibration{grid-template-columns:minmax(0,1fr) 260px}}
+@media(max-width:750px){.receipt-workspace--calibration{grid-template-columns:minmax(0,1fr)}.receipt-workspace--calibration>.receipt-calibration-navigator{display:none}}

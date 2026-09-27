@@ -5,5 +5,26 @@
     "release": "20260901",
     "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260901/cpython-3.12.14%2B20260901-x86_64-pc-windows-msvc-install_only_stripped.tar.gz",
     "sha256": "7c45c9622400d578709a9b2cddbe8124cc21d382409d9f13406d706d28e31b14"
+  },
+  "msvc_runtime": {
+    "version": "14.44.35211.0",
+    "architecture": "x64",
+    "distribution": "Microsoft Visual Studio 2022 Build Tools / VC Redist",
+    "relative_directory": "VC/Redist/MSVC/14.44.35112/x64/Microsoft.VC143.CRT",
+    "source_url": "https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022",
+    "license_url": "https://learn.microsoft.com/en-us/visualstudio/releases/2022/redistribution#visual-c-runtime-files",
+    "notice_file": "MSVC_RUNTIME_NOTICE.txt",
+    "files": {
+      "concrt140.dll": "2405355f0a58067b258f8df33c327e3a3d716eaac5a3a5aebb757842d85bd376",
+      "msvcp140.dll": "0f885b509a685d2bbfa652fed26b5fb31d88fbdab0a978c641d1c7b8aa460aa9",
+      "msvcp140_1.dll": "bfad5aef4c63a669e3c140655cdfdf395b6c979b400a447bd5dcb65ed8826c3d",
+      "msvcp140_2.dll": "3ea06f0ee098b4823cb79599df3780e7f23cce52c19aac31d2a0d47efe33a5e9",
+      "msvcp140_atomic_wait.dll": "640b2aefced484d0368eea5bdd06addd0658a3a70a49256e560d6923b404a479",
+      "msvcp140_codecvt_ids.dll": "f2069a52880ec885ee7f0511186100eb7fada0411a2b4948fafea7735b878a18",
+      "vccorlib140.dll": "19839407c3fdbc824e5bce189bf68ddf8097f12ec28b757797ffa0415c144ddd",
+      "vcruntime140.dll": "d5e4d9a3e835fa679450145d6a7d94e36573a509317111904d9b3712c30d9066",
+      "vcruntime140_1.dll": "1f2d41c4aa5db0bc33ebf7b66d72943a817d7ce6cbe880502a9403823633093f",
+      "vcruntime140_threads.dll": "219915cf20822f34d5e7c1fdd4e21ae7f3396881096c51036225fb8f84b47afa"
+    }
   }
 }

@@ -1,9 +1,12 @@
-import type { ReactNode } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 
 import CropEditor from './CropEditor';
+import PdfThumbnailGrid, { type PdfThumbnailCard } from './PdfThumbnailGrid';
+import ThumbnailSizeControl, { THUMBNAIL_SIZE_DEFAULT } from './ThumbnailSizeControl';
 import type { EnginePagePreview } from './localEngineAdapter';
 import { MIN_CROP_SIZE, type PdfRect, type ReviewSegment } from '../domain/cropReview';
 import type { SourceDocument, SourcePreviewLocation } from '../domain/sourcePreview';
+import './SourceDocumentPreview.css';
 
 export type SourceDocumentPreviewProps = {
   document: SourceDocument | null;
@@ -29,6 +32,7 @@ export type SourceDocumentPreviewProps = {
   onRetry: () => void;
   onCropChange: (rect: PdfRect) => void;
   onCropCommit: (rect: PdfRect) => void;
+  onGoToPage?: (page: number) => void;
 };
 
 const INVALID_EDITOR_RECT_MESSAGE = '当前片段裁剪几何无效，不能编辑或导出。';
@@ -128,10 +132,23 @@ export function SourceDocumentPreview({
   onRetry,
   onCropChange,
   onCropCommit,
+  onGoToPage,
 }: SourceDocumentPreviewProps) {
-  const previewAvailable = previewIsUsable(preview) ? preview : null;
+  const [view, setView] = useState<{ key: string; mode: 'single' | 'overview' } | null>(null);
+  const [thumbnailSize, setThumbnailSize] = useState(THUMBNAIL_SIZE_DEFAULT);
+  const documentIdentity = document ? JSON.stringify([document.key, document.sourcePath, document.sourceSha256]) : '';
+  const documentValid = Boolean(document && document.integrityStatus === 'valid'
+    && Number.isSafeInteger(document.pageCount) && document.pageCount > 0
+    && /^[a-f0-9]{64}$/i.test(document.sourceSha256));
+  const overviewVisible = Boolean(onGoToPage && documentValid
+    && (view?.key === documentIdentity ? view.mode === 'overview' : !visibleSegment));
+  const previewAvailable = previewIsUsable(preview) && documentValid
+    && location?.documentKey === document?.key
+    && preview.page === location?.page
+    && (!preview.source_sha256 || preview.source_sha256.toLowerCase() === document?.sourceSha256.toLowerCase())
+    ? preview : null;
   const currentPage = location?.page ?? previewAvailable?.page ?? null;
-  const inputDisabled = navigationDisabled || !document;
+  const inputDisabled = navigationDisabled || !documentValid;
   const previousDisabled = inputDisabled || !location || currentPage === null || currentPage <= 1;
   const nextDisabled = inputDisabled || !location || currentPage === null || currentPage >= document?.pageCount!;
   const pageNumber = pageDisplay(document, location, pageDraft);
@@ -146,8 +163,21 @@ export function SourceDocumentPreview({
       && visibleSegment
       && editorGeometryValid,
   );
+  const pageCards = useMemo<readonly PdfThumbnailCard[]>(() => document && documentValid
+    ? Array.from({ length: document.pageCount }, (_, index) => ({
+      id: `${documentIdentity}:${index + 1}`,
+      path: document.sourcePath,
+      sha: document.sourceSha256,
+      page: index + 1,
+      pageCount: document.pageCount,
+      label: `第 ${index + 1} 页`,
+      sourceLabel: document.name,
+    })) : [], [documentIdentity, documentValid, document?.pageCount, document?.name]);
 
   function renderStage(): ReactNode {
+    if (document && !documentValid) {
+      return <div className="preview-message preview-error" role="alert">源文件已变化或页面信息无效，请重新载入 PDF。</div>;
+    }
     if (loading) {
       return <div className="preview-message">正在渲染第 {pageNumber} 页…</div>;
     }
@@ -219,7 +249,16 @@ export function SourceDocumentPreview({
           )}
         </div>
         <div className="source-document-controls">
-          <button type="button" onClick={onPrevious} disabled={previousDisabled}>上一页</button>
+          {onGoToPage && (
+            <div className="source-preview-mode" role="group" aria-label="原件预览模式">
+              <button type="button" aria-pressed={overviewVisible} disabled={inputDisabled} onClick={() => setView({ key: documentIdentity, mode: 'overview' })}>原页总览</button>
+              <button type="button" aria-pressed={!overviewVisible} disabled={inputDisabled} onClick={() => setView({ key: documentIdentity, mode: 'single' })}>单页</button>
+            </div>
+          )}
+          {overviewVisible ? (
+            <ThumbnailSizeControl value={thumbnailSize} onChange={setThumbnailSize} disabled={navigationDisabled} />
+          ) : <>
+          <button type="button" onClick={() => { setView({ key: documentIdentity, mode: 'single' }); onPrevious(); }} disabled={previousDisabled}>上一页</button>
           <span className="source-page-control">
             <span aria-hidden="true">第</span>
             <label className="page-input-control">
@@ -232,9 +271,9 @@ export function SourceDocumentPreview({
                 placeholder={document ? undefined : '—'}
                 disabled={inputDisabled}
                 onChange={(event) => onPageDraftChange(event.target.value)}
-                onBlur={onPageDraftSubmit}
+                onBlur={() => { setView({ key: documentIdentity, mode: 'single' }); onPageDraftSubmit(); }}
                 onKeyDown={(event) => {
-                  if (event.key === 'Enter') onPageDraftSubmit();
+                  if (event.key === 'Enter') { setView({ key: documentIdentity, mode: 'single' }); onPageDraftSubmit(); }
                   if (event.key === 'Escape') onPageDraftCancel();
                 }}
               />
@@ -243,10 +282,11 @@ export function SourceDocumentPreview({
             <span aria-hidden="true">页</span>
             <span className="sr-only">第 {pageNumber} / {pageCount} 页</span>
           </span>
-          <button type="button" onClick={onNext} disabled={nextDisabled}>下一页</button>
+          <button type="button" onClick={() => { setView({ key: documentIdentity, mode: 'single' }); onNext(); }} disabled={nextDisabled}>下一页</button>
           <button type="button" aria-label="缩小" onClick={onZoomOut}>−</button>
           <span className="source-zoom-value">{zoom}%</span>
           <button type="button" aria-label="放大" onClick={onZoomIn}>＋</button>
+          </>}
         </div>
       </header>
 
@@ -256,7 +296,24 @@ export function SourceDocumentPreview({
         </div>
       )}
 
-      <div className="document-stage">{renderStage()}</div>
+      {onGoToPage && document && (
+        <PdfThumbnailGrid
+          cards={pageCards}
+          size={thumbnailSize}
+          shape="page"
+          active={overviewVisible && documentValid}
+          disabled={inputDisabled}
+          focusedId={currentPage ? `${documentIdentity}:${currentPage}` : null}
+          scrollKey={`source-pages:${documentIdentity}`}
+          label="原页总览"
+          onOpen={(card) => {
+            if (inputDisabled) return;
+            onGoToPage(card.page);
+            setView({ key: documentIdentity, mode: 'single' });
+          }}
+        />
+      )}
+      <div className={`document-stage${overviewVisible && documentValid ? ' source-stage-hidden' : ''}`}>{overviewVisible && documentValid ? null : renderStage()}</div>
     </section>
   );
 }

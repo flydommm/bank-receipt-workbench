@@ -1,7 +1,7 @@
 """Read-only page descriptors used by the batch crop review workflow.
 
 The descriptor deliberately contains only page geometry and opaque hashes.  It
-is computed from the text layer and straight table geometry. Other visible
+is computed from the text layer and verified straight table geometry. Other visible
 objects are checked for boundary crossings but never included as image data.
 """
 
@@ -20,6 +20,7 @@ except ImportError:  # pragma: no cover - compatibility with older PyMuPDF.
     import fitz  # type: ignore[no-redef]
 
 from .layout import (
+    MAX_FRAME_EDGES_PER_ORIENTATION,
     MAX_LAYOUT_DRAWING_ITEMS,
     MAX_LAYOUT_DRAWINGS,
     MAX_RECEIPT_TITLES,
@@ -27,7 +28,19 @@ from .layout import (
     _is_receipt_title,
     _normalize_title_line,
 )
-from .pdf_parser import ParsedPage, TextBlock, parse_loaded_page
+from .pdf_parser import ParsedPage, TextBlock, parse_loaded_page, visible_page
+from .receipt_issuer import canonical_bank_heading as _canonical_bank_heading, issuer_masthead_bank
+from .receipt_image_issuer import image_masthead_lines
+from .receipt_visual_identity import describe_visual_form
+from .receipt_headers import (
+    MAX_PRINT_COUNT_PAIR_COMPARISONS as _PRINT_COUNT_SPLIT_PAIR_BUDGET,
+    PrintCountBudgetExceeded,
+    is_print_count_line as _is_print_count_line,
+    is_print_count_label as _is_print_count_label,
+    is_print_count_value as _is_print_count_value,
+    print_count_prefixes,
+    split_print_count_pair_candidates,
+)
 
 
 # Keep these public aliases close to the protocol code.  They make the
@@ -41,18 +54,34 @@ MAX_TEXT_LINE_BUDGET = 16_384
 MAX_TEXT_SPAN_BUDGET = 32_768
 MAX_TEXT_CHARACTER_BUDGET = 1_000_000
 MAX_VISIBLE_OBJECT_BUDGET = 32_768
+MAX_BITMAP_IMAGES = 128
+MAX_BITMAP_PLACEMENTS = 128
 
 _TITLE_DEDUP_GAP = 32.0
 _LINE_TOLERANCE = 2.0
 _MIN_HORIZONTAL_LINE = 0.35
 _MIN_VERTICAL_LINE = 0.04
 _MIN_LINE_LENGTH = 40.0
-_MIN_HORIZONTAL_LINES = 2
+_MIN_HORIZONTAL_LINES = 1
+_MAX_HEADER_BAND_LINES = 32
+
+_FIXED_LABELS = tuple(sorted((
+    "付款人名称", "付款人账号", "付款人开户行", "收款人名称", "收款人账号", "收款人开户行",
+    "付款人户名", "收款人户名", "付款单位", "收款单位", "交易日期", "交易时间", "交易流水号",
+    "记账日期", "回单编号", "回单号码", "交易金额", "业务类型", "业务名称", "打印时间",
+    "金额(大写)", "金额（大写）", "金额(小写)", "金额（小写）", "币种", "金额", "摘要", "用途",
+), key=len, reverse=True))
 
 _NO_TEXT = "no_text"
 _NO_TITLES = "no_titles"
 _AMBIGUOUS_LAYOUT = "ambiguous_layout"
 _BUDGET_EXCEEDED = "budget_exceeded"
+_VISUAL_BOUNDARY_MIN_WIDTH_RATIO = 0.70
+_VISUAL_BOUNDARY_MIN_HEIGHT_RATIO = 0.12
+_VISUAL_BOUNDARY_MAX_HEIGHT_RATIO = 0.50
+_VISUAL_BOUNDARY_DIMENSION_TOLERANCE = 4.0
+_VISUAL_BOUNDARY_IOU = 0.85
+_VISUAL_BOUNDARY_MIN_EMPTY_GAP = 0.75
 
 
 @dataclass(frozen=True)
@@ -69,7 +98,7 @@ class _Title:
 
 @dataclass(frozen=True)
 class _Line:
-    """A long, axis-aligned drawing segment used as layout evidence."""
+    """A long, axis-aligned visible rule used as layout evidence."""
 
     orientation: str
     x0: float
@@ -165,10 +194,34 @@ def _title_text_from_block(text: str) -> str | None:
     return None
 
 
-def _dict_title_boxes(page: Any) -> list[tuple[str, tuple[float, float, float, float]]]:
+def _split_print_count_pair_candidates(
+    line_boxes: list[tuple[str, tuple[float, float, float, float]]],
+) -> list[tuple[tuple[float, float, float, float], tuple[float, float, float, float]]]:
+    try:
+        return split_print_count_pair_candidates(
+            line_boxes, pair_budget=_PRINT_COUNT_SPLIT_PAIR_BUDGET,
+        )
+    except PrintCountBudgetExceeded as error:
+        raise _BudgetExceeded from error
+
+
+def _print_count_prefixes(
+    titles: list[_Title],
+    line_boxes: list[tuple[str, tuple[float, float, float, float]]],
+) -> tuple[set[tuple[float, float, float, float]], list[float | None]]:
+    try:
+        return print_count_prefixes(
+            titles, line_boxes, pair_budget=_PRINT_COUNT_SPLIT_PAIR_BUDGET,
+        )
+    except PrintCountBudgetExceeded as error:
+        raise _BudgetExceeded from error
+
+
+def _dict_title_boxes(page: Any, *, titles_only: bool = True) -> list[tuple[str, tuple[float, float, float, float]]]:
     """Read line-level title boxes when available, without retaining body text."""
 
     try:
+        page = visible_page(page)
         flags = getattr(fitz, "TEXTFLAGS_DICT", 0)
         if flags:
             flags &= ~getattr(fitz, "TEXT_PRESERVE_IMAGES", 0)
@@ -236,6 +289,9 @@ def _dict_title_boxes(page: Any) -> list[tuple[str, tuple[float, float, float, f
                 continue
             line_data.append((normalized, (x0, y0, x1, y1)))
         for index, (line, box) in enumerate(line_data):
+            if not titles_only:
+                candidates.append((line, box))
+                continue
             if index + 1 < len(line_data) and "专用章" in line_data[index + 1][0]:
                 continue
             canonical = _canonical_title_text(line)
@@ -244,6 +300,211 @@ def _dict_title_boxes(page: Any) -> list[tuple[str, tuple[float, float, float, f
                 if len(candidates) > MAX_TITLE_BUDGET:
                     raise _BudgetExceeded
     return candidates
+
+
+def _issuer_bank_name(
+    title: _Title,
+    text_lines: list[tuple[str, tuple[float, float, float, float]]],
+    lower_boundary: float,
+) -> str | None:
+    """Only receipt titles and nearby independent mastheads establish issuer.
+
+    A payer/payee bank in a field below the heading is deliberately ineligible,
+    even if its value is the only recognizable bank anywhere on the page.
+    Conflicting mastheads are ambiguous and do not establish an issuer.
+    """
+    banks: set[str] = set()
+    bank_end = title.title_text.find("银行")
+    if bank_end >= 0:
+        bank = _canonical_bank_heading(title.title_text[:bank_end + 2])
+        if bank:
+            banks.add(bank)
+    header_candidates = []
+    for text, (x0, y0, x1, y1) in text_lines:
+        if y0 < max(lower_boundary, title.y0 - 64.0) or y0 > title.y1 or y1 > title.y1 + 3.0:
+            continue
+        if _canonical_bank_heading(text) is None:
+            continue
+        header_candidates.append((text, (x0, y0, x1, y1)))
+        if len(header_candidates) > 16:
+            return None
+    for text, box in header_candidates:
+        bank = issuer_masthead_bank(text, box, text_lines)
+        if bank:
+            banks.add(bank)
+    if len(banks) != 1:
+        return None
+    return next(iter(banks))
+
+
+def _issuer_bank_key(
+    title: _Title,
+    text_lines: list[tuple[str, tuple[float, float, float, float]]],
+    lower_boundary: float,
+) -> str | None:
+    bank = _issuer_bank_name(title, text_lines, lower_boundary)
+    return hashlib.sha256(bank.encode("utf-8")).hexdigest() if bank else None
+
+
+def _receipt_header_fields(
+    titles: list[_Title],
+    issuer_keys: list[str | None],
+    text_lines: list[tuple[str, tuple[float, float, float, float]]],
+) -> list[list[tuple[str, tuple[float, float, float, float]]]]:
+    """Prove a repeated metadata band around a centred receipt heading.
+
+    Some forms put their receipt number above the title and accounting date
+    beside its lower edge. Neither field alone establishes a header. Require
+    a complete, unique pair anchored at the page top, a trusted common issuer
+    and title, and matching fixed-field geometry on every occupied row. Values
+    and their widths are deliberately not identity evidence.
+    """
+    empty: list[list[tuple[str, tuple[float, float, float, float]]]] = [[] for _ in titles]
+    if (not titles or titles[0].y0 > 64.0 or not all(issuer_keys)
+            or len(set(issuer_keys)) != 1 or len({title.title_key for title in titles}) != 1):
+        return empty
+    groups = []
+    bands: list[list[tuple[tuple[str, str], tuple[float, float, float, float]]]] = []
+    verified_fields = []
+    for index, title in enumerate(titles):
+        fields: dict[str, list[tuple[str, tuple[float, float, float, float]]]] = {
+            "date": [], "number": [],
+        }
+        lower = max(titles[index - 1].y1 if index else 0.0, title.y0 - 64.0)
+        for text, box in text_lines:
+            if not (lower <= box[1] <= title.y1 and box[3] <= title.y1 + 4.0):
+                continue
+            normalized = text.replace(" ", "")
+            for label, kind in (("记账日期", "date"), ("回单编号", "number"), ("回单号码", "number")):
+                if not normalized.startswith(label):
+                    continue
+                suffix = normalized[len(label):]
+                if not suffix or suffix[0] in ":：" or suffix[0].isdigit():
+                    fields[kind].append((label, box))
+                break
+        if any(len(group) != 1 for group in fields.values()):
+            return empty
+        group = [fields["date"][0], fields["number"][0]]
+        if min(box[1] for _label, box in group) >= title.y0:
+            return empty
+        if groups:
+            for (label, box), (first_label, first_box) in zip(group, groups[0], strict=True):
+                if (label != first_label or abs(box[0] - first_box[0]) > _LINE_TOLERANCE
+                        or abs((box[1] - title.y0) - (first_box[1] - titles[0].y0)) > _LINE_TOLERANCE
+                        or abs((box[3] - box[1]) - (first_box[3] - first_box[1])) > _LINE_TOLERANCE):
+                    return empty
+        # Advancing the start must not silently absorb other body text that
+        # begins between the metadata and the title. Every line intersecting
+        # this band must have a unique equivalent in the page-top header.
+        start, end = min(box[1] for _label, box in group), title.y1 + 4.0
+        band = [(text, box) for text, box in text_lines if box[1] < end and box[3] > start]
+        if (len(band) > _MAX_HEADER_BAND_LINES
+                or any(box[1] < start - _LINE_TOLERANCE or box[3] > end for _text, box in band)):
+            return empty
+        field_lines = []
+        for text, box in band:
+            normalized = text.replace(" ", "")
+            label = next((label for label in _FIXED_LABELS if normalized.startswith(label)
+                          and (not normalized[len(label):] or normalized[len(label)] in ":："
+                               or normalized[len(label)].isdigit())), None)
+            if label is not None:
+                field_lines.append((label, box))
+        keyed_band = []
+        for text, box in band:
+            fields_here = [label for label, field_box in field_lines if box == field_box]
+            if fields_here:
+                key = ("field", fields_here[0])
+            else:
+                # Separate values are eligible only beside a unique label,
+                # with an unobstructed gap on the same baseline. Their text
+                # may vary, but their position must repeat in every header.
+                labels_left = [(label, field_box) for label, field_box in field_lines
+                               if 0 <= box[0] - field_box[2] <= 64.0
+                               and abs(box[1] - field_box[1]) <= _LINE_TOLERANCE
+                               and abs(box[3] - field_box[3]) <= _LINE_TOLERANCE]
+                if len(labels_left) == 1:
+                    label, field_box = labels_left[0]
+                    if any(other != box and other != field_box
+                           and other[0] < box[0] and other[2] > field_box[2]
+                           and abs(other[1] - box[1]) <= _LINE_TOLERANCE
+                           for _other_text, other in band):
+                        return empty
+                    key = ("value", label)
+                else:
+                    key = ("fixed", text)
+            keyed_band.append((key, box))
+        if bands:
+            if len(keyed_band) != len(bands[0]):
+                return empty
+            matched = set()
+            for key, box in keyed_band:
+                matches = [i for i, (first_key, first_box) in enumerate(bands[0])
+                           if key == first_key and abs(box[0] - first_box[0]) <= _LINE_TOLERANCE
+                           and abs((box[1] - title.y0) - (first_box[1] - titles[0].y0)) <= _LINE_TOLERANCE
+                           and abs((box[3] - box[1]) - (first_box[3] - first_box[1])) <= _LINE_TOLERANCE]
+                if len(matches) != 1 or matches[0] in matched:
+                    return empty
+                matched.add(matches[0])
+        groups.append(group)
+        bands.append(keyed_band)
+        verified_fields.append(field_lines)
+    return verified_fields
+
+
+def _receipt_fingerprint(
+    title: _Title,
+    issuer_bank_key: str | None,
+    lines: list[_Line],
+    text_lines: list[tuple[str, tuple[float, float, float, float]]],
+    top: float,
+    bottom: float,
+    width: float,
+    height: float,
+    header_fields: list[tuple[str, tuple[float, float, float, float]]] | None = None,
+) -> str | None:
+    """Hash stable receipt geometry relative to its title, excluding values.
+
+    Neither slot, title count, whitespace after the receipt nor page-local y
+    participates, so a final page's one receipt can match a complete page.
+    """
+    if issuer_bank_key is None:
+        return None
+    relative_lines = sorted([
+        [line.orientation, round(line.x0, 1), round(line.y0 - title.y0, 1),
+         round(line.x1, 1), round(line.y1 - title.y0, 1)]
+        for line in lines if top <= line.y0 and line.y1 <= bottom
+    ])
+    labels = []
+    for text, (x0, y0, _x1, y1) in text_lines:
+        if y0 < title.y1 or y1 > bottom:
+            continue
+        normalized = text.replace(" ", "")
+        label = next((label for label in _FIXED_LABELS if normalized.startswith(label)), None)
+        if label is not None:
+            labels.append([label, round(x0, 1), round(y0 - title.y0, 1)])
+    # One divider alone does not distinguish two forms from the same bank.
+    # Borderless bodies need several fixed field anchors as additional proof.
+    if len(relative_lines) < 2 and len(labels) < 3:
+        return None
+    payload = {
+        "version": 1,
+        "issuer_bank_key": issuer_bank_key,
+        "title_key": title.title_key,
+        "page": [round(width, 1), round(height, 1)],
+        "title": [round(title.x0, 1), round(title.y1 - title.y0, 1)],
+        "lines": relative_lines,
+        "labels": sorted(labels),
+    }
+    if header_fields:
+        # A different header offset must not reuse an otherwise identical body
+        # template: its crop could omit the leading metadata. Leave unrelated
+        # forms' existing identity unchanged.
+        payload["header_labels"] = sorted([
+            [label, round(box[0], 1), round(box[1] - title.y0, 1), round(box[3] - box[1], 1)]
+            for label, box in header_fields
+        ])
+    encoded = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("ascii")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _title_records(page: Any, parsed: ParsedPage, width: float, height: float) -> list[_Title]:
@@ -338,6 +599,7 @@ def _rectangle_lines(rect: Any, width: float, height: float) -> list[_Line]:
 
 def _drawing_lines(page: Any, width: float, height: float) -> list[_Line]:
     try:
+        page = visible_page(page)
         drawings = page.get_drawings()
     except (AttributeError, TypeError, ValueError, RuntimeError):
         raise ValueError("drawing geometry is unavailable") from None
@@ -383,6 +645,7 @@ def _drawing_lines(page: Any, width: float, height: float) -> list[_Line]:
             elif kind == "re" and len(item) >= 2:
                 lines.extend(_rectangle_lines(item[1], width, height))
 
+    lines.extend(_bitmap_horizontal_lines(page, width, height))
     unique: dict[tuple[object, ...], _Line] = {}
     for line in lines:
         key = (
@@ -399,26 +662,440 @@ def _drawing_lines(page: Any, width: float, height: float) -> list[_Line]:
     )
 
 
+def _bitmap_horizontal_lines(page: Any, width: float, height: float) -> list[_Line]:
+    """Verify thin image rules from visible pixels, including transparency.
+
+    Some banks embed their table rules as tiny bitmaps. A wide image rectangle
+    alone is insufficient evidence: only an unrotated, page-contained, nearly
+    full-width dark pixel row contributes the same geometry as a drawn rule.
+    Rendering the small placement also respects masks and overlaid content.
+    """
+    if not hasattr(page, "get_images"):
+        return []
+    images = page.get_images(full=True)
+    if len(images) > MAX_BITMAP_IMAGES:
+        raise _BudgetExceeded
+    unique_images = {item[0]: item for item in images}
+    result: list[_Line] = []
+    placements_seen = set()
+    for xref, item in unique_images.items():
+        pixel_width, pixel_height = item[2:4]
+        if not (100 <= pixel_width <= 4096 and 1 <= pixel_height <= 8
+                and pixel_width / pixel_height >= 64):
+            continue
+        placements = page.get_image_rects(xref, transform=True)
+        if len(placements) > MAX_BITMAP_PLACEMENTS:
+            raise _BudgetExceeded
+        for rectangle, transform in placements:
+            coordinates = tuple(float(value) for value in rectangle)
+            matrix = tuple(float(value) for value in transform)
+            if not all(_finite(value) for value in (*coordinates, *matrix)):
+                raise ValueError("bitmap rule geometry is invalid")
+            x0, y0, x1, y1 = coordinates
+            if not (matrix[0] > 0 and matrix[3] > 0
+                    and abs(matrix[1]) < 0.001 and abs(matrix[2]) < 0.001
+                    and 0 <= x0 < x1 <= width and 0 <= y0 < y1 <= height
+                    and x1 - x0 >= width * _MIN_HORIZONTAL_LINE and y1 - y0 <= 3):
+                continue
+            key = (xref, coordinates)
+            if key in placements_seen:
+                continue
+            placements_seen.add(key)
+            if len(placements_seen) > MAX_BITMAP_PLACEMENTS:
+                raise _BudgetExceeded
+            scale = min(pixel_width / (x1 - x0), 2048 / (x1 - x0), 2.0)
+            pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale), clip=rectangle,
+                                      colorspace=fitz.csRGB, alpha=False)
+            if not (100 <= pixmap.width <= 2050 and 1 <= pixmap.height <= 8):
+                continue
+            pixels = pixmap.samples
+            dark_rows = []
+            for row in range(pixmap.height):
+                dark = [column for column in range(pixmap.width)
+                        if max(pixels[row * pixmap.stride + column * 3:
+                                      row * pixmap.stride + column * 3 + 3]) < 120]
+                if len(dark) >= pixmap.width * 0.98:
+                    dark_rows.append(row)
+            if dark_rows:
+                y = min(y1, max(y0, (pixmap.y + sum(dark_rows) / len(dark_rows) + 0.5) / scale))
+                result.append(_Line("h", x0, y, x1, y))
+    return result
+
+
+def _frame_rectangles(
+    lines: list[_Line],
+    width: float,
+    height: float,
+) -> list[tuple[float, float, float, float]]:
+    """Assemble bounded four-sided visual frames from drawing lines.
+
+    These frames are layout evidence only.  A frame is useful for a receipt
+    boundary when its four edges are present, large enough to be a receipt,
+    and its dimensions are within the same conservative range used by the
+    candidate detector.  The small pair budget keeps malformed drawing lists
+    fail-closed rather than turning this descriptor into an unbounded search.
+    """
+
+    tolerance = _LINE_TOLERANCE
+    minimum_width = max(_MIN_LINE_LENGTH, width * _VISUAL_BOUNDARY_MIN_WIDTH_RATIO)
+    minimum_height = height * _VISUAL_BOUNDARY_MIN_HEIGHT_RATIO
+    maximum_height = height * _VISUAL_BOUNDARY_MAX_HEIGHT_RATIO
+    horizontals = [
+        line for line in lines
+        if line.orientation == "h" and line.x1 - line.x0 >= minimum_width - tolerance * 2
+    ]
+    verticals = [
+        line for line in lines
+        if line.orientation == "v"
+        and minimum_height - tolerance <= line.y1 - line.y0 <= maximum_height + tolerance
+    ]
+    if (
+        len(horizontals) > MAX_FRAME_EDGES_PER_ORIENTATION
+        or len(verticals) > MAX_FRAME_EDGES_PER_ORIENTATION
+    ):
+        raise _BudgetExceeded
+
+    def connecting_vertical(
+        x: float,
+        top: float,
+        bottom: float,
+    ) -> _Line | None:
+        candidates = [
+            line for line in verticals
+            if (
+                abs(line.x0 - x) <= tolerance
+                and abs(line.y0 - top) <= tolerance
+                and abs(line.y1 - bottom) <= tolerance
+            )
+        ]
+        if not candidates:
+            return None
+        candidates.sort(
+            key=lambda line: (
+                abs(line.x0 - x) + abs(line.y0 - top) + abs(line.y1 - bottom),
+                line.x0,
+                line.y0,
+                line.y1,
+            )
+        )
+        return candidates[0]
+
+    rectangles: list[tuple[float, float, float, float]] = []
+    pair_comparisons = 0
+    for first_index, first in enumerate(horizontals):
+        for second in horizontals[first_index + 1:]:
+            pair_comparisons += 1
+            if pair_comparisons > MAX_FRAME_EDGES_PER_ORIENTATION * MAX_FRAME_EDGES_PER_ORIENTATION:
+                raise _BudgetExceeded
+            top, bottom = sorted((first, second), key=lambda line: line.y0)
+            if bottom.y0 - top.y0 < minimum_height - tolerance:
+                continue
+            if bottom.y0 - top.y0 > maximum_height + tolerance:
+                continue
+            if abs(top.x0 - bottom.x0) > tolerance or abs(top.x1 - bottom.x1) > tolerance:
+                continue
+            left = connecting_vertical(top.x0, top.y0, bottom.y0)
+            right = connecting_vertical(top.x1, top.y0, bottom.y0)
+            if left is None or right is None or right.x0 <= left.x0:
+                continue
+            rectangle = (
+                (top.x0 + bottom.x0 + left.x0 + left.x0) / 4,
+                (top.y0 + top.y0 + left.y0 + right.y0) / 4,
+                (top.x1 + bottom.x1 + right.x0 + right.x0) / 4,
+                (bottom.y0 + bottom.y0 + left.y1 + right.y1) / 4,
+            )
+            if not (
+                0 <= rectangle[0] < rectangle[2] <= width
+                and 0 <= rectangle[1] < rectangle[3] <= height
+                and rectangle[2] - rectangle[0] >= minimum_width - tolerance * 2
+                and minimum_height - tolerance <= rectangle[3] - rectangle[1] <= maximum_height + tolerance
+            ):
+                continue
+            if any(
+                all(abs(existing - current) <= tolerance for existing, current in zip(previous, rectangle))
+                for previous in rectangles
+            ):
+                continue
+            if len(rectangles) >= MAX_FRAME_EDGES_PER_ORIENTATION:
+                raise _BudgetExceeded
+            rectangles.append(rectangle)
+    return rectangles
+
+
+def _large_image_rectangles(
+    page: Any,
+    width: float,
+    height: float,
+) -> list[tuple[float, float, float, float]]:
+    """Read only large image geometry that can represent one complete copy."""
+
+    try:
+        entries = page.get_bboxlog()
+    except (AttributeError, TypeError, ValueError, RuntimeError):
+        return []
+    if len(entries) > MAX_VISIBLE_OBJECT_BUDGET:
+        raise _BudgetExceeded
+    minimum_width = max(_MIN_LINE_LENGTH, width * _VISUAL_BOUNDARY_MIN_WIDTH_RATIO)
+    minimum_height = height * _VISUAL_BOUNDARY_MIN_HEIGHT_RATIO
+    maximum_height = height * _VISUAL_BOUNDARY_MAX_HEIGHT_RATIO
+    rectangles: list[tuple[float, float, float, float]] = []
+    for entry in entries:
+        if not isinstance(entry, (list, tuple)) or len(entry) < 2 or entry[0] != "fill-image":
+            continue
+        box = entry[1]
+        if not isinstance(box, (list, tuple)) or len(box) != 4:
+            return []
+        try:
+            x0, y0, x1, y1 = (float(value) for value in box)
+        except (TypeError, ValueError, OverflowError):
+            return []
+        left, right = sorted((x0, x1))
+        top, bottom = sorted((y0, y1))
+        if not all(_finite(value) for value in (left, top, right, bottom)):
+            return []
+        if (
+            right - left < minimum_width - _LINE_TOLERANCE * 2
+            or not minimum_height - _LINE_TOLERANCE <= bottom - top <= maximum_height + _LINE_TOLERANCE
+            or left < 0
+            or top < 0
+            or right > width
+            or bottom > height
+        ):
+            continue
+        rectangle = (left, top, right, bottom)
+        if any(
+            all(abs(existing - current) <= _LINE_TOLERANCE for existing, current in zip(previous, rectangle))
+            for previous in rectangles
+        ):
+            continue
+        rectangles.append(rectangle)
+    return rectangles
+
+
+def _rectangle_iou(
+    first: tuple[float, float, float, float],
+    second: tuple[float, float, float, float],
+) -> float:
+    left = max(first[0], second[0])
+    top = max(first[1], second[1])
+    right = min(first[2], second[2])
+    bottom = min(first[3], second[3])
+    intersection = max(0.0, right - left) * max(0.0, bottom - top)
+    first_area = max(0.0, first[2] - first[0]) * max(0.0, first[3] - first[1])
+    second_area = max(0.0, second[2] - second[0]) * max(0.0, second[3] - second[1])
+    union = first_area + second_area - intersection
+    return intersection / union if union > 0 else 0.0
+
+
+def _visual_layout_rectangles(
+    page: Any,
+    lines: list[_Line],
+    width: float,
+    height: float,
+) -> list[tuple[float, float, float, float]]:
+    """Combine complete frame/image rectangles without counting duplicates."""
+
+    # Frames take precedence over the nearly identical raster image they may
+    # surround.  Both sources remain optional; a partial visual signal never
+    # overrides the ordinary text evidence by itself.
+    rectangles = [
+        *[("frame", rectangle) for rectangle in _frame_rectangles(lines, width, height)],
+        *[("image", rectangle) for rectangle in _large_image_rectangles(page, width, height)],
+    ]
+    unique: list[tuple[float, float, float, float]] = []
+    for kind, rectangle in rectangles:
+        if any(_rectangle_iou(rectangle, existing) >= _VISUAL_BOUNDARY_IOU for existing in unique):
+            continue
+        unique.append(rectangle)
+    return unique
+
+
+def _visual_empty_gap(
+    page: Any,
+    lower: float,
+    upper: float,
+) -> tuple[float, float] | None:
+    """Find an actual empty interval between two visual copy containers."""
+
+    if not (_finite(lower) and _finite(upper) and lower < upper):
+        return None
+    try:
+        entries = page.get_bboxlog()
+    except (AttributeError, TypeError, ValueError, RuntimeError):
+        return (lower, upper)
+    if len(entries) > MAX_VISIBLE_OBJECT_BUDGET:
+        raise _BudgetExceeded
+    blocked: list[tuple[float, float]] = []
+    for entry in entries:
+        if not isinstance(entry, (list, tuple)) or len(entry) < 2:
+            return None
+        if entry[0] in {"fill-text", "stroke-text", "ignore-text"}:
+            continue
+        box = entry[1]
+        if not isinstance(box, (list, tuple)) or len(box) != 4:
+            return None
+        try:
+            y0, y1 = float(box[1]), float(box[3])
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if not all(_finite(value) for value in (y0, y1)):
+            return None
+        # PyMuPDF can report an empty clipping path with reversed sentinel
+        # coordinates.  It is not visible content and mirrors the existing
+        # boundary check, which only treats ordered boxes as occupied.
+        if y1 <= y0:
+            continue
+        clipped_start = max(lower, y0)
+        clipped_end = min(upper, y1)
+        if clipped_start < clipped_end:
+            blocked.append((clipped_start, clipped_end))
+    blocked.sort()
+    free: list[tuple[float, float]] = []
+    cursor = lower
+    for start, end in blocked:
+        if start > cursor:
+            free.append((cursor, start))
+        cursor = max(cursor, end)
+    if cursor < upper:
+        free.append((cursor, upper))
+    usable = [
+        gap for gap in free
+        if gap[1] - gap[0] >= _VISUAL_BOUNDARY_MIN_EMPTY_GAP
+    ]
+    return max(usable, key=lambda gap: (gap[1] - gap[0], -gap[0])) if usable else None
+
+
+def _visual_gap_boundaries(
+    page: Any,
+    titles: list[_Title],
+    lines: list[_Line],
+    width: float,
+    height: float,
+    last_text_y: list[float],
+    heading_starts: list[float],
+) -> list[float] | None:
+    """Use visual gaps only inside the text-proven safe interval.
+
+    A frame gap can be wider than the text-derived receipt interval. Keep any
+    current-receipt footer before the boundary and keep the next receipt's
+    masthead (including an image-backed masthead) after it.
+    """
+
+    if len(titles) < 2:
+        return None
+    if len(last_text_y) != len(titles) or len(heading_starts) != len(titles):
+        raise ValueError("visual boundary text constraints are invalid")
+    rectangles = _visual_layout_rectangles(page, lines, width, height)
+    if not rectangles:
+        return None
+
+    matched: list[tuple[float, float, float, float]] = []
+    tolerance = _LINE_TOLERANCE
+    for title in titles:
+        containing = [
+            rectangle for rectangle in rectangles
+            if (
+                rectangle[0] - tolerance <= title.x0
+                and title.x1 <= rectangle[2] + tolerance
+                and rectangle[1] - tolerance <= title.y0
+                and title.y1 <= rectangle[3] + tolerance
+            )
+        ]
+        if len(containing) > 1:
+            raise ValueError("visual receipt frames overlap")
+        if not containing:
+            # A visual object may be incidental; only use the visual path
+            # when every title has exactly one complete visual container.
+            return None
+        matched.append(containing[0])
+
+    boundaries = [0.0]
+    for index, (current, following) in enumerate(zip(matched[:-1], matched[1:], strict=True)):
+        current_width = current[2] - current[0]
+        following_width = following[2] - following[0]
+        current_height = current[3] - current[1]
+        following_height = following[3] - following[1]
+        if (
+            following[1] - current[3] <= tolerance
+            or abs(current[0] - following[0]) > _VISUAL_BOUNDARY_DIMENSION_TOLERANCE
+            or abs(current[2] - following[2]) > _VISUAL_BOUNDARY_DIMENSION_TOLERANCE
+            or abs(current_width - following_width) > _VISUAL_BOUNDARY_DIMENSION_TOLERANCE
+            or abs(current_height - following_height) > _VISUAL_BOUNDARY_DIMENSION_TOLERANCE
+        ):
+            raise ValueError("visual receipt frame gap is ambiguous")
+        if not (_finite(last_text_y[index]) and _finite(heading_starts[index + 1])):
+            raise ValueError("visual boundary text constraints are invalid")
+        lower = max(current[3], float(last_text_y[index]))
+        upper = min(following[1], float(heading_starts[index + 1]))
+        if not _finite(lower) or not _finite(upper) or lower >= upper:
+            raise ValueError("visual receipt frame gap is outside text bounds")
+        empty_gap = _visual_empty_gap(page, lower, upper)
+        if empty_gap is None:
+            raise ValueError("visual receipt frame gap is occupied")
+        boundary = (empty_gap[0] + empty_gap[1]) / 2
+        if not _finite(boundary) or not boundaries[-1] < boundary < height:
+            raise ValueError("visual receipt boundaries are ambiguous")
+        boundaries.append(boundary)
+    boundaries.append(height)
+    return boundaries
+
+
 def _last_text_y_by_title(
     parsed: ParsedPage,
     titles: list[_Title],
     height: float,
+    heading_starts: list[float] | None = None,
+    line_boxes: list[tuple[str, tuple[float, float, float, float]]] | None = None,
+    assigned_print_count_lines: set[tuple[float, float, float, float]] | None = None,
 ) -> list[float]:
     blocks = [block for block in parsed.blocks if not block.is_watermark]
     last_text_y: list[float] = []
     for index, title in enumerate(titles):
-        next_y = titles[index + 1].y0 if index + 1 < len(titles) else height
-        segment_blocks = [
-            block
-            for block in blocks
-            if title.y0 <= block.y0 < next_y
-            and not (
+        next_y = (heading_starts[index + 1] if heading_starts else titles[index + 1].y0) if index + 1 < len(titles) else height
+        maximum_values: list[float] = []
+        for block in blocks:
+            if not (title.y0 <= block.y0 < next_y):
+                continue
+            if (
                 block.y0 >= height * 0.9
                 and block.y1 <= height
                 and block.x1 - block.x0 <= parsed.width * 0.45
+            ):
+                continue
+
+            if line_boxes is None:
+                maximum_values.append(float(block.y1))
+                continue
+
+            contained_lines = [
+                (text, box)
+                for text, box in line_boxes
+                if (
+                    block.x0 - 1.5 <= box[0]
+                    and box[2] <= block.x1 + 1.5
+                    and block.y0 - 1.5 <= box[1]
+                    and box[3] <= block.y1 + 1.5
+                )
+            ]
+            marker_lines = [
+                box for _text, box in contained_lines
+                if assigned_print_count_lines is not None
+                and box in assigned_print_count_lines
+            ]
+            if not marker_lines:
+                maximum_values.append(float(block.y1))
+                continue
+
+            # A marker may share one raw PDF block with the next title.  Use
+            # line boxes to retain any preceding body lines while excluding
+            # the marker and all lines at/after the next title boundary.
+            maximum_values.extend(
+                float(box[3])
+                for text, box in contained_lines
+                if not _is_print_count_line(text) and box[1] < next_y
             )
-        ]
-        maximum = max((float(block.y1) for block in segment_blocks), default=title.y1)
+
+        maximum = max(maximum_values, default=title.y1)
         if not _finite(maximum) or maximum >= height:
             raise ValueError("receipt text geometry is invalid")
         if index + 1 < len(titles) and maximum >= next_y:
@@ -497,35 +1174,121 @@ def _ready_template(
         return _unavailable(_NO_TEXT if not visible_blocks else _NO_TITLES)
     lines = _drawing_lines(page, width, height)
     horizontal_lines = [line for line in lines if line.orientation == "h"]
-    if len(horizontal_lines) < _MIN_HORIZONTAL_LINES:
-        return _unavailable(_AMBIGUOUS_LAYOUT)
 
-    last_text_y = _last_text_y_by_title(parsed, titles, height)
+    # The parser has already identified repeated/diagonal watermark blocks.
+    # Do not let a line from the same block re-enter as an issuer masthead:
+    # a bank watermark above a title would move its protected start into the
+    # preceding receipt. Match exact geometry and text, never mere overlap.
+    watermark_lines = {
+        (_normalize_title_line(block.text), (block.x0, block.y0, block.x1, block.y1))
+        for block in parsed.blocks if block.is_watermark
+    }
+    text_lines = [item for item in _dict_title_boxes(page, titles_only=False) if item not in watermark_lines]
+    text_issuer_names = [
+        _issuer_bank_name(title, text_lines, titles[index - 1].y1 if index else 0.0)
+        for index, title in enumerate(titles)
+    ]
+    image_regions = [
+        (
+            max(titles[index - 1].y1 if index else 0.0, title.y0 - 64.0),
+            title.y1,
+        )
+        for index, (title, issuer_name) in enumerate(zip(titles, text_issuer_names, strict=True))
+        if issuer_name is None
+    ]
+    if image_regions:
+        text_lines = [*text_lines, *image_masthead_lines(page, image_regions, text_lines)]
+    issuer_names = [
+        _issuer_bank_name(title, text_lines, titles[index - 1].y1 if index else 0.0)
+        for index, title in enumerate(titles)
+    ]
+    issuer_keys = [
+        hashlib.sha256(name.encode("utf-8")).hexdigest() if name else None
+        for name in issuer_names
+    ]
+    assigned_print_count_lines, print_count_starts = _print_count_prefixes(titles, text_lines)
+    header_fields = _receipt_header_fields(titles, issuer_keys, text_lines)
+    # A standalone issuer masthead belongs to the following receipt. Using
+    # its title alone as the next start would count that masthead as the
+    # previous receipt's last body line and cut it out of the protection box.
+    heading_starts = []
+    for index, title in enumerate(titles):
+        matching_headers = [
+            box[1] for text, box in text_lines
+            if issuer_keys[index] is not None
+            and max(titles[index - 1].y1 if index else 0.0, title.y0 - 64.0) <= box[1] <= title.y0
+            and box[3] <= title.y1 + 3.0
+            and (bank := issuer_masthead_bank(text, box, text_lines)) is not None
+            and hashlib.sha256(bank.encode("utf-8")).hexdigest() == issuer_keys[index]
+        ]
+        starts = [*matching_headers, *(box[1] for _label, box in header_fields[index])]
+        if print_count_starts[index] is not None:
+            starts.append(print_count_starts[index])
+        heading_starts.append(min(starts, default=title.y0))
+    last_text_y = _last_text_y_by_title(
+        parsed, titles, height, heading_starts, text_lines or None,
+        assigned_print_count_lines,
+    )
+    visual_boundaries = _visual_gap_boundaries(
+        page, titles, lines, width, height, last_text_y, heading_starts,
+    )
+    if len(horizontal_lines) < _MIN_HORIZONTAL_LINES and visual_boundaries is None:
+        return _unavailable(_AMBIGUOUS_LAYOUT)
     boundaries = [0.0]
     for index in range(len(titles) - 1):
-        boundary = (last_text_y[index] + titles[index + 1].y0) / 2
+        boundary = (last_text_y[index] + heading_starts[index + 1]) / 2
+        last_rule = max((
+            line.y0 for line in horizontal_lines
+            if titles[index].y1 <= line.y0 < heading_starts[index + 1]
+        ), default=last_text_y[index])
+        if (heading_starts[index + 1] < titles[index + 1].y0
+                and abs(last_rule - boundary) <= _LINE_TOLERANCE):
+            boundary = (last_rule + heading_starts[index + 1]) / 2
         if not _finite(boundary) or not (boundaries[-1] < boundary < height):
             raise ValueError("receipt boundaries are ambiguous")
         boundaries.append(boundary)
     boundaries.append(height)
+    if visual_boundaries is not None:
+        boundaries = visual_boundaries
+    elif _visible_objects_cross_boundaries(page, boundaries):
+        # A thin bitmap divider can occupy the text midpoint. Move only within
+        # the same text-proven gap to an actually empty interval. Stamps, tall
+        # images, curves and other crossing objects remain ambiguous.
+        for kind, box, *_rest in page.get_bboxlog():
+            if kind in {"fill-text", "stroke-text", "ignore-text"}:
+                continue
+            if any(box[1] < boundary < box[3] for boundary in boundaries[1:-1]):
+                if not (kind == "fill-image" and box[2] - box[0] >= width * 0.7
+                        and 0 < box[3] - box[1] <= 12):
+                    return _unavailable(_AMBIGUOUS_LAYOUT)
+        for index in range(len(titles) - 1):
+            empty_gap = _visual_empty_gap(page, last_text_y[index], heading_starts[index + 1])
+            if empty_gap is None:
+                return _unavailable(_AMBIGUOUS_LAYOUT)
+            boundaries[index + 1] = (empty_gap[0] + empty_gap[1]) / 2
     if _visible_objects_cross_boundaries(page, boundaries):
         return _unavailable(_AMBIGUOUS_LAYOUT)
 
     # A line in each inter-title gap is the minimum table evidence needed to
-    # explain the vertical partition.  Straight lines outside the gaps still
-    # participate in the fingerprint, but cannot establish a boundary alone.
-    for index in range(len(titles) - 1):
-        lower = titles[index].y1
-        upper = titles[index + 1].y0
-        if not any(lower <= line.y0 <= upper for line in horizontal_lines):
-            return _unavailable(_AMBIGUOUS_LAYOUT)
+    # explain the vertical partition.  Complete, one-to-one visual copies
+    # provide the same evidence for image-backed pages; straight lines outside
+    # the gaps still participate in the fingerprint, but cannot establish a
+    # boundary alone.
+    if visual_boundaries is None:
+        for index in range(len(titles) - 1):
+            lower = titles[index].y1
+            upper = titles[index + 1].y0
+            if not any(lower <= line.y0 <= upper for line in horizontal_lines):
+                return _unavailable(_AMBIGUOUS_LAYOUT)
 
     for boundary in boundaries[1:-1]:
         if any(block.y0 < boundary < block.y1 for block in parsed.blocks if not block.is_watermark):
             return _unavailable(_AMBIGUOUS_LAYOUT)
 
-    receipts = [
-        {
+    receipts = []
+    for index, title in enumerate(titles):
+        issuer_key = issuer_keys[index]
+        receipts.append({
             "anchor_y": float(title.y0),
             "bounds": {
                 "x0": 0.0,
@@ -534,14 +1297,28 @@ def _ready_template(
                 "y1": float(boundaries[index + 1]),
             },
             "title_key": title.title_key,
-        }
-        for index, title in enumerate(titles)
-    ]
-    return {
+            "issuer_bank_key": issuer_key,
+            "issuer_bank_name": issuer_names[index],
+            "template_fingerprint": _receipt_fingerprint(
+                title, issuer_key, lines, text_lines, boundaries[index], boundaries[index + 1], width, height,
+                header_fields[index],
+            ),
+        })
+    result = {
         "status": "ready",
         "fingerprint": _fingerprint(width, height, titles, lines),
         "receipts": receipts,
     }
+    frames = None
+    if all(title.title_text.startswith("客户回单") for title in titles):
+        try:
+            frames = _frame_rectangles(lines, width, height)
+        except _BudgetExceeded:
+            pass  # Optional visual identity must not invalidate a descriptor.
+    visual_form = describe_visual_form(page, titles, frames=frames)
+    if visual_form is not None:
+        result["layout_compatibility"] = visual_form
+    return result
 
 
 def describe_crop_page(page: Any) -> dict[str, object]:
@@ -553,6 +1330,7 @@ def describe_crop_page(page: Any) -> dict[str, object]:
     """
 
     try:
+        page = visible_page(page)
         geometry = _page_geometry(page)
         if geometry is None:
             return _unavailable(_AMBIGUOUS_LAYOUT)

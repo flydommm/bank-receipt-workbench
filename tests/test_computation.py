@@ -65,6 +65,38 @@ def test_computation_info_lists_code_content_and_runtime_versions_without_loadin
     assert "PaddleOCR" in json.dumps(summary, ensure_ascii=False)
 
 
+def test_receipt_source_policy_and_template_code_invalidate_previous_computation():
+    assert {"engine/source_layout.py", "engine/receipt_issuer.py", "engine/crop_templates.py",
+            "engine/receipt_document_types.py", "engine/receipt_visual_identity.py"} <= set(COMPUTATION_SOURCE_FILES)
+
+
+def test_receipt_layout_contract_and_pdf_geometry_participate_in_computation_version():
+    assert {"engine/receipt_layout_models.py", "engine/pdf_geometry.py",
+            "engine/receipt_layout.py", "engine/receipt_selection.py"} <= set(COMPUTATION_SOURCE_FILES)
+
+
+def test_receipt_checkpoints_and_publication_participate_in_computation_version():
+    assert {"engine/receipt_checkpoint.py", "engine/receipt_snapshot.py", "engine/batch_store.py",
+            "engine/batch_schema.py", "engine/batch_processor.py"} <= set(COMPUTATION_SOURCE_FILES)
+
+
+def test_historical_layout_snapshot_participates_in_computation_version():
+    assert "engine/receipt_layout_history.py" in COMPUTATION_SOURCE_FILES
+
+
+def test_receipt_review_binding_participates_in_computation_version():
+    assert {"engine/receipt_review_models.py", "engine/receipt_review_store.py",
+            "engine/receipt_review_read.py", "engine/review_store_v2.py", "engine/batch_review.py"} <= set(COMPUTATION_SOURCE_FILES)
+
+
+def test_desktop_runtime_contract_invalidates_previous_analysis(monkeypatch: pytest.MonkeyPatch):
+    from engine import computation
+
+    fixed = computation.computation_info()["computation_version"]
+    monkeypatch.setattr(computation, "HOST_RUNTIME_VERSION", "bundled-python-launch-v1")
+    assert computation.computation_info()["computation_version"] != fixed
+
+
 def test_computation_info_reports_the_effective_load_config_budget() -> None:
     from engine.config import EngineConfig
 

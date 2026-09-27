@@ -47,10 +47,19 @@ def scope_request(snapshot: dict[str, Any]) -> dict[str, Any]:
     request = {key: snapshot[key] for key in keys}
     if "output_name" in snapshot:
         request["output_name"] = snapshot["output_name"]
+    if "include_manifest" in snapshot:
+        request["include_manifest"] = snapshot["include_manifest"]
     return validate_scope_request(request)
 
 
 def _plan(snapshot: dict[str, Any], processed_at: str) -> dict[str, Any]:
+    if snapshot.get("schema") == 2:
+        from .receipt_export_plan import build_receipt_output_plan
+        return build_receipt_output_plan(
+            snapshot["sources"], snapshot["records"], snapshot["evidence_by_id"],
+            snapshot["processing_options"], snapshot["output_mode"], processed_at, snapshot.get("output_name"),
+            excluded_records=snapshot["excluded_records"],
+        )
     return build_output_plan(snapshot["sources"], snapshot["records"], snapshot["evidence_by_id"],
                              snapshot["criteria"], snapshot["output_mode"], processed_at,
                              snapshot.get("output_name"))
@@ -171,6 +180,8 @@ class ExportBundleService:
                           "page_count": file["page_count"], "preview_token": token,
                           "preview_path": str(self.preview_root / f"{token}.pdf")})
         entry = {"schema": 1, "intent_id": str(uuid4()), "job_id": snapshot["job_id"], "created_at": created_at,
+                 **({"receipt_schema": 2} if snapshot.get("schema") == 2 else {}),
+                 **({"include_manifest": snapshot["include_manifest"]} if "include_manifest" in snapshot else {}),
                  "state": "created", "scope": snapshot, "plan": plan, "files": files,
                  "preview_root": str(self.preview_root), "preview_identity": self.preview_identity,
                  "attempt": None, "receipt": None}
@@ -195,6 +206,12 @@ class ExportBundleService:
             file_ids.add(file["file_id"])
         if require_scope:
             snapshot = entry["scope"]
+            if ("include_manifest" in entry) != ("include_manifest" in snapshot) or (
+                    "include_manifest" in snapshot and (type(snapshot["include_manifest"]) is not bool
+                                                        or snapshot["include_manifest"] is not entry["include_manifest"])):
+                raise ExportScopeError("export manifest option does not match its intent")
+            if snapshot.get("schema") == 2 and entry.get("receipt_schema") != 2:
+                raise ExportScopeError("receipt export intent schema is missing")
             payload = {key: value for key, value in snapshot.items() if key != "snapshot_digest"}
             if (snapshot["snapshot_digest"] != _digest(payload) or snapshot["job_id"] != entry["job_id"]
                     or entry["plan"] != _plan(snapshot, entry["created_at"])):
@@ -209,9 +226,13 @@ class ExportBundleService:
     def _public_preview(entry: dict[str, Any]) -> dict[str, Any]:
         snapshot = entry["scope"]
         return deepcopy({"intent_id": entry["intent_id"], "state": entry["state"],
+                         **({"receipt_schema": entry["receipt_schema"]} if "receipt_schema" in entry else {}),
                          **{key: snapshot[key] for key in ("job_id", "result_revision", "scope_kind", "selected_segment_ids",
                                                            "source_fingerprint", "review_revision", "output_mode", "include_xlsx", "summary")},
                          **({"output_name": snapshot["output_name"]} if "output_name" in snapshot else {}),
+                         **({"include_manifest": snapshot["include_manifest"]} if "include_manifest" in snapshot else {}),
+                         **({key: snapshot[key] for key in ("excluded", "excluded_digest")}
+                            if snapshot.get("schema") == 2 else {}),
                          "files": [{key: file[key] for key in ("file_id", "name", "source_key", "page_count",
                                                                "preview_token", "preview_path", "sha256", "size_bytes") if key in file}
                                    for file in entry["files"]],
@@ -240,10 +261,15 @@ class ExportBundleService:
                 with writable_directory(self.preview_root, self.preview_identity):
                     for file, planned in zip(entry["files"], entry["plan"]["files"], strict=True):
                         selections: dict[str, dict[str, Any]] = {}
-                        for page in planned["pages"]:
+                        for output_index, page in enumerate(planned["pages"], start=1):
                             selection = selections.setdefault(page["source_key"], {
                                 "source_path": page["source_path"], "source_sha256": page["source_sha256"], "segments": []})
-                            selection["segments"].append({"page_number": page["source_page"], "segment_no": page["segment_no"],
+                            # The low-level PDF writer accepts a transient
+                            # ordinal for ordering clips. Receipt identity is
+                            # kept in the frozen plan/index, never fabricated
+                            # as a legacy segment number in persisted records.
+                            ordinal = output_index if entry["plan"].get("schema") == 2 else page["segment_no"]
+                            selection["segments"].append({"page_number": page["source_page"], "segment_no": ordinal,
                                                            "rect": page["rect"], "keep_full_page": page["keep_full_page"],
                                                            "review_status": "confirmed"})
                         result = core._export_pdf_response({"op": "export_pdf", "output_path": file["preview_path"],

@@ -6,7 +6,7 @@ export const COMPACT_DEFAULTS = { left: 230, right: 320 } as const;
 export const COLUMN_LIMITS = {
   leftMin: 220,
   leftMax: 420,
-  rightMin: 300,
+  rightMin: 280,
   rightMax: 520,
   centerMin: 500,
   dividerWidth: 16,
@@ -23,6 +23,7 @@ export type ResizableWorkspaceProps = {
   right?: ReactNode;
   children?: ReactNode;
   resetSignal?: number;
+  layout?: 'columns' | 'overview' | 'calibration';
 };
 
 type DividerIndex = 0 | 1;
@@ -142,7 +143,7 @@ export function getEffectiveWorkspaceColumns(
   return { left, right };
 }
 
-export function ResizableWorkspace({ left, center, right, children, resetSignal }: ResizableWorkspaceProps) {
+export function ResizableWorkspace({ left, center, right, children, resetSignal, layout = 'columns' }: ResizableWorkspaceProps) {
   const initialViewportWidth = typeof window !== 'undefined' && isFiniteNumber(window.innerWidth)
     ? window.innerWidth
     : 1600;
@@ -293,6 +294,7 @@ export function ResizableWorkspace({ left, center, right, children, resetSignal 
   }, [resetSignal]);
 
   useEffect(() => {
+    stopDrag('cancel');
     const measure = () => {
       const fallback = isFiniteNumber(window.innerWidth) && window.innerWidth > 0 ? window.innerWidth : 1600;
       const measured = workspaceRef.current?.getBoundingClientRect().width ?? 0;
@@ -310,7 +312,7 @@ export function ResizableWorkspace({ left, center, right, children, resetSignal 
       window.removeEventListener('resize', measure);
       observer?.disconnect();
     };
-  }, []);
+  }, [layout]);
 
   useEffect(() => {
     if (!hasUserPreference) setPreferred(defaultColumnsForViewport(viewportWidth));
@@ -325,6 +327,10 @@ export function ResizableWorkspace({ left, center, right, children, resetSignal 
     '--workspace-right': `${effectiveColumns.right}px`,
   } as CSSProperties;
   const columns = children === undefined ? [left, center, right] : Children.toArray(children);
+
+  if (layout !== 'columns') return <div className={`receipt-workspace receipt-workspace--${layout}`}>
+    {columns[1]}{layout === 'calibration' && columns[2]}
+  </div>;
 
   return (
     <div ref={workspaceRef} className="workspace" style={workspaceStyle}>

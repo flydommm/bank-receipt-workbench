@@ -12,6 +12,19 @@ import type { SourceDocument, SourcePreviewLocation } from '../domain/sourcePrev
 import type { EnginePagePreview } from './localEngineAdapter';
 import { SourceDocumentPreview, type SourceDocumentPreviewProps } from './SourceDocumentPreview';
 
+vi.mock('../services/pdfThumbnailCache', () => ({
+  PdfThumbnailCache: class {
+    async load(request: { page: number; pageCount: number; sha: string }) {
+      return {
+        status: 'ok', page: request.page, page_count: request.pageCount,
+        page_width: 600, page_height: 800, source_sha256: request.sha,
+        image_data: `data:image/png;base64,${request.sha[0]}-${request.page}`,
+      };
+    }
+    dispose() {}
+  },
+}));
+
 afterEach(cleanup);
 
 const sourceStyles = readFileSync('src/styles.css', 'utf8');
@@ -240,5 +253,80 @@ describe('SourceDocumentPreview', () => {
     expect(screen.queryByRole('button', { name: '确认当前片段' })).toBeNull();
     expect(screen.queryByRole('button', { name: '确认整组' })).toBeNull();
     expect(screen.queryByRole('button', { name: /选择目录并导出/ })).toBeNull();
+  });
+
+  it('opens every original page from overview and returns to single-page mode', async () => {
+    const props = renderPreview({ onGoToPage: vi.fn() });
+    expect(screen.getByRole('button', { name: '原页总览' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('button', { name: '单页' }).getAttribute('aria-pressed')).toBe('false');
+    expect(screen.getAllByRole('button', { name: /^打开 第 \d+ 页$/ })).toHaveLength(3);
+    await screen.findByRole('img', { name: '第 3 页缩略图' });
+    fireEvent.click(screen.getByRole('button', { name: '打开 第 3 页' }));
+    expect(props.onGoToPage).toHaveBeenCalledWith(3);
+    expect(screen.getByRole('button', { name: '单页' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.queryByRole('region', { name: '原页总览' })).toBeNull();
+  });
+
+  it('keeps an active crop in single-page view and stays there when navigating to a page without a candidate', () => {
+    const props = renderPreview({ onGoToPage: vi.fn(), visibleSegment, editorRect });
+    expect(screen.getByRole('button', { name: '单页' }).getAttribute('aria-pressed')).toBe('true');
+    cleanup();
+    const { rerender } = render(<SourceDocumentPreview {...props} />);
+    fireEvent.click(screen.getByRole('button', { name: '下一页' }));
+    expect(props.onNext).toHaveBeenCalledOnce();
+    rerender(<SourceDocumentPreview {...props} visibleSegment={null} editorRect={null} />);
+    expect(screen.getByRole('button', { name: '单页' }).getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(screen.getByRole('button', { name: '原页总览' }));
+    expect(screen.getByRole('region', { name: '原页总览' })).toBeTruthy();
+  });
+
+  it('resets overview for a different source and renders only its SHA-bound thumbnails', async () => {
+    const props = renderPreview({ onGoToPage: vi.fn() });
+    await screen.findByRole('img', { name: '第 1 页缩略图' });
+    cleanup();
+    const secondDocument = { ...sourceDocument, key: 'second-key', name: 'second.pdf', sourceSha256: 'b'.repeat(64), pageCount: 2 };
+    const { rerender, container } = render(<SourceDocumentPreview {...props} />);
+    rerender(<SourceDocumentPreview {...props} document={secondDocument} location={{ documentKey: 'second-key', page: 1 }} preview={null} />);
+    expect(screen.getByRole('button', { name: '原页总览' }).getAttribute('aria-pressed')).toBe('true');
+    await screen.findByRole('img', { name: '第 1 页缩略图' });
+    expect(screen.getAllByRole('button', { name: /^打开 第 \d+ 页$/ })).toHaveLength(2);
+    for (const image of container.querySelectorAll('image')) expect(image.getAttribute('href')).toContain('b-');
+  });
+
+  it('uses the shared 160–360 thumbnail scale with a 240px 100% baseline', async () => {
+    renderPreview({ onGoToPage: vi.fn() });
+    await screen.findByRole('img', { name: '第 1 页缩略图' });
+    const group = screen.getByRole('group', { name: '缩略图大小' });
+    const decrease = screen.getByRole('button', { name: '缩小缩略图' });
+    const increase = screen.getByRole('button', { name: '放大缩略图' });
+    expect(group.textContent).toContain('100%');
+    expect((decrease as HTMLButtonElement).disabled).toBe(false);
+    expect((increase as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(increase);
+    expect(group.textContent).toContain('108%');
+    for (let index = 0; index < 5; index += 1) fireEvent.click(decrease);
+    expect(group.textContent).toContain('67%');
+    expect((decrease as HTMLButtonElement).disabled).toBe(true);
+    for (let index = 0; index < 10; index += 1) fireEvent.click(increase);
+    expect(group.textContent).toContain('150%');
+    expect((increase as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('keeps page errors and retry handling available after leaving the default overview', () => {
+    const props = renderPreview({ onGoToPage: vi.fn(), error: '预览页面渲染失败' });
+    expect(screen.queryByRole('button', { name: '重试页面预览' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '单页' }));
+    expect(screen.getByRole('alert').textContent).toContain('预览页面渲染失败');
+    fireEvent.click(screen.getByRole('button', { name: '重试页面预览' }));
+    expect(props.onRetry).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ['navigation lock', { navigationDisabled: true }],
+    ['changed source', { document: { ...sourceDocument, integrityStatus: 'changed' as const } }],
+  ])('blocks overview navigation for %s', (_name, overrides) => {
+    renderPreview({ onGoToPage: vi.fn(), ...overrides });
+    expect((screen.getByRole('button', { name: '原页总览' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: '单页' }) as HTMLButtonElement).disabled).toBe(true);
   });
 });

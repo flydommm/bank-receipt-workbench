@@ -1,0 +1,2 @@
+.thumbnail-size-control { display: inline-flex; align-items: center; gap: 4px; }
+.thumbnail-size-control span { min-width: 34px; color: #657d91; text-align: center; }

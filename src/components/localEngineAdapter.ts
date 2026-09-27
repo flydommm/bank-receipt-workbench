@@ -120,6 +120,27 @@ export type EnginePagePreview = {
   image_data: string;
 };
 
+export const MAX_INSPECTION_PAGES = 32;
+
+export type EngineInspectedPage = Omit<EnginePagePreview, 'image_data' | 'source_sha256'> & {
+  source_sha256: string;
+  crop_template?: CropTemplatePage['crop_template'];
+};
+
+export type EnginePageInspectionError = {
+  status: 'error';
+  page: number;
+  code: 'page_out_of_range' | 'render_failed' | 'analyze_failed';
+  message: string;
+};
+
+export type EnginePagesInspection = {
+  status: 'ok';
+  page_count: number;
+  source_sha256: string;
+  pages: (EngineInspectedPage | EnginePageInspectionError)[];
+};
+
 export type EngineExportResult = {
   status: 'ok';
   output_path: string;
@@ -266,6 +287,7 @@ export class LocalEngineError extends Error {
 
 export interface LocalEngineAdapter {
   describeCropPage(path: string, page: number, sourceSha256: string): Promise<CropTemplatePage>;
+  inspectPages(path: string, pages: number[], sourceSha256: string, includeCropTemplate?: boolean): Promise<EnginePagesInspection>;
   health(): Promise<EngineHealth>;
   ocrHealth(verify?: boolean): Promise<OcrHealth>;
   ocrCacheInfo(): Promise<OcrCacheInfo>;
@@ -273,7 +295,7 @@ export interface LocalEngineAdapter {
   search(path: string, keyword: string, exact?: boolean): Promise<EngineSearchResult>;
   searchMulti(path: string, clauses: EngineSearchClause[], exact?: boolean): Promise<EngineMultiSearchResult>;
   inspectPdf(path: string): Promise<EnginePdfMetadata>;
-  renderPage(path: string, page: number, sourceSha256: string): Promise<EnginePagePreview>;
+  renderPage(path: string, page: number, sourceSha256: string, quality?: 'thumbnail'): Promise<EnginePagePreview>;
   analyzePage(path: string, page: number, matches: EngineRect[], sourceSha256: string): Promise<EnginePageAnalysis>;
   saveReviewSegments(taskId: string, segments: EngineReviewSegment[]): Promise<EngineReviewSegmentsSaveResult>;
   loadReviewSegments(taskId: string): Promise<EngineReviewSegmentsLoadResult>;
@@ -1091,8 +1113,14 @@ function isCropTemplatePage(value: unknown, page: number, sha: string): value is
   return template.receipts.every((item: unknown) => {
     if (!item || typeof item !== 'object' || Array.isArray(item)) return false;
     const receipt = item as Record<string, unknown>;
+    const optionalHash = (value: unknown) => value === undefined || value === null || hash(value);
+    const issuerBankName = receipt.issuer_bank_name;
+    if (issuerBankName !== undefined && issuerBankName !== null
+        && (typeof issuerBankName !== 'string' || issuerBankName.trim().length === 0 || issuerBankName.includes('\0'))) return false;
     if (!isRectInsidePage(receipt.bounds, data.page_width as number, data.page_height as number)
-        || !isFiniteNumber(receipt.anchor_y) || !hash(receipt.title_key)) return false;
+        || !isFiniteNumber(receipt.anchor_y) || !hash(receipt.title_key)
+        || !optionalHash(receipt.issuer_bank_key) || !optionalHash(receipt.template_fingerprint)
+        || (receipt.template_fingerprint != null && !hash(receipt.issuer_bank_key))) return false;
     const bounds = receipt.bounds;
     if (bounds.y0 < previousBottom || receipt.anchor_y < bounds.y0 || receipt.anchor_y >= bounds.y1) return false;
     previousBottom = bounds.y1;
@@ -1100,7 +1128,73 @@ function isCropTemplatePage(value: unknown, page: number, sha: string): value is
   });
 }
 
+function validInspectionPageNumbers(pages: unknown): pages is number[] {
+  return Array.isArray(pages) && pages.length > 0 && pages.length <= MAX_INSPECTION_PAGES
+    && pages.every((page) => Number.isSafeInteger(page) && page >= 1 && page <= 0xffffffff)
+    && new Set(pages).size === pages.length;
+}
+
+function isPagesInspection(
+  value: unknown, pages: number[], sourceSha256: string, includeCropTemplate: boolean,
+): value is EnginePagesInspection {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const data = value as Record<string, unknown>;
+  if (data.status !== 'ok' || !Number.isSafeInteger(data.page_count) || (data.page_count as number) < 1
+    || data.source_sha256 !== sourceSha256 || !Array.isArray(data.pages) || data.pages.length !== pages.length) return false;
+  const expected = new Set(pages);
+  const seen = new Set<number>();
+  return data.pages.every((item: unknown) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return false;
+    const result = item as Record<string, unknown>;
+    const page = result.page as number;
+    if (!expected.has(page) || seen.has(page)) return false;
+    seen.add(page);
+    if (result.status === 'error') {
+      if (typeof result.message !== 'string' || result.message.length === 0 || result.message.length > 1024
+        || result.message.includes('\0')) return false;
+      return page > (data.page_count as number)
+        ? result.code === 'page_out_of_range'
+        : result.code === 'render_failed' || (includeCropTemplate && result.code === 'analyze_failed');
+    }
+    if (result.status !== 'ok' || page > (data.page_count as number)
+      || result.page_count !== data.page_count || result.source_sha256 !== sourceSha256
+      || !isFiniteNumber(result.page_width) || result.page_width <= 0
+      || !isFiniteNumber(result.page_height) || result.page_height <= 0) return false;
+    // Match the engine's existing 144-DPI preview budget without allocating an image.
+    const pixelWidth = Math.ceil(result.page_width * 2);
+    const pixelHeight = Math.ceil(result.page_height * 2);
+    if (pixelWidth > 16_384 || pixelHeight > 16_384 || pixelWidth * pixelHeight > 64_000_000) return false;
+    if (includeCropTemplate) return isCropTemplatePage(result, page, sourceSha256);
+    return result.crop_template === undefined;
+  });
+}
+
 export const localEngineAdapter: LocalEngineAdapter = {
+  async inspectPages(path, pages, sourceSha256, includeCropTemplate = false) {
+    assertSourceSha256(sourceSha256);
+    if (typeof path !== 'string' || path.trim().length === 0 || path.includes('\0')
+      || !validInspectionPageNumbers(pages) || typeof includeCropTemplate !== 'boolean') {
+      throw new LocalEngineError('ENGINE_INVALID_REQUEST', '页面检查需提供 1 至 32 个不重复的有效页码。');
+    }
+    if (!isTauriRuntime()) throw new LocalEngineError('TAURI_UNAVAILABLE', '页面检查需要在桌面应用中运行。');
+    // Freeze the exact request set before yielding to IPC; callers may reuse their arrays.
+    const requestedPages = [...pages];
+    let response: unknown;
+    try {
+      response = await invoke<unknown>('engine_inspect_pages', {
+        path, pages: requestedPages, sourceSha256, includeCropTemplate,
+      });
+    } catch (cause) {
+      throw new LocalEngineError('ENGINE_ANALYZE_FAILED', '读取页面检查信息失败。', { cause });
+    }
+    if (isEngineErrorResponse(response)) {
+      throw new LocalEngineError('ENGINE_REQUEST_REJECTED', engineErrorMessage(response), { engineCode: response.code });
+    }
+    if (!isPagesInspection(response, requestedPages, sourceSha256, includeCropTemplate)) {
+      throw new LocalEngineError('ENGINE_INVALID_RESPONSE', '页面检查结果与当前源文件或请求页码不一致。');
+    }
+    return response;
+  },
   async describeCropPage(path, page, sourceSha256) {
     assertAnalyzeRequest(page, []);
     assertSourceSha256(sourceSha256);
@@ -1220,14 +1314,19 @@ export const localEngineAdapter: LocalEngineAdapter = {
     return response;
   },
 
-  async renderPage(path: string, page: number, sourceSha256: string): Promise<EnginePagePreview> {
+  async renderPage(path: string, page: number, sourceSha256: string, quality?: 'thumbnail'): Promise<EnginePagePreview> {
     assertSourceSha256(sourceSha256);
+    if (quality !== undefined && quality !== 'thumbnail') {
+      throw new LocalEngineError('ENGINE_INVALID_REQUEST', 'PDF 预览质量参数无效。');
+    }
     if (!isTauriRuntime()) {
       throw new LocalEngineError('TAURI_UNAVAILABLE', 'PDF 预览需要在 Tauri 桌面应用中运行。');
     }
     let response: unknown;
     try {
-      response = await invoke<unknown>('engine_render_page', { path, page, sourceSha256 });
+      response = await invoke<unknown>('engine_render_page', {
+        path, page, sourceSha256, ...(quality === undefined ? {} : { quality }),
+      });
     } catch (cause) {
       throw new LocalEngineError('ENGINE_HEALTH_FAILED', 'PDF 页面预览生成失败。', { cause });
     }

@@ -16,6 +16,9 @@ import {
   type EngineReviewSegment,
   type EngineReviewSegmentV2,
   type EngineSavedReviewV2,
+  type EngineInspectedPage,
+  type EnginePagesInspection,
+  type EnginePageInspectionError,
   type OcrCacheClearResult,
   type OcrCacheInfo,
 } from './components/localEngineAdapter';
@@ -71,6 +74,30 @@ function preview(path: string, page: number, imageData = `data:image/png;base64,
     image_data: imageData,
     path,
   };
+}
+
+function inspectionPage(page: number, sourceSha256: string, overrides: Partial<EngineInspectedPage> = {}): EngineInspectedPage {
+  return {
+    status: 'ok', page, page_count: 20, page_width: PAGE_WIDTH, page_height: PAGE_HEIGHT,
+    source_sha256: sourceSha256, ...overrides,
+  };
+}
+
+function inspectionResponse(pages: (EngineInspectedPage | EnginePageInspectionError)[], sourceSha256: string): EnginePagesInspection {
+  const firstValid = pages.find((page) => page.status === 'ok');
+  return { status: 'ok', source_sha256: sourceSha256, page_count: firstValid?.page_count ?? 20, pages };
+}
+
+function mockPageInspections(inspect: (path: string, page: number, sha: string) => EngineInspectedPage | EnginePageInspectionError | Promise<EngineInspectedPage | EnginePageInspectionError>) {
+  vi.mocked(localEngineAdapter.inspectPages).mockImplementation(async (path, pages, sha, includeTemplate) => {
+    const results = await Promise.all(pages.map(async (page) => {
+      const result = await inspect(path, page, sha);
+      if (result.status !== 'ok') return result;
+      const { crop_template, ...geometry } = result;
+      return includeTemplate ? { ...geometry, crop_template: crop_template ?? { status: 'unavailable' as const, reason: 'no_text' } } : geometry;
+    }));
+    return inspectionResponse(results, sha);
+  });
 }
 
 function pickerResult(files: string[], directory: string | null = null) {
@@ -287,6 +314,12 @@ async function addPdf(user: ReturnType<typeof userEvent.setup>): Promise<void> {
   await user.click(screen.getAllByRole('button', { name: '添加 PDF' })[0]!);
 }
 
+async function openSinglePage(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+  const sourcePreview = screen.getByRole('region', { name: '源 PDF 预览' });
+  const singlePage = await within(sourcePreview).findByRole('button', { name: '单页' });
+  await user.click(singlePage);
+}
+
 async function runCriteriaSearch(
   criteria: SearchCriteria,
 ): Promise<ReturnType<typeof userEvent.setup>> {
@@ -325,6 +358,7 @@ async function loadResults(user: ReturnType<typeof userEvent.setup>) {
   await choosePdf(user);
   await startAnalysis(user);
   expect(await waitFor(() => reviewRow(/第 4 页 \/ 片段 1/))).toBeTruthy();
+  expectEntryReviewActions();
 }
 
 async function openSearchEditor(user: ReturnType<typeof userEvent.setup>) {
@@ -340,6 +374,55 @@ async function validatePreviewForPage(user: ReturnType<typeof userEvent.setup>, 
   await waitFor(() => expect(screen.getByLabelText('裁剪区域')).toBeTruthy());
 }
 
+async function enterGuidedReview(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+  const enter = screen.queryByRole('button', { name: '进入微调' });
+  if (!enter) return;
+  await user.click(enter);
+  await waitFor(() => expect(screen.getByRole('button', { name: /确认并预览本轮/ })).toBeTruthy());
+  expect(screen.getByRole('region', { name: '微调与确认' })).toBeTruthy();
+  expect(screen.queryByRole('region', { name: '结果检查' })).toBeNull();
+  expect(screen.queryByRole('button', { name: '选择导出范围' })).toBeNull();
+}
+
+async function finishGuidedRound(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+  await previewAndSaveGuidedRound(user);
+  await waitFor(() => expect(screen.getByRole('button', { name: /开始下一位置微调|检查本银行完成情况/ })).toBeTruthy());
+}
+
+async function previewAndSaveGuidedRound(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+  const preview = screen.queryByRole('button', { name: /^确认并预览本轮/ });
+  if (preview) await user.click(preview);
+  await user.click(await screen.findByRole('button', { name: /^保存本轮 \d+ 处$/ }));
+}
+
+async function advanceGuidedRound(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+  const next = screen.queryByRole('button', { name: /开始下一位置微调|检查本银行完成情况/ });
+  if (!next) return;
+  await user.click(next);
+  await waitFor(() => expect(screen.queryByRole('button', { name: /确认并预览本轮/ })
+    || screen.queryByRole('button', { name: /完成本银行|完成本次微调/ })).toBeTruthy());
+}
+
+async function completeGuidedBank(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+  await advanceGuidedRound(user);
+  const complete = screen.queryByRole('button', { name: /完成本银行，进入下一银行|完成本次微调/ });
+  if (complete) await user.click(complete);
+}
+
+async function completeAllGuidedReview(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+  await enterGuidedReview(user);
+  for (let step = 0; step < 30; step += 1) {
+    if (screen.queryByRole('button', { name: '导出审核结果' })) return;
+    const action = await waitFor(() => {
+      const button = screen.getByRole('button', { name: /确认并预览本轮|^保存本轮 \d+ 处$|开始下一位置微调|检查本银行完成情况|完成本银行，进入下一银行|完成本次微调/ }) as HTMLButtonElement;
+      expect(button.disabled).toBe(false);
+      return button;
+    });
+    await user.click(action);
+  }
+  throw new Error('Guided review did not finish');
+}
+
 async function optIntoXlsxExport(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole('checkbox', { name: '同时导出审核索引 XLSX（可选）' }));
 }
@@ -348,18 +431,34 @@ function reviewRow(name: RegExp | string): HTMLElement {
   return within(screen.getByRole('region', { name: '审核导航' })).getByRole('button', { name });
 }
 
-function expectReviewPhaseActions(): void {
-  expect(screen.getByRole('button', { name: '保留整页' })).toBeTruthy();
-  expect(screen.getByRole('button', { name: '确认当前片段' })).toBeTruthy();
-  expect(screen.getByRole('button', { name: '确认整组' })).toBeTruthy();
-  expect(screen.queryByRole('button', { name: /生成 PDF 导出预览/ })).toBeNull();
+function expectEntryReviewActions(): void {
+  expect(screen.getByRole('region', { name: '结果检查' })).toBeTruthy();
+  expect(screen.queryByRole('region', { name: '微调与确认' })).toBeNull();
+  expect(screen.getByRole('button', { name: '选择导出范围' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: '进入微调' })).toBeTruthy();
+  expect(screen.queryByRole('button', { name: /^保存本轮 \d+ 处$/ })).toBeNull();
+  expect(screen.queryByRole('button', { name: '导出审核结果' })).toBeNull();
 }
 
-function confirmedPreviewAction(): HTMLButtonElement {
-  expect(screen.queryByRole('button', { name: '保留整页' })).toBeNull();
-  expect(screen.queryByRole('button', { name: '确认当前片段' })).toBeNull();
-  expect(screen.queryByRole('button', { name: /确认整组/ })).toBeNull();
-  return screen.getByRole('button', { name: /生成 PDF 导出预览/ }) as HTMLButtonElement;
+function expectEntryExportDisabled(): void {
+  expect(screen.getByRole('region', { name: '结果检查' })).toBeTruthy();
+  expect(screen.queryByRole('region', { name: '微调与确认' })).toBeNull();
+  expect((screen.getByRole('button', { name: '选择导出范围' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.queryByRole('button', { name: '导出审核结果' })).toBeNull();
+}
+
+function expectEntryExportAction(): void {
+  expect(screen.getByRole('region', { name: '结果检查' })).toBeTruthy();
+  expect(screen.queryByRole('region', { name: '微调与确认' })).toBeNull();
+  expect(screen.getByRole('button', { name: '选择导出范围' })).toBeTruthy();
+  expect(screen.queryByRole('button', { name: '导出审核结果' })).toBeNull();
+}
+
+function expectNoReviewSurface(): void {
+  expect(screen.queryByRole('region', { name: '结果检查' })).toBeNull();
+  expect(screen.queryByRole('region', { name: '微调与确认' })).toBeNull();
+  expect(screen.queryByRole('button', { name: '选择导出范围' })).toBeNull();
+  expect(screen.queryByRole('button', { name: '导出审核结果' })).toBeNull();
 }
 
 const VIEW_SOURCE_A = '/docs/account-a/receipt.pdf';
@@ -450,6 +549,10 @@ describe('App orchestration', () => {
       ...preview(path, page),
       page_count: path.startsWith('/cache/') ? 2 : 20,
     }));
+    vi.spyOn(localEngineAdapter, 'inspectPages');
+    mockPageInspections(async (path, page, sha) => inspectionPage(page, sha, {
+      page_count: (await latestSuccessfulMockSearchMetadata(path))?.page_count ?? 20,
+    }));
     vi.spyOn(localEngineAdapter, 'analyzePage').mockImplementation(async (path, page, matches) => analysis(page, matches, page === 4 ? 0 : 280));
     vi.spyOn(localEngineAdapter, 'computationInfo').mockResolvedValue({
       status: 'ok',
@@ -495,106 +598,117 @@ describe('App orchestration', () => {
     window.localStorage.removeItem(APP_SETTINGS_STORAGE_KEY);
     window.localStorage.removeItem(SEARCH_CONDITION_HISTORY_STORAGE_KEY);
     window.localStorage.removeItem(KEYWORD_HISTORY_STORAGE_KEY);
+    Reflect.deleteProperty(window, '__TAURI_INTERNALS__');
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
-  it('M4 saves two manual decisions and undoes both with fresh source checks and consecutive CAS revisions', async () => {
+  it('M4 completes two guided rounds and undoes the latest round as one operation', async () => {
     const user = userEvent.setup();
+    vi.mocked(localEngineAdapter.analyzePage).mockImplementation(async (_path, page, matches) => {
+      const result = analysis(page, matches, page === 4 ? 0 : 280);
+      return { ...result, selections: result.selections.map((item) => ({ ...item, needs_review: true, confidence: 0.8 })) };
+    });
     render(<App />);
     await loadResults(user);
-    await validatePreviewForPage(user, 4);
-    await user.click(screen.getByRole('button', { name: '保留整页' }));
-    await waitFor(() => expect((screen.getByRole('button', { name: '确认当前片段' }) as HTMLButtonElement).disabled).toBe(false));
-    await user.click(screen.getByRole('button', { name: '确认当前片段' }));
-    await waitFor(() => expect((screen.getByRole('button', { name: /撤销上一步/ }) as HTMLButtonElement).disabled).toBe(false));
-    const inspections = vi.mocked(localEngineAdapter.inspectPdf).mock.calls.length;
-    await user.click(screen.getByRole('button', { name: /撤销上一步/ }));
-    await waitFor(() => expect(vi.mocked(localEngineAdapter.saveReviewSegmentsV2).mock.calls.length).toBe(3));
-    await waitFor(() => expect((screen.getByRole('button', { name: /撤销上一步/ }) as HTMLButtonElement).disabled).toBe(false));
-    await user.click(screen.getByRole('button', { name: /撤销上一步/ }));
-    await waitFor(() => expect(vi.mocked(localEngineAdapter.saveReviewSegmentsV2).mock.calls.length).toBe(4));
-    await waitFor(() => expect((screen.getByRole('button', { name: /撤销上一步/ }) as HTMLButtonElement).disabled).toBe(true));
-    const records = vi.mocked(localEngineAdapter.saveReviewSegmentsV2).mock.calls.map((call) => call[2][0]!);
-    expect(records.map((record) => record.record_revision)).toEqual([0, 1, 2, 3]);
-    expect(records[2]).toMatchObject({ crop_mode: 'full_page', review_status: 'needs_review' });
-    expect(records[3]).toMatchObject({ crop_mode: 'candidate', manual_adjusted: false });
-    expect(records[3]!.final_rect).toEqual(records[3]!.candidate_rect);
-    expect(localEngineAdapter.inspectPdf).toHaveBeenCalledTimes(inspections + 2);
-    expect(screen.queryByRole('button', { name: /生成 PDF 导出预览/ })).toBeNull();
+    await enterGuidedReview(user);
+
+    const firstCrop = screen.getByLabelText('裁剪区域');
+    fireEvent.keyDown(firstCrop, { key: 'ArrowDown' });
+    await previewAndSaveGuidedRound(user);
+    await screen.findByRole('button', { name: '开始下一位置微调' });
+
+    await user.click(screen.getByRole('button', { name: '开始下一位置微调' }));
+    await screen.findByRole('button', { name: /确认并预览本轮/ });
+    await previewAndSaveGuidedRound(user);
+    await screen.findByRole('button', { name: '检查本银行完成情况' });
+    await user.click(screen.getByRole('button', { name: '检查本银行完成情况' }));
+    await screen.findByRole('button', { name: '完成本次微调' });
+
+    const beforeUndo = vi.mocked(localEngineAdapter.saveReviewSegmentsV2).mock.calls.length;
+    await user.click(screen.getByRole('button', { name: '撤销本轮' }));
+    await waitFor(() => expect(vi.mocked(localEngineAdapter.saveReviewSegmentsV2).mock.calls.length).toBe(beforeUndo + 1));
+    expect(screen.getByRole('button', { name: /确认并预览本轮/ })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '选择导出范围' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '导出审核结果' })).toBeNull();
   });
 
-  it('M4 restores the immutable automatic candidate without running another search', async () => {
+  it('M4 lets a guided round choose the retained single-candidate boundary before saving', async () => {
     const user = userEvent.setup();
     render(<App />);
     await loadResults(user);
-    await validatePreviewForPage(user, 4);
-    await user.click(screen.getByRole('button', { name: '保留整页' }));
-    await waitFor(() => expect((screen.getByRole('button', { name: '恢复自动候选' }) as HTMLButtonElement).disabled).toBe(false));
-    await user.click(screen.getByRole('button', { name: '恢复自动候选' }));
-    await waitFor(() => expect(vi.mocked(localEngineAdapter.saveReviewSegmentsV2).mock.calls.length).toBe(2));
-    const restored = vi.mocked(localEngineAdapter.saveReviewSegmentsV2).mock.calls[1]![2][0]!;
-    expect(restored).toMatchObject({ crop_mode: 'candidate', review_status: 'needs_review', manual_adjusted: false });
-    expect(restored.final_rect).toEqual(restored.candidate_rect);
+    await enterGuidedReview(user);
+    await user.click(screen.getByText('当前边界不合适'));
+    await user.click(screen.getByRole('button', { name: '按单张候选分割' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /确认并预览本轮/ })).toBeTruthy());
+    const savesBeforeConfirm = vi.mocked(localEngineAdapter.saveReviewSegmentsV2).mock.calls.length;
+    await previewAndSaveGuidedRound(user);
+    await waitFor(() => expect(vi.mocked(localEngineAdapter.saveReviewSegmentsV2).mock.calls.length).toBeGreaterThan(savesBeforeConfirm));
+    const saved = vi.mocked(localEngineAdapter.saveReviewSegmentsV2).mock.calls.at(-1)![2][0]!;
+    expect(saved).toMatchObject({ crop_mode: 'candidate', review_status: 'page_confirmed', manual_adjusted: false });
+    expect(saved.final_rect).toEqual(saved.candidate_rect);
     expect(localEngineAdapter.search).toHaveBeenCalledTimes(1);
   });
 
-  it('M4 retains a failed edit and retries its original CAS before adding undo history', async () => {
+  it('M4 keeps a failed guided save recoverable and retries the original round', async () => {
     const user = userEvent.setup();
     render(<App />);
     await loadResults(user);
-    await validatePreviewForPage(user, 4);
+    await enterGuidedReview(user);
     vi.mocked(localEngineAdapter.saveReviewSegmentsV2).mockRejectedValueOnce(new Error('模拟磁盘失败'));
-    await user.click(screen.getByRole('button', { name: '保留整页' }));
-    const retry = await screen.findByRole('button', { name: '重试保存' });
-    expect((screen.getByRole('button', { name: /撤销上一步/ }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole('button', { name: '确认整组' }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.keyDown(screen.getByLabelText('裁剪区域'), { key: 'ArrowDown' });
+    await previewAndSaveGuidedRound(user);
+    const retry = await screen.findByRole('button', { name: '重试本轮保存' });
+    expect(screen.queryByRole('button', { name: '撤销上一轮' })).toBeNull();
     await user.click(retry);
-    await waitFor(() => expect(screen.queryByRole('button', { name: '重试保存' })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole('button', { name: '重试本轮保存' })).toBeNull());
     expect(vi.mocked(localEngineAdapter.saveReviewSegmentsV2).mock.calls.map((call) => call[2][0]!.record_revision)).toEqual([0, 0]);
-    expect((screen.getByRole('button', { name: /撤销上一步/ }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.getByRole('button', { name: /开始下一位置微调|检查本银行完成情况/ })).toBeTruthy();
   });
 
-  it('M4 discards only through a readonly reload and does not guess that a failed write succeeded', async () => {
+  it('M4 discards a failed guided round only after a readonly reload', async () => {
     const user = userEvent.setup();
     const read = vi.spyOn(localEngineAdapter, 'readReviewSnapshot').mockImplementation(async (context, originals, revision) =>
       preparedReview(await reviewContextKey(context), revision, originals));
     render(<App />);
     await loadResults(user);
-    await validatePreviewForPage(user, 4);
+    await enterGuidedReview(user);
     vi.mocked(localEngineAdapter.saveReviewSegmentsV2).mockRejectedValueOnce(new Error('模拟保存失败'));
-    await user.click(screen.getByRole('button', { name: '保留整页' }));
-    await user.click(await screen.findByRole('button', { name: '放弃未保存修改' }));
-    await waitFor(() => expect(screen.queryByRole('button', { name: '放弃未保存修改' })).toBeNull());
+    fireEvent.keyDown(screen.getByLabelText('裁剪区域'), { key: 'ArrowDown' });
+    await previewAndSaveGuidedRound(user);
+    await user.click(await screen.findByRole('button', { name: '放弃失败操作并重新核对' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: '放弃失败操作并重新核对' })).toBeNull());
     expect(read).toHaveBeenCalledTimes(1);
     expect(localEngineAdapter.prepareReviewContext).toHaveBeenCalledTimes(1);
     expect(localEngineAdapter.saveReviewSegmentsV2).toHaveBeenCalledTimes(1);
-    expect((screen.getByRole('button', { name: /撤销上一步/ }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByLabelText('裁剪区域')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '进入微调' })).toBeTruthy();
   });
 
-  it('M4 undoes group confirmation as one atomic batch without reviving export readiness', async () => {
+  it('M4 can undo the latest confirmed position before completing the bank', async () => {
     const user = userEvent.setup();
+    vi.mocked(localEngineAdapter.analyzePage).mockImplementation(async (_path, page, matches) => {
+      const result = analysis(page, matches, page === 4 ? 0 : 280);
+      return { ...result, selections: result.selections.map((item) => ({ ...item, needs_review: true, confidence: 0.8 })) };
+    });
     render(<App />);
     await loadResults(user);
-    await validatePreviewForPage(user, 4);
-    await validatePreviewForPage(user, 12);
-    await waitFor(() => expect((screen.getByRole('button', { name: '确认整组' }) as HTMLButtonElement).disabled).toBe(false));
-    await user.click(screen.getByRole('button', { name: '确认整组' }));
-    await screen.findByRole('button', { name: /生成 PDF 导出预览/ });
-    await user.click(screen.getByRole('button', { name: /撤销上一步/ }));
-    await screen.findByRole('button', { name: '确认整组' });
-    const calls = vi.mocked(localEngineAdapter.saveReviewSegmentsV2).mock.calls;
-    expect(calls).toHaveLength(2);
-    expect(calls[0]![2]).toHaveLength(2);
-    expect(calls[0]![3]).toBe(true);
-    expect(calls[1]![2].map((record) => record.record_revision)).toEqual([1, 1]);
-    expect(calls[1]![3]).toBe(false);
-    expect(calls[1]![2].every((record) => record.review_status !== 'group_confirmed')).toBe(true);
-    expect(screen.queryByRole('button', { name: /生成 PDF 导出预览/ })).toBeNull();
+    await enterGuidedReview(user);
+    await finishGuidedRound(user);
+    await advanceGuidedRound(user);
+    await finishGuidedRound(user);
+    await advanceGuidedRound(user);
+    expect(screen.getByRole('button', { name: '完成本次微调' })).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: '撤销本轮' }));
+    expect(screen.queryByRole('button', { name: '选择导出范围' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '导出审核结果' })).toBeNull();
+    expect(screen.getByRole('button', { name: /确认并预览本轮/ })).toBeTruthy();
+    await finishGuidedRound(user);
+    await advanceGuidedRound(user);
+    await user.click(screen.getByRole('button', { name: '完成本次微调' }));
+    expect(screen.getByRole('button', { name: '导出审核结果' })).toBeTruthy();
   });
 
-  it('M4 reveals hidden unresolved records only on request and navigates the current visible order', async () => {
+  it('M4 keeps only the current guided position visible until it is confirmed', async () => {
     const user = userEvent.setup();
     vi.mocked(localEngineAdapter.analyzePage).mockImplementation(async (_path, page, matches) => {
       const result = analysis(page, matches, page === 4 ? 0 : 280);
@@ -602,18 +716,18 @@ describe('App orchestration', () => {
     });
     render(<App />);
     await loadResults(user);
-    await validatePreviewForPage(user, 4);
-    await validatePreviewForPage(user, 12);
-    await user.selectOptions(screen.getByRole('combobox', { name: '结果排序' }), 'confidence_desc');
-    await user.click(within(screen.getByRole('region', { name: '审核导航' })).getByRole('button', { name: /已阻塞/ }));
-    expect(screen.queryByRole('button', { name: /第 4 页 \/ 片段 1/ })).toBeNull();
-    const reveal = await screen.findByRole('button', { name: '查看全部待复核' });
-    await user.click(reveal);
-    expect(reviewRow(/第 12 页 \/ 片段 1/).getAttribute('aria-current')).toBe('true');
-    await user.click(screen.getByRole('button', { name: '下一项待复核' }));
-    expect(reviewRow(/第 4 页 \/ 片段 1/).getAttribute('aria-current')).toBe('true');
-    expect((screen.getByRole('combobox', { name: '结果排序' }) as HTMLSelectElement).value).toBe('confidence_desc');
-    expect(localEngineAdapter.saveReviewSegmentsV2).not.toHaveBeenCalled();
+    await enterGuidedReview(user);
+    const navigator = screen.getByRole('region', { name: '审核导航' });
+    expect(within(navigator).getByRole('button', { name: /第 4 页 \/ 片段 1/ })).toBeTruthy();
+    expect(within(navigator).queryByRole('button', { name: /第 12 页 \/ 片段 1/ })).toBeNull();
+    await previewAndSaveGuidedRound(user);
+    await screen.findByRole('button', { name: '开始下一位置微调' });
+    await user.click(screen.getByRole('button', { name: '开始下一位置微调' }));
+    await waitFor(() => expect(within(screen.getByRole('region', { name: '审核导航' }))
+      .getByRole('button', { name: /第 12 页 \/ 片段 1/ })).toBeTruthy());
+    expect(within(screen.getByRole('region', { name: '审核导航' }))
+      .queryByRole('button', { name: /第 4 页 \/ 片段 1/ })).toBeNull();
+    expect(localEngineAdapter.saveReviewSegmentsV2).toHaveBeenCalled();
   });
 
   it('moves new task to sources and opens help without changing the current search draft', async () => {
@@ -621,8 +735,8 @@ describe('App orchestration', () => {
     render(<App />);
     expect(screen.getByRole('heading', { name: '银行回单工作台', level: 1 })).toBeTruthy();
     const sourcePanel = screen.getByRole('complementary', { name: '当前文件' });
-    expect(within(sourcePanel).getByRole('button', { name: '＋ 新建任务' })).toBeTruthy();
-    expect(screen.getAllByRole('button', { name: '＋ 新建任务' })).toHaveLength(1);
+    expect(within(sourcePanel).getByRole('button', { name: '重置任务' })).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: '重置任务' })).toHaveLength(1);
     await choosePdf(user);
     const keyword = screen.getByRole('textbox', { name: '包含关键词 1' }) as HTMLInputElement;
     await user.clear(keyword);
@@ -713,6 +827,7 @@ describe('App orchestration', () => {
     Object.defineProperty(window, '__TAURI_INTERNALS__', { configurable: true, value: {} });
     render(<App />);
     await addPdf(user);
+    await openSinglePage(user);
     expect(await screen.findByRole('img', { name: 'source.pdf 第 1 页' })).toBeTruthy();
     expect(screen.getByText('20 页 · 文档已读取')).toBeTruthy();
     expect(screen.getByRole('button', { name: '下一页' })).toBeTruthy();
@@ -1375,10 +1490,8 @@ describe('App orchestration', () => {
 
     await startAnalysis(user);
     await waitFor(() => expect(screen.getByText('第 4 页 / 片段 1')).toBeTruthy());
-    await validatePreviewForPage(user, 12);
-    await user.click(screen.getByRole('button', { name: '确认整组' }));
-    await waitFor(() => expect(confirmedPreviewAction().disabled).toBe(false));
-    await user.click(screen.getByRole('button', { name: '生成 PDF 导出预览' }));
+    expectEntryReviewActions();
+    await user.click(screen.getByRole('button', { name: '选择导出范围' }));
     const dialog = await screen.findByRole('dialog', { name: '导出设置' });
     expect(within(dialog).getByText('当前结果缺少完整的持久任务记录，请重新分析后导出。')).toBeTruthy();
     expect((within(dialog).getByRole('checkbox', { name: '同时导出审核索引 XLSX' }) as HTMLInputElement).checked).toBe(true);
@@ -1581,15 +1694,18 @@ describe('App orchestration', () => {
 
     render(<App />);
     await loadResults(user);
+    await enterGuidedReview(user);
     await waitFor(() => expect(screen.getByLabelText('裁剪区域')).toBeTruthy());
     expect((screen.getByLabelText('裁剪区域') as HTMLElement).style.top).toBe('0%');
     expect(load).toHaveBeenCalledWith(taskId);
+    await user.click(screen.getByText('当前边界不合适'));
     expect(screen.getByRole('button', { name: '恢复历史裁剪建议' })).toBeTruthy();
     expect(save).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole('button', { name: '恢复历史裁剪建议' }));
     await waitFor(() => expect((screen.getByLabelText('裁剪区域') as HTMLElement).style.top).toBe('1.25%'));
-    expect(screen.getByText('当前状态：需复核')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^确认并预览本轮/ })).toBeTruthy();
+    await previewAndSaveGuidedRound(user);
     await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
     expect(save.mock.calls[0]?.[0]).toMatch(/^[a-f0-9]{64}$/);
     expect(save.mock.calls[0]?.[1]).toBeTypeOf('string');
@@ -1597,15 +1713,8 @@ describe('App orchestration', () => {
       source_sha256: SOURCE_SHA256,
       candidate_rect: { y0: 0 },
       final_rect: { y0: 10 },
-      review_status: 'needs_review',
-    });
-
-    fireEvent.keyDown(screen.getByLabelText('裁剪区域'), { key: 'ArrowDown' });
-    await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
-    expect(save.mock.calls[1]?.[2][0]).toMatchObject({
-      source_sha256: SOURCE_SHA256,
-      candidate_rect: { y0: 0 },
-      final_rect: { y0: 11 },
+      review_status: 'page_confirmed',
+      manual_adjusted: true,
     });
   });
 
@@ -1665,8 +1774,9 @@ describe('App orchestration', () => {
 
     render(<App />);
     await loadResults(user);
-    await validatePreviewForPage(user, 4);
+    await enterGuidedReview(user);
     fireEvent.keyDown(screen.getByLabelText('裁剪区域'), { key: 'ArrowDown' });
+    await previewAndSaveGuidedRound(user);
 
     await waitFor(() => expect(screen.getByText('本地引擎不可用，审核记录未保存。')).toBeTruthy());
     expect(screen.queryByText(/裁剪已保存到当前审核任务/)).toBeNull();
@@ -1680,58 +1790,12 @@ describe('App orchestration', () => {
 
     render(<App />);
     await loadResults(user);
-    await validatePreviewForPage(user, 4);
+    await enterGuidedReview(user);
     fireEvent.keyDown(screen.getByLabelText('裁剪区域'), { key: 'ArrowDown' });
+    await previewAndSaveGuidedRound(user);
 
     await waitFor(() => expect(screen.getByText('审核记录保存失败：审核数据库写入被拒绝。')).toBeTruthy());
     expect(screen.queryByText(/裁剪已保存到当前审核任务/)).toBeNull();
-  });
-
-  it('rolls back group confirmation and keeps export gated when persistence fails', async () => {
-    const user = userEvent.setup();
-
-    render(<App />);
-    await loadResults(user);
-    await validatePreviewForPage(user, 12);
-    vi.mocked(localEngineAdapter.saveReviewSegmentsV2).mockRejectedValueOnce(
-      new LocalEngineError('ENGINE_REQUEST_REJECTED', '审核数据库写入被拒绝。'),
-    );
-    await user.click(screen.getByRole('button', { name: '确认整组' }));
-
-    await waitFor(() => expect(screen.getByText('审核记录保存失败：审核数据库写入被拒绝。')).toBeTruthy());
-    expect(screen.queryByText('已整组确认，可继续导出。')).toBeNull();
-    expect(screen.queryByRole('button', { name: /选择目录并导出/ })).toBeNull();
-    expectReviewPhaseActions();
-  });
-
-  it('keeps group confirmation and export gated until the group save succeeds', async () => {
-    const user = userEvent.setup();
-    let releaseSave: (() => void) | undefined;
-    const pendingSave = new Promise<EngineSavedReviewV2>((resolve) => {
-      releaseSave = () => {
-        const [contextKey, resultRevision, segments] = vi.mocked(localEngineAdapter.saveReviewSegmentsV2).mock.calls.at(-1)!;
-        resolve(acknowledgeReviewSave(contextKey, resultRevision, segments));
-      };
-    });
-    vi.mocked(localEngineAdapter.saveReviewSegmentsV2).mockReturnValue(pendingSave);
-
-    render(<App />);
-    await loadResults(user);
-    await validatePreviewForPage(user, 12);
-    await user.click(screen.getByRole('button', { name: '确认整组' }));
-
-    await waitFor(() => expect(localEngineAdapter.saveReviewSegmentsV2).toHaveBeenCalledTimes(1));
-    const saving = screen.getByRole('button', { name: '保存中…' }) as HTMLButtonElement;
-    expect(saving.disabled).toBe(true);
-    expect(saving.getAttribute('aria-busy')).toBe('true');
-    expect(screen.queryByText('已整组确认，可继续导出。')).toBeNull();
-    const sort = screen.getByRole('combobox', { name: '结果排序' }) as HTMLSelectElement;
-    expect(sort.disabled).toBe(true);
-    fireEvent.change(sort, { target: { value: 'confidence_desc' } });
-    expect(sort.value).toBe('original');
-
-    releaseSave?.();
-    await waitFor(() => expect(confirmedPreviewAction().disabled).toBe(false));
   });
 
   it('rejects unavailable source hashes as one atomic failed analysis', async () => {
@@ -1749,86 +1813,6 @@ describe('App orchestration', () => {
     await waitFor(() => expect(screen.getByText('本地搜索失败：搜索响应的源 PDF SHA-256 无效。')).toBeTruthy());
     expect(screen.queryByText('第 4 页 / 片段 1')).toBeNull();
     expect(localEngineAdapter.saveReviewSegmentsV2).not.toHaveBeenCalled();
-  });
-
-  it('lets an in-flight save finish for the old task without updating the new task notice', async () => {
-    const user = userEvent.setup();
-    let releaseFirstSave: (() => void) | undefined;
-    const firstSave = new Promise<void>((resolve) => {
-      releaseFirstSave = resolve;
-    });
-    vi.mocked(localEngineAdapter.saveReviewSegmentsV2).mockImplementation(async (contextKey, resultRevision, segments) => {
-      if (segments[0]?.source_page === 4) {
-        await firstSave;
-      }
-      return acknowledgeReviewSave(contextKey, resultRevision, segments);
-    });
-    vi.mocked(localEngineAdapter.pickPdfFiles)
-      .mockResolvedValueOnce(pickerResult(['/docs/source.pdf']))
-      .mockResolvedValueOnce(pickerResult(['/docs/next.pdf']));
-    vi.mocked(localEngineAdapter.search)
-      .mockResolvedValueOnce({
-        status: 'ok',
-        page_count: 20,
-        source_sha256: SOURCE_SHA256,
-        matches: [match(4), match(12)],
-      })
-      .mockResolvedValueOnce({
-        status: 'ok',
-        page_count: 20,
-        source_sha256: SOURCE_SHA256,
-        matches: [match(9)],
-      });
-
-    render(<App />);
-    await loadResults(user);
-    await validatePreviewForPage(user, 4);
-    fireEvent.keyDown(screen.getByLabelText('裁剪区域'), { key: 'ArrowDown' });
-    await waitFor(() => expect(localEngineAdapter.saveReviewSegmentsV2).toHaveBeenCalled());
-
-    await user.click(screen.getByRole('button', { name: '＋ 新建任务' }));
-    await waitFor(() => expect(localEngineAdapter.pickPdfFiles).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(screen.getByText('next.pdf')).toBeTruthy());
-    await user.click(screen.getByRole('button', { name: '开始分析' }));
-    await waitFor(() => expect(localEngineAdapter.search).toHaveBeenCalledTimes(2));
-    expect(localEngineAdapter.prepareReviewContext).toHaveBeenCalledTimes(1);
-    expect(screen.queryByRole('button', { name: /next\.pdf.*第 9 页 \/ 片段 1/ })).toBeNull();
-    releaseFirstSave?.();
-    await waitFor(() => expect(localEngineAdapter.prepareReviewContext).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(reviewRow(/next\.pdf.*第 9 页 \/ 片段 1/)).toBeTruthy());
-    expect(screen.queryByText('第 4 页 / 片段 1 已确认。')).toBeNull();
-  });
-
-  it('does not report a page save as successful after its source changes in flight', async () => {
-    const user = userEvent.setup();
-    let releaseSave: (() => void) | undefined;
-    let rejectPage12: ((reason?: unknown) => void) | undefined;
-    vi.mocked(localEngineAdapter.saveReviewSegmentsV2).mockImplementation((contextKey, resultRevision, segments) => new Promise((resolve) => {
-      releaseSave = () => resolve(acknowledgeReviewSave(contextKey, resultRevision, segments));
-    }));
-    vi.mocked(localEngineAdapter.renderPage).mockImplementation(async (path, page) => {
-      if (page === 12) {
-        return new Promise((_resolve, reject) => {
-          rejectPage12 = reject;
-        });
-      }
-      return { ...preview(path, page), page_count: 20 };
-    });
-
-    render(<App />);
-    await loadResults(user);
-    await validatePreviewForPage(user, 4);
-    fireEvent.keyDown(screen.getByLabelText('裁剪区域'), { key: 'ArrowDown' });
-    await waitFor(() => expect(localEngineAdapter.saveReviewSegmentsV2).toHaveBeenCalledTimes(1));
-
-    await user.click(screen.getByText('第 12 页 / 片段 1'));
-    await waitFor(() => expect(rejectPage12).toBeTypeOf('function'));
-    rejectPage12?.(sourceChangedError('源文件已变化，请重新分析'));
-    await waitFor(() => expect(screen.getAllByText('源文件已变化，请重新分析').length).toBeGreaterThan(0));
-
-    releaseSave?.();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(screen.queryByText(/裁剪已保存到当前审核任务/)).toBeNull();
   });
 
   it('does not restore v1 group confirmation or unlock export automatically', async () => {
@@ -1858,11 +1842,12 @@ describe('App orchestration', () => {
     await waitFor(() => expect(screen.getByLabelText('裁剪区域')).toBeTruthy());
     expect(screen.queryByText('已确认 2 / 2')).toBeNull();
     expect(screen.queryByRole('button', { name: /生成 PDF 导出预览/ })).toBeNull();
-    expect(screen.getByRole('button', { name: '确认整组' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '进入微调' })).toBeTruthy();
+    await enterGuidedReview(user);
     expect(screen.getByRole('button', { name: '恢复历史裁剪建议' })).toBeTruthy();
   });
 
-  it('restores a complete and compatible v2 group confirmation', async () => {
+  it('restores compatible saved decisions but requires explicit guided confirmation again', async () => {
     const user = userEvent.setup();
     vi.mocked(localEngineAdapter.prepareReviewContext).mockImplementation(async (context, originals, resultRevision) => {
       const contextKey = await reviewContextKey(context);
@@ -1874,8 +1859,9 @@ describe('App orchestration', () => {
     await loadResults(user);
     await user.click(screen.getByText('第 12 页 / 片段 1'));
     await waitFor(() => expect(screen.getByLabelText('裁剪区域')).toBeTruthy());
-    await waitFor(() => expect(confirmedPreviewAction().disabled).toBe(false));
-    expect(screen.getByText('已确认 2 / 2')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '进入微调' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '导出审核结果' })).toBeNull();
+    expect(localEngineAdapter.saveReviewSegmentsV2).not.toHaveBeenCalled();
     expect(screen.queryByRole('button', { name: '恢复历史裁剪建议' })).toBeNull();
   });
 
@@ -1903,7 +1889,7 @@ describe('App orchestration', () => {
     await validatePreviewForPage(user, 12);
     await waitFor(() => expect(screen.queryByText(/已整组确认，可继续导出/)).toBeNull());
     expect(screen.queryByText('已确认 2 / 2')).toBeNull();
-    expect(screen.getByRole('button', { name: '确认整组' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '进入微调' })).toBeTruthy();
   });
 
   it('keeps group confirmation false for a mixed v2 prepare response', async () => {
@@ -1925,7 +1911,7 @@ describe('App orchestration', () => {
     await validatePreviewForPage(user, 12);
     await waitFor(() => expect(screen.queryByText('已确认 2 / 2')).toBeNull());
     expect(screen.queryByRole('button', { name: /生成 PDF 导出预览/ })).toBeNull();
-    expect(screen.getByRole('button', { name: '确认整组' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '进入微调' })).toBeTruthy();
   });
 
   it('keeps the newest page preview when selections change quickly', async () => {
@@ -2107,28 +2093,6 @@ describe('App orchestration', () => {
     expect(vi.mocked(localEngineAdapter.analyzePage).mock.calls.map((call) => call[0])).toEqual(['/docs/a.pdf', '/docs/b.pdf']);
   });
 
-  it('updates only the selected segment and supports the full-page two-step confirmation', async () => {
-    const user = userEvent.setup();
-    render(<App />);
-    await loadResults(user);
-    await waitFor(() => expect(screen.getByLabelText('裁剪区域')).toBeTruthy());
-    await user.click(screen.getByText('第 12 页 / 片段 1'));
-    const editorBox = screen.getByLabelText('裁剪区域');
-    await user.click(editorBox);
-    await user.keyboard('{ArrowDown}');
-    await user.click(screen.getByText('第 4 页 / 片段 1'));
-    expect((screen.getByLabelText('裁剪区域') as HTMLElement).style.top).toBe('0%');
-
-    await user.click(screen.getByText('第 4 页 / 片段 1'));
-    await user.click(screen.getByRole('button', { name: '保留整页' }));
-    expect(screen.getByRole('button', { name: /第 4 页.*需复核/ })).toBeTruthy();
-    expect(screen.getAllByRole('button', { name: '确认整组' }).every((button) => (button as HTMLButtonElement).disabled)).toBe(true);
-    await user.click(screen.getAllByRole('button', { name: '确认当前片段' })[0]);
-    expect(screen.getByRole('button', { name: /第 4 页.*已确认/ })).toBeTruthy();
-    expect(screen.getAllByRole('button', { name: '确认整组' }).some((button) => !(button as HTMLButtonElement).disabled)).toBe(true);
-    void editorBox;
-  });
-
   it('rejects failed page analysis as one atomic failed analysis', async () => {
     const user = userEvent.setup();
     vi.mocked(localEngineAdapter.analyzePage).mockRejectedValue(new Error('analysis unavailable'));
@@ -2138,7 +2102,7 @@ describe('App orchestration', () => {
     await waitFor(() => expect(screen.getAllByText(/1 个 PDF 未完成分析/).length).toBeGreaterThan(0));
     expect(screen.queryByText(/第 4 页 \/ 片段/)).toBeNull();
     expect(screen.queryByText(/第 12 页 \/ 片段/)).toBeNull();
-    expect(screen.queryByRole('region', { name: '当前审核操作' })).toBeNull();
+    expectNoReviewSurface();
     expect(screen.queryByText('已整组确认')).toBeNull();
   });
 
@@ -2156,16 +2120,14 @@ describe('App orchestration', () => {
     await startAnalysis(user);
     await waitFor(() => expect(screen.getAllByText(/1 个 PDF 未完成分析/).length).toBeGreaterThan(0));
     await waitFor(() => expect(screen.queryByLabelText('裁剪区域')).toBeNull());
-    expect(screen.queryByRole('region', { name: '当前审核操作' })).toBeNull();
+    expectNoReviewSurface();
 
     vi.mocked(localEngineAdapter.analyzePage).mockResolvedValue(analysis(4, [match(4)], 0));
     await user.click(screen.getByRole('button', { name: '重新分析整批' }));
     await screen.findByText('第 4 页 / 片段 1');
     await waitFor(() => expect(screen.getByLabelText('裁剪区域')).toBeTruthy());
-    expect((screen.getByRole('button', { name: '保留整页' }) as HTMLButtonElement).disabled).toBe(false);
-    await user.click(screen.getByRole('button', { name: '保留整页' }));
-    expect(screen.getByRole('button', { name: /第 4 页.*需复核/ })).toBeTruthy();
-    await user.click(screen.getByRole('button', { name: '确认当前片段' }));
+    await enterGuidedReview(user);
+    await finishGuidedRound(user);
     expect(screen.getByRole('button', { name: /第 4 页.*已确认/ })).toBeTruthy();
   });
 
@@ -2213,7 +2175,7 @@ describe('App orchestration', () => {
 
 
 
-  it('retains every matched full-page review record before bundle planning deduplicates physical pages', async () => {
+  it('rejects a stale full-page flag when separate receipt candidates exist', async () => {
     const user = userEvent.setup();
     const matches = [match(1, 40, 80), match(1, 40, 340), match(1, 40, 600)];
     vi.mocked(localEngineAdapter.search).mockResolvedValue({
@@ -2231,10 +2193,10 @@ describe('App orchestration', () => {
       selections: pageMatches.map((item, index) => ({
         match_rect: item,
         rect: { x0: 0, y0: 80 + index * 260, x1: PAGE_WIDTH, y1: 220 + index * 260 },
-        confidence: 0.96,
+        confidence: 0.8,
         slot: ['top', 'middle', 'bottom'][index] ?? 'receipt',
         evidence: ['geometry'],
-        needs_review: false,
+        needs_review: true,
       })),
     }));
 
@@ -2243,21 +2205,50 @@ describe('App orchestration', () => {
     await startAnalysis(user);
     await waitFor(() => expect(screen.getByText('第 1 页 / 片段 3')).toBeTruthy());
     await waitFor(() => expect(screen.getByLabelText('裁剪区域')).toBeTruthy());
-    expect((screen.getByLabelText('裁剪区域') as HTMLElement).style.top).toBe('0%');
-    expect((screen.getByLabelText('裁剪区域') as HTMLElement).style.height).toBe('100%');
+    expect((screen.getByLabelText('裁剪区域') as HTMLElement).style.top).toBe('10%');
+    expect((screen.getByLabelText('裁剪区域') as HTMLElement).style.height).toBe('17.5%');
 
     const renderCallsBeforeSamePageSelection = vi.mocked(localEngineAdapter.renderPage).mock.calls.length;
     await user.click(screen.getByText('第 1 页 / 片段 2'));
     await waitFor(() => expect(screen.getByLabelText('裁剪区域')).toBeTruthy());
     expect(vi.mocked(localEngineAdapter.renderPage).mock.calls.length).toBe(renderCallsBeforeSamePageSelection);
     await user.click(screen.getByText('第 1 页 / 片段 3'));
-    await waitFor(() => expect((screen.getByRole('button', { name: '确认整组' }) as HTMLButtonElement).disabled).toBe(false));
-    await user.click(screen.getByRole('button', { name: '确认整组' }));
-    await waitFor(() => expect(confirmedPreviewAction().disabled).toBe(false));
-    const saved = vi.mocked(localEngineAdapter.saveReviewSegmentsV2).mock.calls.at(-1)![2];
+    await completeAllGuidedReview(user);
+    const saved = vi.mocked(localEngineAdapter.saveReviewSegmentsV2).mock.calls.flatMap(call => call[2]);
     expect(saved).toHaveLength(3);
-    expect(saved.every((row) => row.crop_mode === 'full_page' && row.review_status === 'group_confirmed')).toBe(true);
+    expect(saved.every((row) => row.crop_mode === 'candidate' && row.review_status === 'page_confirmed')).toBe(true);
 
+  });
+
+  it('can split an uncertain full page using its retained local candidate and undo it', async () => {
+    const user = userEvent.setup();
+    vi.mocked(localEngineAdapter.search).mockResolvedValue({
+      status: 'ok', page_count: 20, source_sha256: SOURCE_SHA256, matches: [match(4)],
+    });
+    const candidate = { x0: 0, y0: 0, x1: PAGE_WIDTH, y1: 240 };
+    vi.mocked(localEngineAdapter.analyzePage).mockImplementation(async (_path, page, matches) => ({
+      ...analysis(page, matches, 0), page_fully_matched: true,
+      selections: analysis(page, matches, 0).selections.map((item) => ({
+        ...item, rect: { x0: 0, y0: 0, x1: PAGE_WIDTH, y1: PAGE_HEIGHT },
+        candidate_rect: candidate, confidence: 0.89, needs_review: true,
+      })),
+    }));
+    render(<App />); await loadResults(user); await validatePreviewForPage(user, 4);
+    expect(screen.getByLabelText('裁剪区域').style.height).toBe('100%');
+    await enterGuidedReview(user);
+    await user.click(screen.getByText('当前边界不合适'));
+    await user.click(screen.getByRole('button', { name: '按单张候选分割' }));
+    expect(localEngineAdapter.saveReviewSegmentsV2).not.toHaveBeenCalled();
+    await previewAndSaveGuidedRound(user);
+    await waitFor(() => expect(vi.mocked(localEngineAdapter.saveReviewSegmentsV2)).toHaveBeenCalledTimes(1));
+    const split = vi.mocked(localEngineAdapter.saveReviewSegmentsV2).mock.calls[0]![2][0]!;
+    expect(split.final_rect).toEqual(candidate);
+    expect(split.review_status).toBe('page_confirmed');
+    await user.click(await screen.findByRole('button', { name: '撤销本轮' }));
+    await waitFor(() => expect(vi.mocked(localEngineAdapter.saveReviewSegmentsV2)).toHaveBeenCalledTimes(2));
+    const restored = vi.mocked(localEngineAdapter.saveReviewSegmentsV2).mock.calls[1]![2][0]!;
+    expect(restored.crop_mode).toBe('full_page');
+    expect(restored.final_rect).toBeNull();
   });
 
   it('keeps large export payload pairing linear and deduplicates full pages in input order', () => {
@@ -2510,8 +2501,9 @@ describe('App orchestration', () => {
     expect(page4Button.disabled).toBe(false);
     expect(previousButton.disabled).toBe(false);
     expect(zoomInButton.disabled).toBe(false);
-    expect((screen.getByRole('button', { name: '确认当前片段' }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole('button', { name: '确认整组' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole('button', { name: '确认当前片段' })).toBeNull();
+    expect((screen.getByRole('button', { name: '选择导出范围' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole('button', { name: '导出审核结果' })).toBeNull();
   });
 
   it('collapses a successful search into one compact summary', async () => {
@@ -2542,14 +2534,15 @@ describe('App orchestration', () => {
 
     expect(screen.getByText('上次结果')).toBeTruthy();
     expect(selected.disabled).toBe(false);
-    expect((screen.getByRole('button', { name: '确认当前片段' }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole('button', { name: '确认整组' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole('button', { name: '确认当前片段' })).toBeNull();
+    expect((screen.getByRole('button', { name: '选择导出范围' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole('button', { name: '导出审核结果' })).toBeNull();
 
     await user.click(within(searchPanel).getByRole('button', { name: '取消修改' }));
     expect(screen.queryByRole('textbox', { name: '包含关键词 1' })).toBeNull();
     expect(screen.queryByText('上次结果')).toBeNull();
     expect(screen.getByText('包含全部：手续费')).toBeTruthy();
-    await waitFor(() => expect((screen.getByRole('button', { name: '确认整组' }) as HTMLButtonElement).disabled).toBe(false));
+    await waitFor(() => expect(screen.getByRole('button', { name: '进入微调' })).toBeTruthy());
   });
 
   it('offers recovery after a failed rerun without discarding the old result', async () => {
@@ -2701,7 +2694,7 @@ describe('App orchestration', () => {
     expect((await screen.findAllByText(/1 个 PDF 未完成分析/)).length).toBeGreaterThan(0);
     expect((screen.getByRole('textbox', { name: '包含关键词 1' }) as HTMLInputElement).value).toBe('示例实业');
     expect(screen.getByRole('button', { name: /第 4 页 \/ 片段 1/ })).toBeTruthy();
-    expect((screen.getByRole('button', { name: '确认整组' }) as HTMLButtonElement).disabled).toBe(true);
+    expectEntryExportDisabled();
 
     vi.mocked(localEngineAdapter.search).mockResolvedValueOnce({
       status: 'ok',
@@ -2735,8 +2728,7 @@ describe('App orchestration', () => {
     expect(screen.queryByRole('button', { name: /第 4 页 \/ 片段 1/ })).toBeNull();
     expect(screen.queryByLabelText('裁剪区域')).toBeNull();
     expect(screen.queryByRole('button', { name: '打开结果目录' })).toBeNull();
-    expect(screen.getByRole('region', { name: '当前审核操作' })).toBeTruthy();
-    expect((screen.getByRole('button', { name: '确认整组' }) as HTMLButtonElement).disabled).toBe(true);
+    expectNoReviewSurface();
   });
 
   it('attributes a rerun source_changed rejection to the source that failed', async () => {
@@ -2836,7 +2828,7 @@ describe('App orchestration', () => {
     expect(screen.getAllByText('源文件已变化，请重新分析')).toHaveLength(2);
     expect(screen.getByRole('button', { name: /a\.pdf，.*第 4 页 \/ 片段 1.*已阻塞/ })).toBeTruthy();
     expect(screen.getByRole('button', { name: /b\.pdf，.*第 12 页 \/ 片段 1.*已阻塞/ })).toBeTruthy();
-    expect((screen.getByRole('button', { name: '确认整组' }) as HTMLButtonElement).disabled).toBe(true);
+    expectEntryExportDisabled();
   });
 
   it('prioritizes source_changed over an ordinary failure in one search chunk', async () => {
@@ -2896,7 +2888,7 @@ describe('App orchestration', () => {
     expect(within(sourceList).getByRole('button', { name: /^b\.pdf/ }).textContent).toContain('文档已读取');
     expect(screen.getByRole('button', { name: /a\.pdf，.*第 4 页 \/ 片段 1/ }).getAttribute('aria-label')).toContain('已阻塞');
     expect(screen.getByRole('button', { name: /b\.pdf，.*第 12 页 \/ 片段 1/ }).getAttribute('aria-label')).not.toContain('已阻塞');
-    expect((screen.getByRole('button', { name: '确认整组' }) as HTMLButtonElement).disabled).toBe(true);
+    expectEntryExportDisabled();
     expect((screen.getByRole('button', { name: '重新分析整批' }) as HTMLButtonElement).disabled).toBe(false);
   });
 
@@ -2934,13 +2926,13 @@ describe('App orchestration', () => {
       }
       return analysis(page, pageMatches, page === 4 ? 0 : 280);
     });
-    vi.mocked(localEngineAdapter.renderPage).mockImplementation((path, page) => {
+    mockPageInspections((path, page, sha) => {
       if (path === '/docs/b.pdf') {
         return new Promise((_resolve, reject) => {
           rejectBPreview = reject;
         });
       }
-      return Promise.resolve({ ...preview(path, page), page_count: 20 });
+      return Promise.resolve({ ...inspectionPage(page, sha), page_count: 20 });
     });
 
     render(<App />);
@@ -2968,7 +2960,7 @@ describe('App orchestration', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: /b\.pdf，.*第 12 页 \/ 片段 1.*已阻塞/ })).toBeTruthy());
     expect(screen.getByRole('button', { name: /a\.pdf，.*第 4 页 \/ 片段 1/ })).toBeTruthy();
     expect(screen.queryByRole('button', { name: /第 9 页 \/ 片段 1/ })).toBeNull();
-    expect((screen.getByRole('button', { name: '确认整组' }) as HTMLButtonElement).disabled).toBe(true);
+    expectEntryExportDisabled();
     expect(screen.queryByRole('button', { name: /生成 PDF 导出预览/ })).toBeNull();
     expect((screen.getByRole('button', { name: '重新分析整批' }) as HTMLButtonElement).disabled).toBe(false);
   });
@@ -3001,13 +2993,13 @@ describe('App orchestration', () => {
         matches: rerunning ? [] : [match(first ? 4 : 12)],
       };
     });
-    vi.mocked(localEngineAdapter.renderPage).mockImplementation((path, page) => {
+    mockPageInspections((path, page, sha) => {
       if (path === '/docs/b.pdf') {
         return new Promise((_resolve, reject) => {
           rejectBPreview = reject;
         });
       }
-      return Promise.resolve({ ...preview(path, page), page_count: 20 });
+      return Promise.resolve({ ...inspectionPage(page, sha), page_count: 20 });
     });
 
     render(<App />);
@@ -3041,7 +3033,7 @@ describe('App orchestration', () => {
     expect(screen.getByRole('button', { name: /a\.pdf，.*第 4 页 \/ 片段 1/ })).toBeTruthy();
     expect(screen.getByRole('button', { name: /b\.pdf，.*第 12 页 \/ 片段 1.*已阻塞/ })).toBeTruthy();
     expect(screen.queryByText('未找到符合条件的回单')).toBeNull();
-    expect((screen.getByRole('button', { name: '确认整组' }) as HTMLButtonElement).disabled).toBe(true);
+    expectEntryExportDisabled();
     expect(screen.queryByRole('button', { name: /生成 PDF 导出预览/ })).toBeNull();
     expect(screen.getByRole('button', { name: '重新分析整批' })).toBeTruthy();
     expect((screen.getByRole('button', { name: '重新分析整批' }) as HTMLButtonElement).disabled).toBe(false);
@@ -3064,6 +3056,7 @@ describe('App orchestration', () => {
     await choosePdf(user);
     await startAnalysis(user);
     await within(screen.getByRole('region', { name: '搜索条件' })).findByRole('button', { name: '修改搜索条件' });
+    await openSinglePage(user);
     await screen.findByAltText('source.pdf 第 1 页');
     const renderCountAfterFirstCommit = vi.mocked(localEngineAdapter.renderPage).mock.calls.length;
 
@@ -3108,6 +3101,7 @@ describe('App orchestration', () => {
       await choosePdf(user);
       await startAnalysis(user);
       await within(screen.getByRole('region', { name: '搜索条件' })).findByRole('button', { name: '修改搜索条件' });
+      await openSinglePage(user);
 
       // Fill each engine slot explicitly before asking for a queued fourth page.
       await waitFor(() => expect(releasePreview.has(1)).toBe(true));
@@ -3158,8 +3152,8 @@ describe('App orchestration', () => {
     const page4Button = screen.getByRole('button', { name: /第 4 页 \/ 片段 1/ }) as HTMLButtonElement;
     expect(page4Button.getAttribute('aria-current')).toBe('true');
     expect(page4Button.textContent).toContain('已阻塞');
-    expect((screen.getByRole('button', { name: '确认当前片段' }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole('button', { name: '确认整组' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole('button', { name: '确认当前片段' })).toBeNull();
+    expectEntryExportDisabled();
     expect(localEngineAdapter.saveReviewSegmentsV2).not.toHaveBeenCalled();
   });
 
@@ -3185,11 +3179,11 @@ describe('App orchestration', () => {
     await user.click(screen.getByRole('button', { name: '应用并重新分析' }));
     await user.click(screen.getByRole('button', { name: /第 12 页 \/ 片段 1/ }));
     expect(screen.getByRole('button', { name: /第 12 页 \/ 片段 1/ }).getAttribute('aria-current')).toBe('true');
-    expect((screen.getByRole('button', { name: '确认当前片段' }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole('button', { name: '确认整组' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole('button', { name: '确认当前片段' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '导出审核结果' })).toBeNull();
 
     vi.mocked(localEngineAdapter.pickPdfFiles).mockResolvedValueOnce(pickerResult(['/docs/c.pdf']));
-    await user.click(screen.getByRole('button', { name: '＋ 新建任务' }));
+    await user.click(screen.getByRole('button', { name: '重置任务' }));
     await waitFor(() => expect(screen.getByText('c.pdf')).toBeTruthy());
     fireEvent.change(screen.getByRole('textbox', { name: '包含关键词 1' }), { target: { value: 'C' } });
     vi.mocked(localEngineAdapter.search).mockResolvedValueOnce({
@@ -3270,8 +3264,8 @@ describe('App orchestration', () => {
     expect(screen.getAllByRole('button', { name: /已阻塞/ })).toHaveLength(1);
     expect(screen.getByText('命中结果缺少有效的来源路径或页码，无法安全配对。')).toBeTruthy();
     expect(screen.queryByRole('button', { name: /第 0 页/ })).toBeNull();
-    expect((screen.getByRole('button', { name: '保留整页' }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getAllByRole('button', { name: '确认整组' }).every((button) => (button as HTMLButtonElement).disabled)).toBe(true);
+    expect(screen.queryByRole('button', { name: '调整为整页范围' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '导出审核结果' })).toBeNull();
   });
 
   it('rejects a preview response for the wrong page without changing the selected page state', async () => {
@@ -3291,21 +3285,16 @@ describe('App orchestration', () => {
     render(<App />);
     await loadResults(user);
     await waitFor(() => expect(screen.getByLabelText('裁剪区域')).toBeTruthy());
-    await user.click(screen.getByRole('button', { name: '保留整页' }));
-    await user.click(screen.getByRole('button', { name: '确认当前片段' }));
-    await waitFor(() => expect(screen.getByRole('button', { name: /第 4 页.*已确认.*人工调整/ })).toBeTruthy());
     await user.click(screen.getByText('第 12 页 / 片段 1'));
     await waitFor(() => expect(screen.getByLabelText('裁剪区域')).toBeTruthy());
-    await user.click(screen.getByRole('button', { name: '确认整组' }));
-    expect(confirmedPreviewAction().disabled).toBe(false);
     await user.click(screen.getByText('第 4 页 / 片段 1'));
     await waitFor(() => expect(screen.getAllByText('页面预览页码不匹配，已拒绝显示。').length).toBeGreaterThan(0));
     await waitFor(() => expect(screen.queryByLabelText('裁剪区域')).toBeNull());
     expect(screen.queryByRole('img', { name: /source\.pdf 第 \d+ 页/ })).toBeNull();
-    expect(screen.getByRole('button', { name: /第 4 页.*已确认.*人工调整.*预览校验失败/ })).toBeTruthy();
-    expect((screen.getByRole('button', { name: '保留整页' }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole('button', { name: '确认当前片段' }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole('button', { name: '确认整组' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole('button', { name: /第 4 页.*预览校验失败/ })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '调整为整页范围' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '确认当前片段' })).toBeNull();
+    expectEntryExportAction();
     expect(screen.queryAllByText('已整组确认，可继续导出。')).toHaveLength(0);
     expect(screen.queryByRole('button', { name: /生成 PDF 导出预览/ })).toBeNull();
 
@@ -3313,45 +3302,7 @@ describe('App orchestration', () => {
     await user.click(screen.getByRole('button', { name: '重试页面预览' }));
     await waitFor(() => expect(vi.mocked(localEngineAdapter.renderPage).mock.calls.filter((call) => call[1] === 4).length).toBeGreaterThan(page4RenderCallsBeforeRetry));
     await waitFor(() => expect(screen.getByLabelText('裁剪区域')).toBeTruthy());
-    expect(screen.getByRole('button', { name: /第 4 页.*已确认.*人工调整/ })).toBeTruthy();
-  });
-
-  it('gates group confirmation and export until every preview is validated', async () => {
-    const user = userEvent.setup();
-    let resolvePreview: ((value: ReturnType<typeof preview>) => void) | undefined;
-    vi.mocked(localEngineAdapter.search).mockResolvedValue({
-      status: 'ok',
-      page_count: 20,
-      source_sha256: SOURCE_SHA256,
-      matches: [match(4)],
-    });
-    vi.mocked(localEngineAdapter.renderPage).mockImplementation(() => new Promise((resolve) => {
-      resolvePreview = resolve;
-    }));
-
-    render(<App />);
-    await choosePdf(user);
-    await startAnalysis(user);
-    await screen.findByText('第 4 页 / 片段 1');
-    expect((screen.getByRole('button', { name: '确认整组' }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.queryByRole('button', { name: /生成 PDF 导出预览/ })).toBeNull();
-
-    resolvePreview?.(preview('/docs/source.pdf', 4));
-    await waitFor(() => expect(screen.getByLabelText('裁剪区域')).toBeTruthy());
-    expect((screen.getByRole('button', { name: '确认整组' }) as HTMLButtonElement).disabled).toBe(false);
-    await user.click(screen.getByRole('button', { name: '确认整组' }));
-    expect((screen.getByRole('button', { name: /生成 PDF 导出预览/ }) as HTMLButtonElement).disabled).toBe(false);
-  });
-
-  it('auto-validates every hit page so group confirmation does not require page-by-page clicks', async () => {
-    const user = userEvent.setup();
-    render(<App />);
-    await loadResults(user);
-    await waitFor(() => expect((screen.getByRole('button', { name: '确认整组' }) as HTMLButtonElement).disabled).toBe(false));
-    expect(vi.mocked(localEngineAdapter.renderPage).mock.calls.map((call) => call[1])).toEqual(expect.arrayContaining([4, 12]));
-    await user.click(screen.getByRole('button', { name: '确认整组' }));
-    await waitFor(() => expect(confirmedPreviewAction().disabled).toBe(false));
-    expect((screen.getByRole('button', { name: /生成 PDF 导出预览/ }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.getByRole('button', { name: /第 4 页/ })).toBeTruthy();
   });
 
   it('blocks a confirmed segment when preview dimensions differ from analysis dimensions', async () => {
@@ -3368,15 +3319,13 @@ describe('App orchestration', () => {
     await loadResults(user);
     await waitFor(() => expect(screen.getByLabelText('裁剪区域')).toBeTruthy());
     await validatePreviewForPage(user, 12);
-    await user.click(screen.getByRole('button', { name: '确认整组' }));
-    expect(confirmedPreviewAction().disabled).toBe(false);
     await user.click(screen.getByText('第 12 页 / 片段 1'));
     await user.click(screen.getByText('第 4 页 / 片段 1'));
     await waitFor(() => expect(screen.getAllByText('页面尺寸与分析结果不一致，已阻止确认。').length).toBeGreaterThan(0));
     expect(screen.queryByLabelText('裁剪区域')).toBeNull();
     expect(screen.getByAltText('source.pdf 第 4 页')).toBeTruthy();
     expect(screen.getByRole('button', { name: /第 4 页.*已阻塞/ })).toBeTruthy();
-    expect((screen.getByRole('button', { name: '确认整组' }) as HTMLButtonElement).disabled).toBe(true);
+    expectEntryExportAction();
     expect(screen.queryAllByText('已整组确认，可继续导出。')).toHaveLength(0);
     expect(screen.queryByRole('button', { name: /生成 PDF 导出预览/ })).toBeNull();
   });
@@ -3394,7 +3343,7 @@ describe('App orchestration', () => {
     await waitFor(() => expect(screen.getAllByText('页面预览页数与搜索结果不一致，已阻止确认。').length).toBeGreaterThan(0));
     expect(screen.queryByLabelText('裁剪区域')).toBeNull();
     expect(screen.getByRole('button', { name: /第 12 页.*已阻塞/ })).toBeTruthy();
-    expect((screen.getByRole('button', { name: '确认整组' }) as HTMLButtonElement).disabled).toBe(true);
+    expectEntryExportAction();
   });
 
   it('rejects a preview page count that differs from the search response', async () => {
@@ -3409,7 +3358,7 @@ describe('App orchestration', () => {
     await waitFor(() => expect(screen.getAllByText('页面预览页数与搜索结果不一致，已阻止确认。').length).toBeGreaterThan(0));
     expect(screen.queryByLabelText('裁剪区域')).toBeNull();
     expect(screen.getByRole('button', { name: /第 4 页.*已阻塞/ })).toBeTruthy();
-    expect((screen.getByRole('button', { name: '确认整组' }) as HTMLButtonElement).disabled).toBe(true);
+    expectEntryExportAction();
   });
 
   it('renders a selected queued hit before blocked background pages finish', async () => {
@@ -3419,9 +3368,9 @@ describe('App orchestration', () => {
       status: 'ok', page_count: 20, source_sha256: SOURCE_SHA256,
       matches: Array.from({ length: 10 }, (_, index) => match(index + 1)),
     });
-    vi.mocked(localEngineAdapter.renderPage).mockImplementation((path, page) => {
-      if (page === 1 || page === 10) return Promise.resolve(preview(path, page));
-      return new Promise((resolve) => releases.push(() => resolve(preview(path, page))));
+    mockPageInspections((path, page, sha) => {
+      if (page === 1 || page === 10) return Promise.resolve(inspectionPage(page, sha));
+      return new Promise((resolve) => releases.push(() => resolve(inspectionPage(page, sha))));
     });
     try {
       render(<App />);
@@ -3431,7 +3380,7 @@ describe('App orchestration', () => {
       await waitFor(() => expect(releases.length).toBeGreaterThanOrEqual(2));
       await user.click(screen.getByText('第 10 页 / 片段 1'));
       // No background request is released: the visible page must use its
-      // reserved slot, promoting the already queued promise without a duplicate.
+      // reserved slot independently of pending metadata inspections.
       await waitFor(() => expect(screen.getByAltText('PDF 页面预览').getAttribute('src')).toBe('data:image/png;base64,PAGE10'));
       expect(vi.mocked(localEngineAdapter.renderPage).mock.calls.filter((call) => call[1] === 10)).toHaveLength(1);
       expect(screen.queryByText('正在渲染第 10 页…')).toBeNull();
@@ -3441,129 +3390,69 @@ describe('App orchestration', () => {
     }
   });
 
-  async function openBatchFixture(user: ReturnType<typeof userEvent.setup>, crossSource=false) {
-    const shaFor=(path:string)=>path==='/docs/second.pdf'?SECOND_SOURCE_SHA256:SOURCE_SHA256;
-    if(crossSource)vi.mocked(localEngineAdapter.pickPdfFiles).mockResolvedValue(pickerResult(['/docs/source.pdf','/docs/second.pdf']));
-    vi.mocked(localEngineAdapter.search).mockImplementation(async(path)=>({status:'ok',page_count:20,source_sha256:shaFor(path),
-      matches:crossSource?(path==='/docs/second.pdf'?[match(12),match(15)]:[match(4)]):[match(4),match(12),match(15)]}));
-    vi.mocked(localEngineAdapter.analyzePage).mockImplementation(async (_path,page,matches) => ({...analysis(page,matches,0),
-      selections:analysis(page,matches,0).selections.map((item) => ({...item,confidence:0.8,needs_review:true}))}));
-    vi.mocked(localEngineAdapter.renderPage).mockImplementation(async (path,page) => ({...preview(path,page),source_sha256:shaFor(path)}));
-    vi.spyOn(localEngineAdapter,'describeCropPage').mockImplementation(async (_path,page,sha) => ({status:'ok',page,page_count:20,
-      source_sha256:sha,page_width:600,page_height:800,crop_template:{status:'ready',fingerprint:'b'.repeat(64),
-        receipts:[{anchor_y:20,bounds:{x0:0,y0:0,x1:600,y1:800},title_key:'c'.repeat(64)}]}}));
-    render(<App />); await loadResults(user); await validatePreviewForPage(user,4);
-    fireEvent.keyDown(screen.getByLabelText('裁剪区域'),{key:'ArrowDown'});
-    await waitFor(() => expect((screen.getByRole('button',{name:'应用到同类片段'}) as HTMLButtonElement).disabled).toBe(false));
-    await user.click(screen.getByRole('button',{name:'应用到同类片段'}));
-    return await screen.findByRole('dialog',{name:'应用到同类片段'});
-  }
-
-  it('batch crop saves two targets atomically and one undo restores both without undoing the sample', async () => {
-    const user=userEvent.setup(); const dialog=await openBatchFixture(user);
-    await user.click(await within(dialog).findByRole('checkbox',{name:/已检查预览/}));
-    const apply=within(dialog).getByRole('button',{name:/应用.*2.*片段/});
-    await waitFor(() => expect((apply as HTMLButtonElement).disabled).toBe(false));
-    await user.click(apply);
-    await waitFor(() => expect(screen.queryByRole('dialog',{name:'应用到同类片段'})).toBeNull());
-    const writes=vi.mocked(localEngineAdapter.saveReviewSegmentsV2).mock.calls;
-    expect(writes).toHaveLength(2); expect(writes[1]![2]).toHaveLength(2);
-    expect(writes[1]![2].every((item)=>item.final_rect?.y0===1&&item.manual_adjusted)).toBe(true);
-    await user.click(screen.getByRole('button',{name:'撤销上一步'}));
-    await waitFor(()=>expect(vi.mocked(localEngineAdapter.saveReviewSegmentsV2).mock.calls).toHaveLength(3));
-    const restored=vi.mocked(localEngineAdapter.saveReviewSegmentsV2).mock.calls[2]![2];
-    expect(restored).toHaveLength(2); expect(restored.every((item)=>item.final_rect?.y0===0&&!item.manual_adjusted)).toBe(true);
-    expect(parseFloat(screen.getByLabelText('裁剪区域').style.top)).toBeCloseTo(0.125);
+  it('checks background geometry in batches of at most 32 without rendering hidden pages', async () => {
+    const user = userEvent.setup();
+    vi.mocked(localEngineAdapter.search).mockResolvedValue({
+      status: 'ok', page_count: 70, source_sha256: SOURCE_SHA256,
+      matches: Array.from({ length: 70 }, (_, index) => match(index + 1)),
+    });
+    vi.mocked(localEngineAdapter.renderPage).mockImplementation(async (path, page) => ({ ...preview(path, page), page_count: 70 }));
+    render(<App />);
+    await choosePdf(user);
+    await startAnalysis(user);
+    await waitFor(() => expect(vi.mocked(localEngineAdapter.inspectPages).mock.calls.flatMap((call) => call[1])).toContain(70));
+    const calls = vi.mocked(localEngineAdapter.inspectPages).mock.calls;
+    expect(calls).toHaveLength(3);
+    expect(calls.every((call) => call[1].length > 0 && call[1].length <= 32 && call[3] === false)).toBe(true);
+    const inspected = calls.flatMap((call) => call[1]);
+    expect(new Set(inspected).size).toBe(inspected.length);
+    expect(inspected).toEqual(expect.arrayContaining(Array.from({ length: 69 }, (_, index) => index + 2)));
+    expect(vi.mocked(localEngineAdapter.renderPage).mock.calls.map((call) => call[1])).toEqual([1]);
   });
 
-  it('batch crop cancel discards late metadata and never saves a batch', async () => {
-    const user=userEvent.setup(); const dialog=await openBatchFixture(user);
-    const release: (() => void)[] = [];
-    vi.mocked(localEngineAdapter.describeCropPage).mockImplementation((_path,page,sha)=>new Promise((resolve)=>{
-      release.push(()=>resolve({status:'ok',page,page_count:20,source_sha256:sha,page_width:600,page_height:800,
-        crop_template:{status:'unavailable',reason:'no_titles'}}));
-    }));
-    await user.selectOptions(within(dialog).getByRole('combobox',{name:'应用范围'}),'filtered');
-    await waitFor(()=>expect(release).toHaveLength(2));
-    await user.click(within(dialog).getByRole('button',{name:'取消'}));
-    // Real engine requests always settle. Release both in-flight mocks so a
-    // cancelled test cannot occupy the shared process scheduler indefinitely.
-    await act(async()=>{ for (const resolve of release) resolve(); });
-    expect(release).toHaveLength(2);
-    expect(screen.queryByRole('dialog',{name:'应用到同类片段'})).toBeNull();
-    expect(vi.mocked(localEngineAdapter.saveReviewSegmentsV2).mock.calls).toHaveLength(1);
+  it('blocks only the affected hidden candidate when inspected dimensions differ', async () => {
+    const user = userEvent.setup();
+    mockPageInspections(async (_path, page, sha) => inspectionPage(page, sha, { page_width: page === 12 ? 640 : PAGE_WIDTH }));
+    render(<App />);
+    await choosePdf(user);
+    await startAnalysis(user);
+    await waitFor(() => expect(screen.getByRole('button', { name: /第 12 页.*已阻塞/ })).toBeTruthy());
+    expect(screen.getByRole('button', { name: /第 4 页/ }).getAttribute('aria-label')).not.toContain('已阻塞');
+    expect(vi.mocked(localEngineAdapter.renderPage).mock.calls.map((call) => call[1])).not.toContain(12);
+    expectEntryExportAction();
   });
 
-  it('batch crop failed save keeps target decisions unchanged and retries the original transaction', async () => {
-    const user=userEvent.setup(); const dialog=await openBatchFixture(user);
-    await user.click(await within(dialog).findByRole('checkbox',{name:/已检查预览/}));
-    const apply=within(dialog).getByRole('button',{name:/应用.*2.*片段/});
-    await waitFor(()=>expect((apply as HTMLButtonElement).disabled).toBe(false));
-    vi.mocked(localEngineAdapter.saveReviewSegmentsV2).mockRejectedValueOnce(new Error('磁盘写入失败'));
-    await user.click(apply); const retry=await screen.findByRole('button',{name:'重试保存'});
-    expect(reviewRow(/第 12 页/).textContent).toContain('需复核');
-    await user.click(retry);
-    await waitFor(()=>expect(screen.queryByRole('button',{name:'重试保存'})).toBeNull());
-    const writes=vi.mocked(localEngineAdapter.saveReviewSegmentsV2).mock.calls;
-    expect(writes).toHaveLength(3);
-    const decisions=(rows:EngineReviewSegmentV2[])=>rows.map(item=>({...item,reviewed_at:null}));
-    expect(decisions(writes[2]![2])).toEqual(decisions(writes[1]![2]));
-    expect(reviewRow(/第 12 页/).textContent).toContain('已确认');
+  it.each(['裁剪区域', '调整南边界'])('retains %s keyboard focus throughout consecutive draft adjustments', async (label) => {
+    const user = userEvent.setup();
+    render(<App />);
+    await loadResults(user);
+    await validatePreviewForPage(user, 4);
+    await enterGuidedReview(user);
+    const box = screen.getByLabelText('裁剪区域');
+    const property = label === '裁剪区域' ? 'top' : 'height';
+    const original = parseFloat(box.style[property]);
+    const target = screen.getByLabelText(label);
+    target.focus();
+    await user.keyboard('{ArrowDown}{ArrowDown}{ArrowDown}');
+    expect(document.activeElement).toBe(target);
+    expect(parseFloat(box.style[property]) - original).toBeCloseTo(3 / 800 * 100);
+    expect(localEngineAdapter.saveReviewSegmentsV2).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: '取消当前调整' }));
+    expect(parseFloat(box.style[property])).toBe(original);
   });
 
-  it('batch crop refuses a changed source at the final identity check before any target save', async () => {
-    const user=userEvent.setup();const dialog=await openBatchFixture(user);
-    await user.click(await within(dialog).findByRole('checkbox',{name:/已检查预览/}));
-    const apply=within(dialog).getByRole('button',{name:/应用.*2.*片段/});
-    await waitFor(()=>expect((apply as HTMLButtonElement).disabled).toBe(false));
-    vi.mocked(localEngineAdapter.inspectPdf).mockResolvedValue({status:'ok',page_count:20,source_sha256:CHANGED_SOURCE_SHA256});
-    await user.click(apply);
-    await waitFor(()=>expect(screen.queryByRole('dialog',{name:'应用到同类片段'})).toBeNull());
-    expect(vi.mocked(localEngineAdapter.saveReviewSegmentsV2).mock.calls).toHaveLength(1);
-    expect(screen.queryByRole('button',{name:'重试保存'})).toBeNull();
-  });
-
-  it('batch crop retries revalidate the sample source even when all targets belong to another PDF',async()=>{
-    const user=userEvent.setup();const dialog=await openBatchFixture(user,true);
-    await user.selectOptions(within(dialog).getByRole('combobox',{name:'应用范围'}),'filtered');
-    await user.click(await within(dialog).findByRole('checkbox',{name:/已检查预览/}));
-    const apply=within(dialog).getByRole('button',{name:/应用.*2.*片段/});
-    await waitFor(()=>expect((apply as HTMLButtonElement).disabled).toBe(false));
-    vi.mocked(localEngineAdapter.saveReviewSegmentsV2).mockRejectedValueOnce(new Error('磁盘失败'));
-    await user.click(apply);const retry=await screen.findByRole('button',{name:'重试保存'});
-    vi.mocked(localEngineAdapter.inspectPdf).mockImplementation(async(path)=>({status:'ok',page_count:20,
-      source_sha256:path==='/docs/source.pdf'?CHANGED_SOURCE_SHA256:SECOND_SOURCE_SHA256}));
-    await user.click(retry);
-    await waitFor(()=>expect(screen.queryByRole('button',{name:'重试保存'})).toBeNull());
-    expect(vi.mocked(localEngineAdapter.saveReviewSegmentsV2).mock.calls).toHaveLength(2);
-  });
-
-  it('batch crop metadata source_changed invalidates the plan using the source document identity',async()=>{
-    const user=userEvent.setup();const dialog=await openBatchFixture(user);
-    vi.mocked(localEngineAdapter.describeCropPage).mockRejectedValue(sourceChangedError());
-    await user.selectOptions(within(dialog).getByRole('combobox',{name:'应用范围'}),'filtered');
-    await waitFor(()=>expect(screen.queryByRole('dialog',{name:'应用到同类片段'})).toBeNull());
-    expect(vi.mocked(localEngineAdapter.saveReviewSegmentsV2).mock.calls).toHaveLength(1);
-    expect((screen.getByRole('button',{name:'确认整组'}) as HTMLButtonElement).disabled).toBe(true);
-  });
-
-  it('batch crop scope changes create a fresh preview instead of inheriting a cancelled cache owner',async()=>{
-    const user=userEvent.setup();const dialog=await openBatchFixture(user);
-    const apply=await within(dialog).findByRole('button',{name:/应用.*2.*片段/});
-    await user.click(within(dialog).getByRole('checkbox',{name:/已检查预览/}));
-    await waitFor(()=>expect((apply as HTMLButtonElement).disabled).toBe(false));
-    const release:(()=>void)[]=[];
-    vi.mocked(localEngineAdapter.renderPage).mockImplementation((path,page)=>new Promise(resolve=>release.push(()=>resolve({...preview(path,page),source_sha256:SOURCE_SHA256}))));
-    const scope=within(dialog).getByRole('combobox',{name:'应用范围'});
-    await user.selectOptions(scope,'filtered');await waitFor(()=>expect(release).toHaveLength(1));
-    await user.selectOptions(scope,'source');await waitFor(()=>expect(release).toHaveLength(2));
-    await act(async()=>release[0]!());
-    expect((within(dialog).getByRole('button',{name:/应用.*2.*片段/}) as HTMLButtonElement).disabled).toBe(true);
-    await act(async()=>release[1]!());
-    await user.click(within(dialog).getByRole('checkbox',{name:/已检查预览/}));
-    await waitFor(()=>expect((within(dialog).getByRole('button',{name:/应用.*2.*片段/}) as HTMLButtonElement).disabled).toBe(false));
-    await user.click(within(dialog).getByRole('button',{name:'取消'}));
-    expect(vi.mocked(localEngineAdapter.saveReviewSegmentsV2).mock.calls).toHaveLength(1);
+  it('drops a draft moved back to its saved rectangle without creating an operation', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await loadResults(user);
+    await enterGuidedReview(user);
+    await validatePreviewForPage(user, 4);
+    fireEvent.keyDown(screen.getByLabelText('裁剪区域'), { key: 'ArrowDown' });
+    fireEvent.keyDown(screen.getByLabelText('裁剪区域'), { key: 'ArrowUp' });
+    expect(screen.queryByRole('button', { name: /^保存本轮 \d+ 处$/ })).toBeNull();
+    expect(screen.getByRole('button', { name: /确认并预览本轮/ })).toBeTruthy();
+    expect(localEngineAdapter.saveReviewSegmentsV2).not.toHaveBeenCalled();
+    expect((screen.getByRole('button', { name: '下一页' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it('marks the source changed when a background preview page count differs', async () => {
@@ -3577,8 +3466,8 @@ describe('App orchestration', () => {
       matches: [match(4), firstOtherPage, secondOtherPage],
     });
     vi.mocked(localEngineAdapter.analyzePage).mockImplementation(async (path, page, pageMatches) => analysis(page, pageMatches, page === 12 ? 280 : 0));
-    vi.mocked(localEngineAdapter.renderPage).mockImplementation(async (path, page) => ({
-      ...preview(path, page),
+    mockPageInspections(async (path, page, sha) => ({
+      ...inspectionPage(page, sha),
       page_count: page === 12 ? 19 : 20,
     }));
 
@@ -3586,7 +3475,7 @@ describe('App orchestration', () => {
     await choosePdf(user);
     await startAnalysis(user);
     await screen.findByText('第 12 页 / 片段 2');
-    await waitFor(() => expect(vi.mocked(localEngineAdapter.renderPage).mock.calls.map((call) => call[1])).toContain(12));
+    await waitFor(() => expect(vi.mocked(localEngineAdapter.inspectPages).mock.calls.flatMap((call) => call[1])).toContain(12));
     await user.click(screen.getByText('第 12 页 / 片段 1'));
     await waitFor(() => expect(screen.getAllByText('页面预览页数与搜索结果不一致，已阻止确认。').length).toBeGreaterThan(0));
 
@@ -3594,8 +3483,8 @@ describe('App orchestration', () => {
     expect(pageRows).toHaveLength(2);
     expect(screen.getAllByText('源文件已变化，请重新分析').length).toBeGreaterThan(0);
     expect(pageRows.every((row) => row.getAttribute('aria-label')?.includes('已阻塞'))).toBe(true);
-    expect(screen.getByText(/未解决 3 个片段/, { selector: '.review-action-card-summary' })).toBeTruthy();
-    expect((screen.getByRole('button', { name: '确认整组' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(within(screen.getByRole('region', { name: '审核导航' })).getAllByRole('button', { name: /第 .*已阻塞/ })).toHaveLength(3);
+    expectEntryExportAction();
   });
 
   it('blocks every source reported changed by the same background validation batch', async () => {
@@ -3612,11 +3501,8 @@ describe('App orchestration', () => {
     }));
     vi.mocked(localEngineAdapter.analyzePage).mockImplementation(async (path, page, pageMatches) => analysis(page, pageMatches, page === 4 ? 0 : 280));
     const resolveChangedPreview = new Map<string, () => void>();
-    vi.mocked(localEngineAdapter.renderPage).mockImplementation((path, page) => new Promise((resolve) => {
-      resolveChangedPreview.set(path, () => resolve({
-        ...preview(path, page),
-        source_sha256: CHANGED_SOURCE_SHA256,
-      }));
+    vi.mocked(localEngineAdapter.inspectPages).mockImplementation((path) => new Promise((_resolve, reject) => {
+      resolveChangedPreview.set(path, () => reject(sourceChangedError()));
     }));
 
     render(<App />);
@@ -3684,29 +3570,29 @@ describe('App orchestration', () => {
     });
     vi.mocked(localEngineAdapter.analyzePage).mockImplementation(async (path, page, pageMatches) => analysis(page, pageMatches, page === 12 ? 280 : 0));
     let page12Calls = 0;
-    vi.mocked(localEngineAdapter.renderPage).mockImplementation(async (path, page) => {
-      if (page === 12 && page12Calls++ === 0) throw new Error('background preview outage');
-      return preview(path, page);
+    mockPageInspections(async (_path, page, sha) => {
+      if (page === 12 && page12Calls++ === 0) return { status: 'error', page, code: 'render_failed', message: 'background preview outage' };
+      return inspectionPage(page, sha);
     });
 
     render(<App />);
     await choosePdf(user);
     await startAnalysis(user);
     await screen.findByText('第 12 页 / 片段 2');
-    await waitFor(() => expect(vi.mocked(localEngineAdapter.renderPage).mock.calls.map((call) => call[1])).toContain(12));
+    await waitFor(() => expect(vi.mocked(localEngineAdapter.inspectPages).mock.calls.flatMap((call) => call[1])).toContain(12));
     await waitFor(() => expect(screen.getAllByText('预览待重试').length).toBeGreaterThan(0));
 
-    expect(screen.getByText(/未解决 2 个片段/, { selector: '.review-action-card-summary' })).toBeTruthy();
+    expect(within(screen.getByRole('region', { name: '审核导航' })).getAllByRole('button', { name: /预览待重试/ })).toHaveLength(2);
     expect(screen.queryByText('全部片段已有合法候选，可选择导出范围。')).toBeNull();
-    expect((screen.getByRole('button', { name: '确认整组' }) as HTMLButtonElement).disabled).toBe(true);
+    expectEntryExportAction();
 
     const failedRow = screen.getByRole('button', { name: /第 12 页.*片段 1.*预览待重试/ });
     expect(failedRow.getAttribute('aria-label')).toContain('background preview outage');
     await user.click(failedRow);
     await waitFor(() => expect(screen.getByLabelText('裁剪区域')).toBeTruthy());
     await waitFor(() => expect(screen.queryByText(/未解决数量：/)).toBeNull());
-    expect(screen.getByText('全部片段已有合法候选，可选择导出范围。')).toBeTruthy();
-    expect((screen.getByRole('button', { name: '确认整组' }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryAllByText('预览待重试')).toHaveLength(0);
+    expect(screen.getByRole('button', { name: '进入微调' })).toBeTruthy();
   });
 
   it('keeps the engine concurrency limit while query editing is locked', async () => {
@@ -3817,7 +3703,7 @@ describe('App orchestration', () => {
     expect(items[0]!.textContent).toContain(paths[0]);
     expect(items[1]!.textContent).toContain(paths[1]);
     expect(failures.textContent).not.toMatch(/第 \d+ 页/);
-    expect(screen.queryByRole('region', { name: '当前审核操作' })).toBeNull();
+    expectNoReviewSurface();
 
     vi.mocked(localEngineAdapter.search).mockResolvedValue({
       status: 'ok', page_count: 20, source_sha256: SOURCE_SHA256, matches: [],
@@ -3919,7 +3805,7 @@ describe('App orchestration', () => {
     expect(items[0]!.textContent).toContain('源文件');
     expect(items[1]!.textContent).toContain('ordinary page error');
     expect(screen.getByRole('region', { name: '本轮分析' }).textContent).toContain('2 / 2');
-    expect(screen.queryByRole('region', { name: '当前审核操作' })).toBeNull();
+    expectNoReviewSurface();
     expect(localEngineAdapter.saveReviewSegmentsV2).not.toHaveBeenCalled();
   });
 
@@ -3937,7 +3823,7 @@ describe('App orchestration', () => {
     expect(failures.textContent).toContain('整批任务');
     expect(failures.textContent).toContain('整理审核结果');
     expect(failures.textContent).not.toMatch(/第 \d+ 页/);
-    expect(screen.queryByRole('region', { name: '当前审核操作' })).toBeNull();
+    expectNoReviewSurface();
   });
 
   it('M1 feedback keeps a separate finalization error even when a page already failed', async () => {
@@ -3964,7 +3850,7 @@ describe('App orchestration', () => {
     expect(items[1]!.textContent).toContain('整理审核结果');
     expect(items[1]!.textContent).toContain('缺少候选回单元数据');
     expect(screen.getByRole('region', { name: '本轮分析' }).textContent).toContain('整理审核结果失败');
-    expect(screen.queryByRole('region', { name: '当前审核操作' })).toBeNull();
+    expectNoReviewSurface();
   });
 
   it('continues every source, withholds partial results, and retries only the two failed sources before verifying all twenty', async () => {
@@ -4022,7 +3908,7 @@ describe('App orchestration', () => {
     // Browser tests do not run the desktop-only pre-analysis metadata pass;
     // failed runs stop before the runner's all-source verification phase.
     expect(inspectCalls).toHaveLength(0);
-    expect(screen.queryByRole('region', { name: '当前审核操作' })).toBeNull();
+    expectNoReviewSurface();
 
     const failures = screen.getByRole('list', { name: '上一轮分析失败明细' });
     const failureText = failures.textContent ?? '';
@@ -4101,7 +3987,9 @@ describe('App orchestration', () => {
     await openSearchEditor(user);
     await user.click(screen.getByRole('button', { name: '应用并重新分析' }));
     await screen.findByRole('button', { name: '重试失败文件（1）' });
-    expect(screen.queryByRole('region', { name: '当前审核操作' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: '结果检查' })).toBeTruthy();
+    expect(screen.queryByRole('region', { name: '微调与确认' })).toBeNull();
+    expect(screen.getByRole('button', { name: '选择导出范围' })).toBeTruthy();
 
     failThirdSource = false;
     await user.click(screen.getByRole('button', { name: '重试失败文件（1）' }));
@@ -4145,7 +4033,7 @@ describe('App orchestration', () => {
     await startAnalysis(user);
     await screen.findByRole('button', { name: '重试失败文件（1）' });
     expect(localEngineAdapter.prepareReviewContext).not.toHaveBeenCalled();
-    expect(screen.queryByRole('region', { name: '当前审核操作' })).toBeNull();
+    expectNoReviewSurface();
 
     failSourceCSearch = false;
     await user.click(screen.getByRole('button', { name: '重试失败文件（1）' }));
@@ -4156,7 +4044,7 @@ describe('App orchestration', () => {
     expect(new Set(inspectCalls)).toEqual(new Set(paths));
     expect(localEngineAdapter.prepareReviewContext).not.toHaveBeenCalled();
     expect(screen.queryByRole('button', { name: '重试失败文件（1）' })).toBeNull();
-    expect(screen.queryByRole('region', { name: '当前审核操作' })).toBeNull();
+    expectNoReviewSurface();
     expect(screen.queryByText(/第 (4|8|12) 页 \/ 片段 1/)).toBeNull();
   });
 
@@ -4191,7 +4079,7 @@ describe('App orchestration', () => {
     expect(searchCalls).toHaveLength(4);
     expect(searchCalls.slice(-1)).toEqual([paths[1]]);
     expect(screen.getAllByText(/成功文件的计算结果仅在本次会话暂存/).length).toBeGreaterThan(0);
-    expect(screen.queryByRole('region', { name: '当前审核操作' })).toBeNull();
+    expectNoReviewSurface();
 
     failSourceB = false;
     await user.click(screen.getByRole('button', { name: '重试失败文件（1）' }));
@@ -4315,7 +4203,7 @@ describe('App orchestration', () => {
     await waitFor(() => expect(screen.getAllByText(/批量审核上下文准备失败/).length).toBeGreaterThan(0));
     expect(localEngineAdapter.prepareReviewContext).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('button', { name: '重试失败文件（1）' })).toBeNull();
-    expect(screen.queryByRole('region', { name: '当前审核操作' })).toBeNull();
+    expectNoReviewSurface();
     expect(screen.queryByText(/第 (4|8) 页 \/ 片段 1/)).toBeNull();
   });
 
@@ -4646,12 +4534,13 @@ describe('App orchestration', () => {
     }
   });
 
-  it('expires queued page previews before a newer search can use the engine', async () => {
+  it('expires queued page inspections before a newer search can use the engine', async () => {
     const user = userEvent.setup();
-    const oldPages = Array.from({ length: 8 }, (_value, index) => index + 1);
+    const oldPages = Array.from({ length: 96 }, (_value, index) => index + 1);
     const newPage = 99;
     const oldPreviewResolvers: Array<() => void> = [];
     const renderCalls: number[] = [];
+    const inspectionCalls: number[][] = [];
     vi.mocked(localEngineAdapter.search).mockImplementation(async (_path, keyword) => ({
       status: 'ok',
       page_count: 120,
@@ -4659,6 +4548,13 @@ describe('App orchestration', () => {
       matches: (keyword === '手续费' ? oldPages : [newPage]).map((page) => match(page)),
     }));
     vi.mocked(localEngineAdapter.analyzePage).mockImplementation(async (path, page, pageMatches) => analysis(page, pageMatches, 0));
+    vi.mocked(localEngineAdapter.inspectPages).mockImplementation((_path, pages, sha) => {
+      inspectionCalls.push([...pages]);
+      const result = inspectionResponse(pages.map((page) => inspectionPage(page, sha, { page_count: 120 })), sha);
+      return pages.some((page) => oldPages.includes(page))
+        ? new Promise((resolve) => oldPreviewResolvers.push(() => resolve(result)))
+        : Promise.resolve(result);
+    });
     vi.mocked(localEngineAdapter.renderPage).mockImplementation((path, page, sourceSha256) => {
       renderCalls.push(page);
       if (oldPages.includes(page)) {
@@ -4678,7 +4574,8 @@ describe('App orchestration', () => {
       await choosePdf(user);
       await startAnalysis(user);
       await screen.findByText('第 8 页 / 片段 1');
-      await waitFor(() => expect(renderCalls.filter((page) => oldPages.includes(page)).length).toBeGreaterThanOrEqual(3));
+      await waitFor(() => expect(inspectionCalls).toHaveLength(2));
+      expect(inspectionCalls.every((pages) => pages.length === 32)).toBe(true);
       const startedOldPages = new Set(renderCalls);
       expect([...startedOldPages].every((page) => oldPages.includes(page))).toBe(true);
 
@@ -4692,7 +4589,8 @@ describe('App orchestration', () => {
 
       await screen.findByText(`第 ${newPage} 页 / 片段 1`);
       await waitFor(() => expect(renderCalls).toContain(newPage));
-      expect(renderCalls.filter((page) => page >= 4 && page <= 8)).toHaveLength(0);
+      expect(renderCalls.filter((page) => page >= 2 && page <= 96)).toHaveLength(0);
+      expect(inspectionCalls.flat().filter((page) => page >= 65 && page <= 96)).toHaveLength(0);
     } finally {
       for (let attempt = 0; attempt < 8; attempt += 1) {
         const pending = oldPreviewResolvers.splice(0);
@@ -4782,6 +4680,7 @@ describe('App orchestration', () => {
     await waitFor(() => expect(screen.getAllByText('第 1 页 / 片段 1').length).toBeGreaterThan(0));
 
     await user.click(within(screen.getByRole('list', { name: '当前来源文件' })).getByRole('button', { name: /^b\.pdf/ }));
+    await openSinglePage(user);
     await waitFor(() => expect(localEngineAdapter.renderPage).toHaveBeenCalledWith('/docs/b.pdf', 1, SECOND_SOURCE_SHA256));
     expect(screen.getByAltText('b.pdf 第 1 页')).toBeTruthy();
     expect(screen.getByRole('button', { name: /第 1 页 \/ 片段 1/ }).getAttribute('aria-current')).toBe('true');
@@ -4791,15 +4690,15 @@ describe('App orchestration', () => {
 
     await waitFor(() => expect(localEngineAdapter.renderPage).toHaveBeenCalledWith('/docs/b.pdf', 2, SECOND_SOURCE_SHA256));
     expect(screen.getByAltText('b.pdf 第 2 页')).toBeTruthy();
-    expect((screen.getByRole('button', { name: '保留整页' }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole('button', { name: '确认当前片段' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole('button', { name: '调整为整页范围' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '确认当前片段' })).toBeNull();
     expect(localEngineAdapter.saveReviewSegmentsV2).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole('button', { name: '下一页' }));
     await waitFor(() => expect(localEngineAdapter.renderPage).toHaveBeenCalledWith('/docs/b.pdf', 3, SECOND_SOURCE_SHA256));
     expect(screen.getByAltText('b.pdf 第 3 页')).toBeTruthy();
-    expect((screen.getByRole('button', { name: '保留整页' }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole('button', { name: '确认当前片段' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole('button', { name: '调整为整页范围' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '确认当前片段' })).toBeNull();
     expect(localEngineAdapter.saveReviewSegmentsV2).not.toHaveBeenCalled();
   });
 
@@ -4834,7 +4733,7 @@ describe('App orchestration', () => {
     rejectBPreview?.(sourceChangedError());
 
     await waitFor(() => expect(screen.getAllByText('源文件已变化，请重新分析').length).toBeGreaterThan(0));
-    expect((screen.getByRole('button', { name: '确认整组' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole('button', { name: '导出审核结果' })).toBeNull();
   });
 
   it('ignores a duplicate source_changed from a second in-flight request for an already changed document', async () => {
@@ -4848,6 +4747,14 @@ describe('App orchestration', () => {
       matches: path.endsWith('a.pdf') ? [match(1)] : [match(1), match(2), match(3)],
     }));
     vi.mocked(localEngineAdapter.analyzePage).mockImplementation(async (_path, page, matches) => analysis(page, matches, 0));
+    vi.mocked(localEngineAdapter.inspectPages).mockImplementation((path, pages, sha) => {
+      if (path.endsWith('b.pdf')) {
+        return new Promise((_resolve, reject) => {
+          rejectBByPage.set(1, [reject]);
+        });
+      }
+      return Promise.resolve(inspectionResponse(pages.map((page) => inspectionPage(page, sha, { page_count: 3 })), sha));
+    });
     vi.mocked(localEngineAdapter.renderPage).mockImplementation((path, page) => {
       if (path.endsWith('b.pdf')) {
         return new Promise((_resolve, reject) => {
@@ -4866,25 +4773,25 @@ describe('App orchestration', () => {
       await waitFor(() => expect(screen.getAllByText('第 1 页 / 片段 1').length).toBeGreaterThan(0));
       await waitFor(() => {
         expect(rejectBByPage.get(1)?.[0]).toBeTypeOf('function');
-        expect(rejectBByPage.get(2)?.[0]).toBeTypeOf('function');
       });
-      // Only two slots belong to background validation. Explicitly view the
-      // third page to retain this test's three in-flight integrity events.
+      // A single background batch and two visible-page requests report three
+      // independent integrity events, including a late duplicate.
+      await user.click(screen.getByText('第 2 页 / 片段 1'));
+      await waitFor(() => expect(rejectBByPage.get(2)?.[0]).toBeTypeOf('function'));
       await user.click(screen.getByText('第 3 页 / 片段 1'));
       await waitFor(() => expect(rejectBByPage.get(3)?.[0]).toBeTypeOf('function'));
 
       // Deliver both rejections before yielding to React. This models two
-      // background page requests reporting the same source change in one tick;
+      // metadata and image requests reporting the same source change in one tick;
       // the second event must be completely inert.
-      rejectBByPage.get(1)?.[0]?.(sourceChangedError('第一次检测到源文件变化'));
-      rejectBByPage.get(2)?.[0]?.(sourceChangedError('第二次同 tick 源变化'));
+      rejectBByPage.get(2)?.[0]?.(sourceChangedError('第一次检测到源文件变化'));
+      rejectBByPage.get(1)?.[0]?.(sourceChangedError('第二次同 tick 源变化'));
       await waitFor(() => expect(screen.getAllByText('第一次检测到源文件变化').length).toBeGreaterThan(0));
       expect(screen.queryByText('第二次同 tick 源变化')).toBeNull();
 
       await user.click(reviewRow(/^a\.pdf/));
       await waitFor(() => expect(screen.getByLabelText('裁剪区域')).toBeTruthy());
-      await user.click(screen.getByRole('button', { name: '保留整页' }));
-      await waitFor(() => expect(localEngineAdapter.saveReviewSegmentsV2).toHaveBeenCalled());
+      expect(localEngineAdapter.saveReviewSegmentsV2).not.toHaveBeenCalled();
       const saveCallsBeforeLateEvent = vi.mocked(localEngineAdapter.saveReviewSegmentsV2).mock.calls.length;
 
       rejectBByPage.get(3)?.[0]?.(sourceChangedError('第二次迟到源变化'));
@@ -4941,14 +4848,14 @@ describe('App orchestration', () => {
     await startAnalysis(user);
     await waitFor(() => expect(screen.getByText('20 页 · 文档已读取')).toBeTruthy());
     await waitFor(() => expect(screen.getByLabelText('裁剪区域')).toBeTruthy());
-    await waitFor(() => expect((screen.getByRole('button', { name: '确认整组' }) as HTMLButtonElement).disabled).toBe(false));
+    await waitFor(() => expect(screen.getByRole('button', { name: '进入微调' })).toBeTruthy());
 
     rejectOldPreview?.(sourceChangedError());
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(screen.getByText('20 页 · 文档已读取')).toBeTruthy();
     expect(screen.queryByText('源文件已变化，请重新分析')).toBeNull();
-    expect((screen.getByRole('button', { name: '确认整组' }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.getByRole('button', { name: '进入微调' })).toBeTruthy();
   });
 
   it('ignores an old preview rejection after a same-path SHA commit', async () => {
@@ -5010,7 +4917,7 @@ describe('App orchestration', () => {
       await waitFor(() => expect(lateEventSent).toBe(true));
       await waitFor(() => expect(screen.queryByText('旧预览迟到')).toBeNull());
       await waitFor(() => expect(screen.getByLabelText('裁剪区域')).toBeTruthy());
-      expect((screen.getByRole('button', { name: '确认整组' }) as HTMLButtonElement).disabled).toBe(false);
+      expect(screen.getByRole('button', { name: '进入微调' })).toBeTruthy();
       expect(within(screen.getByRole('region', { name: '搜索条件' })).getByRole('button', { name: '修改搜索条件' })).toBeTruthy();
     } finally {
       rejectOldPreview?.(sourceChangedError('清理挂起旧预览'));
@@ -5053,6 +4960,7 @@ describe('App orchestration', () => {
       matches: [match(4), match(12)],
     });
     vi.mocked(localEngineAdapter.analyzePage).mockImplementation(async (_path, page, matches) => analysis(page, matches, page === 4 ? 0 : 280));
+    vi.mocked(localEngineAdapter.inspectPages).mockRejectedValue(sourceChangedError());
     vi.mocked(localEngineAdapter.renderPage).mockImplementation((path, page) => {
       if (page === 4) {
         return new Promise((resolve) => {
@@ -5068,54 +4976,8 @@ describe('App orchestration', () => {
     await screen.findByText('第 12 页 / 片段 1');
 
     await waitFor(() => expect(screen.getAllByText('源文件已变化，请重新分析').length).toBeGreaterThan(0), { timeout: 600 });
-    expect((screen.getByRole('button', { name: '确认整组' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole('button', { name: '导出审核结果' })).toBeNull();
     resolveSibling?.(preview('/docs/source.pdf', 4));
-  });
-
-  it('releases a pending group save when a stale page request reports source_changed', async () => {
-    const user = userEvent.setup();
-    let saveGroup: (() => void) | undefined;
-    let deferPage4Retry = false;
-    let rejectPage4: ((error: unknown) => void) | undefined;
-    vi.mocked(localEngineAdapter.renderPage).mockImplementation(async (path, page) => {
-      if (deferPage4Retry && page === 4) {
-        return new Promise((_, reject) => {
-          rejectPage4 = reject;
-        });
-      }
-      return preview(path, page);
-    });
-    vi.mocked(localEngineAdapter.saveReviewSegmentsV2).mockImplementation((contextKey, resultRevision, segments) => new Promise((resolve) => {
-      saveGroup = () => resolve(acknowledgeReviewSave(contextKey, resultRevision, segments));
-    }));
-
-    render(<App />);
-    await loadResults(user);
-    deferPage4Retry = true;
-    const page12Row = screen.getByRole('button', { name: /第 12 页 \/ 片段 1/ });
-    await user.click(page12Row);
-    await waitFor(() => expect((screen.getByLabelText('当前 PDF 页码') as HTMLInputElement).value).toBe('12'));
-    const page4Row = screen.getByRole('button', { name: /第 4 页 \/ 片段 1/ });
-    await user.click(page4Row);
-    await waitFor(() => expect(rejectPage4).toBeTypeOf('function'));
-    // Switch away while the page-4 request is still pending so the group can
-    // be confirmed from the ready page-12 view. The stale page-4 failure must
-    // still release that pending save when it reports source_changed.
-    await user.click(page12Row);
-    await waitFor(() => expect((screen.getByLabelText('当前 PDF 页码') as HTMLInputElement).value).toBe('12'));
-    await waitFor(() => expect(vi.mocked(localEngineAdapter.renderPage).mock.calls.some((call) => call[1] === 12)).toBe(true));
-
-    await waitFor(() => expect((screen.getByRole('button', { name: '确认整组' }) as HTMLButtonElement).disabled).toBe(false));
-    await user.click(screen.getByRole('button', { name: '确认整组' }));
-    await waitFor(() => expect(screen.getByRole('button', { name: '保存中…' }).getAttribute('aria-busy')).toBe('true'));
-
-    rejectPage4?.(sourceChangedError());
-    await waitFor(() => expect(screen.getAllByText('源文件已变化，请重新分析').length).toBeGreaterThan(0));
-    const releasedGroupAction = screen.getByRole('button', { name: '确认整组' });
-    expect(releasedGroupAction.getAttribute('aria-busy')).not.toBe('true');
-    expect((releasedGroupAction as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.queryByText('正在保存整组审核…')).toBeNull();
-    saveGroup?.();
   });
 
   it('fails closed while the selected page is being revalidated', async () => {
@@ -5141,10 +5003,10 @@ describe('App orchestration', () => {
     await user.click(screen.getByRole('button', { name: /第 4 页 \/ 片段 1/ }));
     await waitFor(() => expect(screen.getByText('正在渲染第 4 页…')).toBeTruthy());
 
-    expect((screen.getByRole('button', { name: '保留整页' }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole('button', { name: '确认当前片段' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole('button', { name: '调整为整页范围' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '确认当前片段' })).toBeNull();
     expect(screen.queryByRole('button', { name: '保存当前裁剪' })).toBeNull();
-    expect((screen.getByRole('button', { name: '确认整组' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole('button', { name: '导出审核结果' })).toBeNull();
     expect(localEngineAdapter.saveReviewSegmentsV2).not.toHaveBeenCalled();
 
     releasePage4?.(preview('/docs/source.pdf', 4));
@@ -5167,7 +5029,7 @@ describe('App orchestration', () => {
     expect(vi.mocked(localEngineAdapter.renderPage).mock.calls.length).toBe(renderCallsBeforeInvalidInput);
   });
 
-  it('gates the group when a zero-hit source changes while preserving an unaffected source edit', async () => {
+  it('blocks guided review for a changed zero-hit source while keeping the unaffected preview readable', async () => {
     const user = userEvent.setup();
     vi.mocked(localEngineAdapter.pickPdfFiles).mockResolvedValue(pickerResult(['/docs/a.pdf', '/docs/b.pdf']));
     vi.mocked(localEngineAdapter.search).mockImplementation(async (path) => ({
@@ -5186,30 +5048,22 @@ describe('App orchestration', () => {
     await choosePdf(user);
     await startAnalysis(user);
     await screen.findByText('第 1 页 / 片段 1');
-    await waitFor(() => expect((screen.getByRole('button', { name: '确认整组' }) as HTMLButtonElement).disabled).toBe(false));
-    await user.click(screen.getByRole('button', { name: '确认整组' }));
-    await waitFor(() => expect(confirmedPreviewAction().disabled).toBe(false));
-    expect((screen.getByRole('button', { name: /生成 PDF 导出预览/ }) as HTMLButtonElement).disabled).toBe(false);
+    await waitFor(() => expect(screen.getByRole('button', { name: '进入微调' })).toBeTruthy());
+
 
     await user.click(within(screen.getByRole('list', { name: '当前来源文件' })).getByRole('button', { name: /^b\.pdf/ }));
+    await openSinglePage(user);
     await waitFor(() => expect(screen.getAllByText('源文件已变化，请重新分析').length).toBeGreaterThan(0));
-    expect(vi.mocked(localEngineAdapter.renderPage).mock.calls.filter((call) => call[0] === '/docs/b.pdf')).toHaveLength(1);
-    expect((screen.getByRole('button', { name: '确认整组' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(vi.mocked(localEngineAdapter.renderPage).mock.calls.filter(([path, , , requestType]) => path === '/docs/b.pdf' && requestType !== 'thumbnail')).toHaveLength(1);
+    expectEntryExportAction();
     expect(screen.queryByRole('button', { name: /生成 PDF 导出预览/ })).toBeNull();
 
     await user.click(reviewRow(/^a\.pdf/));
     await waitFor(() => expect(screen.getByLabelText('裁剪区域')).toBeTruthy());
-    const savesBeforeEdit = vi.mocked(localEngineAdapter.saveReviewSegmentsV2).mock.calls.length;
-    await user.click(screen.getByRole('button', { name: '保留整页' }));
-    await waitFor(() => expect(localEngineAdapter.saveReviewSegmentsV2).toHaveBeenCalledTimes(savesBeforeEdit + 1));
-    expect(vi.mocked(localEngineAdapter.saveReviewSegmentsV2).mock.calls.at(-1)?.[2][0]).toMatchObject({
-      source_path: '/docs/a.pdf',
-      source_sha256: SOURCE_SHA256,
-    });
-
-    await user.click(screen.getByRole('button', { name: '确认当前片段' }));
-    await waitFor(() => expect(localEngineAdapter.saveReviewSegmentsV2).toHaveBeenCalledTimes(savesBeforeEdit + 2));
-    expect((screen.getByRole('button', { name: '确认整组' }) as HTMLButtonElement).disabled).toBe(true);
+    await user.click(screen.getByRole('button', { name: '进入微调' }));
+    expect(screen.queryByRole('button', { name: /确认并预览本轮/ })).toBeNull();
+    expect(localEngineAdapter.saveReviewSegmentsV2).not.toHaveBeenCalled();
+    expectEntryExportAction();
   });
 
 
@@ -5217,6 +5071,7 @@ describe('App orchestration', () => {
     const user = userEvent.setup();
     render(<App />);
     await loadResults(user);
+    await openSinglePage(user);
     await screen.findByAltText('PDF 页面预览');
 
     const pageInput = screen.getByRole('textbox', { name: '当前 PDF 页码' }) as HTMLInputElement;
@@ -5226,7 +5081,7 @@ describe('App orchestration', () => {
     await waitFor(() => expect(screen.getByAltText('source.pdf 第 3 页')).toBeTruthy());
     expect(pageInput.value).toBe('3');
     expect(screen.getByText('第 4 页 / 片段 1')).toBeTruthy();
-    expect((screen.getByRole('button', { name: '保留整页' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole('button', { name: '调整为整页范围' })).toBeNull();
 
     await user.clear(pageInput);
     await user.type(pageInput, '99{Enter}');
@@ -5292,13 +5147,26 @@ describe('App orchestration', () => {
     await screen.findByText('第 4 页 / 片段 1');
     await waitFor(() => expect(screen.getAllByText('源文件已变化，请重新分析').length).toBeGreaterThan(0));
     const renderCallCount = vi.mocked(localEngineAdapter.renderPage).mock.calls.length;
-
-    const pageInput = screen.getByRole('textbox', { name: '当前 PDF 页码' });
-    await user.clear(pageInput);
+    const inspectCallCount = vi.mocked(localEngineAdapter.inspectPdf).mock.calls.length;
+    const inspectPagesCallCount = vi.mocked(localEngineAdapter.inspectPages).mock.calls.length;
+    const sourcePreview = within(screen.getByRole('region', { name: '源 PDF 预览' }));
+    const pageInput = sourcePreview.getByRole('textbox', { name: '当前 PDF 页码' }) as HTMLInputElement;
+    const previousPage = pageInput.value;
+    const next = sourcePreview.getByRole('button', { name: '下一页' }) as HTMLButtonElement;
+    const overview = sourcePreview.getByRole('button', { name: '原页总览' }) as HTMLButtonElement;
+    expect(pageInput.disabled).toBe(true);
+    expect(next.disabled).toBe(true);
+    expect(overview.disabled).toBe(true);
+    expect(sourcePreview.queryByRole('img')).toBeNull();
+    expect(sourcePreview.getByRole('alert').textContent).toContain('源文件已变化或页面信息无效');
+    await user.click(next);
     await user.type(pageInput, '5{Enter}');
-    await waitFor(() => expect((pageInput as HTMLInputElement).value).toBe('5'));
+    await user.click(overview);
+    expect(pageInput.value).toBe(previousPage);
     expect(vi.mocked(localEngineAdapter.renderPage).mock.calls.length).toBe(renderCallCount);
-    expect((screen.getByRole('button', { name: '确认整组' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(vi.mocked(localEngineAdapter.inspectPdf).mock.calls.length).toBe(inspectCallCount);
+    expect(vi.mocked(localEngineAdapter.inspectPages).mock.calls.length).toBe(inspectPagesCallCount);
+    expectEntryExportAction();
     expect(localEngineAdapter.saveReviewSegmentsV2).not.toHaveBeenCalled();
   });
 
@@ -5320,7 +5188,7 @@ describe('App orchestration', () => {
     await startAnalysis(user);
     await screen.findByText('第 4 页 / 片段 1');
     await waitFor(() => expect(screen.getAllByText('源文件已变化，请重新分析').length).toBeGreaterThan(0));
-    expect((screen.getByRole('button', { name: '确认整组' }) as HTMLButtonElement).disabled).toBe(true);
+    expectEntryExportAction();
     expect(screen.queryByRole('button', { name: /生成 PDF 导出预览/ })).toBeNull();
     expect(localEngineAdapter.saveReviewSegmentsV2).not.toHaveBeenCalled();
   });
@@ -5343,7 +5211,7 @@ describe('App orchestration', () => {
     expect(screen.queryByText('第 4 页 / 片段 1')).toBeNull();
     expect(localEngineAdapter.renderPage).not.toHaveBeenCalled();
     expect(localEngineAdapter.saveReviewSegmentsV2).not.toHaveBeenCalled();
-    expect(screen.queryByRole('region', { name: '当前审核操作' })).toBeNull();
+    expectNoReviewSurface();
   });
 
   it('routes source_changed from fallback page validation through the source-level gate', async () => {
@@ -5367,7 +5235,7 @@ describe('App orchestration', () => {
     expect(screen.getAllByText(/源文件已变化，请重新分析/).length).toBeGreaterThan(0);
     expect(screen.queryByText('第 4 页 / 片段 1')).toBeNull();
     expect(localEngineAdapter.saveReviewSegmentsV2).not.toHaveBeenCalled();
-    expect(screen.queryByRole('region', { name: '当前审核操作' })).toBeNull();
+    expectNoReviewSurface();
     expect(vi.mocked(localEngineAdapter.renderPage).mock.calls).toContainEqual([
       '/docs/source.pdf',
       4,
@@ -5397,7 +5265,7 @@ describe('App orchestration', () => {
     expect(screen.getAllByText(/源文件已变化，请重新分析/).length).toBeGreaterThan(0);
     expect(screen.queryByText('第 4 页 / 片段 1')).toBeNull();
     expect(localEngineAdapter.saveReviewSegmentsV2).not.toHaveBeenCalled();
-    expect(screen.queryByRole('region', { name: '当前审核操作' })).toBeNull();
+    expectNoReviewSurface();
   });
 
   it('routes an analysis response with a different source SHA through the source-level gate', async () => {
@@ -5422,7 +5290,7 @@ describe('App orchestration', () => {
     expect(screen.queryByText('第 4 页 / 片段 1')).toBeNull();
     expect(localEngineAdapter.renderPage).not.toHaveBeenCalled();
     expect(localEngineAdapter.saveReviewSegmentsV2).not.toHaveBeenCalled();
-    expect(screen.queryByRole('region', { name: '当前审核操作' })).toBeNull();
+    expectNoReviewSurface();
   });
 
   it('handles source_changed from a background page and does not issue a render loop', async () => {
@@ -5433,9 +5301,9 @@ describe('App orchestration', () => {
       source_sha256: SOURCE_SHA256,
       matches: [match(4), match(12)],
     });
-    vi.mocked(localEngineAdapter.renderPage).mockImplementation(async (path, page) => {
+    mockPageInspections(async (path, page, sha) => {
       if (page === 12) throw sourceChangedError();
-      return preview(path, page);
+      return inspectionPage(page, sha);
     });
 
     render(<App />);
@@ -5443,14 +5311,29 @@ describe('App orchestration', () => {
     await startAnalysis(user);
     await screen.findByText('第 12 页 / 片段 1');
     await waitFor(() => expect(screen.getAllByText('源文件已变化，请重新分析').length).toBeGreaterThan(0));
-    expect(vi.mocked(localEngineAdapter.renderPage).mock.calls.filter((call) => call[1] === 12)).toHaveLength(1);
-    expect((screen.getByRole('button', { name: '确认整组' }) as HTMLButtonElement).disabled).toBe(true);
-
-    const pageInput = screen.getByRole('textbox', { name: '当前 PDF 页码' });
-    await user.clear(pageInput);
+    expect(vi.mocked(localEngineAdapter.inspectPages).mock.calls.filter((call) => call[1].includes(12))).toHaveLength(1);
+    expectEntryExportAction();
+    const renderCallCount = vi.mocked(localEngineAdapter.renderPage).mock.calls.length;
+    const inspectCallCount = vi.mocked(localEngineAdapter.inspectPdf).mock.calls.length;
+    const inspectPagesCallCount = vi.mocked(localEngineAdapter.inspectPages).mock.calls.length;
+    const sourcePreview = within(screen.getByRole('region', { name: '源 PDF 预览' }));
+    const pageInput = sourcePreview.getByRole('textbox', { name: '当前 PDF 页码' }) as HTMLInputElement;
+    const previousPage = pageInput.value;
+    const next = sourcePreview.getByRole('button', { name: '下一页' }) as HTMLButtonElement;
+    const overview = sourcePreview.getByRole('button', { name: '原页总览' }) as HTMLButtonElement;
+    expect(pageInput.disabled).toBe(true);
+    expect(next.disabled).toBe(true);
+    expect(overview.disabled).toBe(true);
+    expect(sourcePreview.queryByRole('img')).toBeNull();
+    expect(sourcePreview.getByRole('alert').textContent).toContain('源文件已变化或页面信息无效');
+    await user.click(next);
     await user.type(pageInput, '13{Enter}');
-    await waitFor(() => expect((pageInput as HTMLInputElement).value).toBe('13'));
-    expect(vi.mocked(localEngineAdapter.renderPage).mock.calls.filter((call) => call[1] === 12)).toHaveLength(1);
+    await user.click(overview);
+    expect(pageInput.value).toBe(previousPage);
+    expect(vi.mocked(localEngineAdapter.renderPage).mock.calls.length).toBe(renderCallCount);
+    expect(vi.mocked(localEngineAdapter.inspectPdf).mock.calls.length).toBe(inspectCallCount);
+    expect(vi.mocked(localEngineAdapter.inspectPages).mock.calls.length).toBe(inspectPagesCallCount);
+    expect(vi.mocked(localEngineAdapter.inspectPages).mock.calls.filter((call) => call[1].includes(12))).toHaveLength(1);
   });
 
   it('restores a changed source only after a successful reanalysis with a new SHA', async () => {
@@ -5484,7 +5367,7 @@ describe('App orchestration', () => {
     await waitFor(() => expect(screen.getByText('20 页 · 文档已读取')).toBeTruthy());
     await waitFor(() => expect(screen.getByLabelText('裁剪区域')).toBeTruthy());
     expect(screen.queryByText('源文件已变化，请重新分析')).toBeNull();
-    expect((screen.getByRole('button', { name: '确认整组' }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.getByRole('button', { name: '进入微调' })).toBeTruthy();
   });
 
   it('keeps committed results after a completed analysis rerun fails', async () => {
@@ -5530,7 +5413,7 @@ describe('App orchestration', () => {
 
     vi.mocked(localEngineAdapter.pickPdfFiles).mockResolvedValueOnce(pickerResult([]));
     await choosePdf(user);
-    expect(await screen.findByText('已取消选择，当前任务保持不变。')).toBeTruthy();
+    expect(screen.queryByText('已取消选择，当前任务保持不变。')).toBeNull();
     expect(screen.getByText('第 4 页 / 片段 1')).toBeTruthy();
     expect(screen.getByText('20 页 · 文档已读取')).toBeTruthy();
     expect(screen.getByLabelText('裁剪区域')).toBeTruthy();
@@ -5540,10 +5423,114 @@ describe('App orchestration', () => {
     const fileInput = container.querySelectorAll<HTMLInputElement>('input[type="file"]')[0];
     expect(fileInput).toBeTruthy();
     fireEvent.change(fileInput!, { target: { files: [] } });
-    expect(await screen.findByText('已取消选择，当前任务保持不变。')).toBeTruthy();
+    expect(screen.queryByText('已取消选择，当前任务保持不变。')).toBeNull();
     expect(screen.getByText('第 4 页 / 片段 1')).toBeTruthy();
     expect(screen.getByText('20 页 · 文档已读取')).toBeTruthy();
     expect(screen.getByLabelText('裁剪区域')).toBeTruthy();
+  });
+
+  it('uses the native PDF picker in desktop runtime while engine health is unavailable', async () => {
+    const user = userEvent.setup();
+    Object.defineProperty(window, '__TAURI_INTERNALS__', { configurable: true, value: {} });
+    vi.mocked(localEngineAdapter.health).mockRejectedValueOnce(
+      new LocalEngineError('ENGINE_HEALTH_FAILED', '本地引擎健康检查失败。'),
+    );
+
+    render(<App />);
+    await screen.findByRole('button', { name: '重试本地引擎' });
+    await choosePdf(user);
+
+    expect(localEngineAdapter.pickPdfFiles).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText('source.pdf')).toBeTruthy();
+    expect(screen.queryByText('本地处理不可用')).toBeNull();
+  });
+
+  it('does not fall back to a pathless browser file when the desktop native picker fails', async () => {
+    const user = userEvent.setup();
+    Object.defineProperty(window, '__TAURI_INTERNALS__', { configurable: true, value: {} });
+    vi.mocked(localEngineAdapter.health).mockRejectedValueOnce(
+      new LocalEngineError('ENGINE_HEALTH_FAILED', '本地引擎健康检查失败。'),
+    );
+    vi.mocked(localEngineAdapter.pickPdfFiles)
+      .mockResolvedValueOnce(pickerResult(['/docs/existing.pdf']))
+      .mockRejectedValueOnce(new Error('native dialog failed at C:\\private\\customer.pdf'));
+    const htmlPickerClick = vi.spyOn(HTMLInputElement.prototype, 'click');
+
+    render(<App />);
+    await screen.findByRole('button', { name: '重试本地引擎' });
+    await choosePdf(user);
+    expect(await screen.findByText('existing.pdf')).toBeTruthy();
+    await choosePdf(user);
+
+    expect(await screen.findByText('桌面文件选择器暂不可用，请重试或重新启动应用。')).toBeTruthy();
+    expect(screen.getByText('existing.pdf')).toBeTruthy();
+    expect(screen.queryByText('source.pdf')).toBeNull();
+    expect(screen.queryByText(/customer\.pdf/)).toBeNull();
+    expect(htmlPickerClick).not.toHaveBeenCalled();
+  });
+
+  it('retries engine health and prepares previews for already selected desktop sources', async () => {
+    const user = userEvent.setup();
+    Object.defineProperty(window, '__TAURI_INTERNALS__', { configurable: true, value: {} });
+    vi.mocked(localEngineAdapter.health)
+      .mockRejectedValueOnce(new LocalEngineError('ENGINE_HEALTH_FAILED', '本地引擎健康检查失败。'))
+      .mockResolvedValueOnce({ status: 'ok', engine: 'test-engine', version: 'test' });
+    let resolveOptionalOcr!: (result: Awaited<ReturnType<typeof localEngineAdapter.ocrHealth>>) => void;
+    vi.mocked(localEngineAdapter.ocrHealth).mockImplementationOnce(
+      () => new Promise((resolve) => { resolveOptionalOcr = resolve; }),
+    );
+
+    render(<App />);
+    await screen.findByRole('button', { name: '重试本地引擎' });
+    await choosePdf(user);
+    expect(await screen.findByText('source.pdf')).toBeTruthy();
+    expect(screen.getByText('页数待分析')).toBeTruthy();
+    expect(screen.queryByRole('img', { name: 'source.pdf 第 1 页' })).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: '重试本地引擎' }));
+
+    await openSinglePage(user);
+    expect(await screen.findByRole('img', { name: 'source.pdf 第 1 页' })).toBeTruthy();
+    expect(screen.getByText('20 页 · 文档已读取')).toBeTruthy();
+    expect(localEngineAdapter.inspectPdf).toHaveBeenCalledWith('/docs/source.pdf');
+    await act(async () => {
+      resolveOptionalOcr({
+        status: 'ok', available: true, engine: 'paddleocr', message: 'ok', readiness: 'installed',
+      });
+    });
+  });
+
+  it('uses the latest desktop source when files change during engine health retry', async () => {
+    const user = userEvent.setup();
+    Object.defineProperty(window, '__TAURI_INTERNALS__', { configurable: true, value: {} });
+    let resolveRetryHealth!: (result: Awaited<ReturnType<typeof localEngineAdapter.health>>) => void;
+    vi.mocked(localEngineAdapter.health)
+      .mockRejectedValueOnce(new LocalEngineError('ENGINE_HEALTH_FAILED', '本地引擎健康检查失败。'))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveRetryHealth = resolve; }));
+    vi.mocked(localEngineAdapter.pickPdfFiles)
+      .mockResolvedValueOnce(pickerResult(['/docs/old.pdf']))
+      .mockResolvedValueOnce(pickerResult(['/docs/latest.pdf']));
+
+    render(<App />);
+    await screen.findByRole('button', { name: '重试本地引擎' });
+    await choosePdf(user);
+    expect(await screen.findByText('old.pdf')).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: '重试本地引擎' }));
+    expect(await screen.findByText('本地引擎检查中')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: '移除全部文件' }));
+    await choosePdf(user);
+    expect(await screen.findByText('latest.pdf')).toBeTruthy();
+
+    await act(async () => {
+      resolveRetryHealth({ status: 'ok', engine: 'test-engine', version: 'test' });
+    });
+
+    await openSinglePage(user);
+    expect(await screen.findByRole('img', { name: 'latest.pdf 第 1 页' })).toBeTruthy();
+    expect(localEngineAdapter.inspectPdf).toHaveBeenCalledWith('/docs/latest.pdf');
+    expect(localEngineAdapter.inspectPdf).not.toHaveBeenCalledWith('/docs/old.pdf');
+    expect(screen.queryByText('old.pdf')).toBeNull();
   });
 
   it('appends sources, deduplicates normalized paths, and resets analysis on source changes', async () => {
@@ -5561,7 +5548,8 @@ describe('App orchestration', () => {
     expect(await screen.findByText('NEW.pdf')).toBeTruthy();
     expect(screen.getByText('source.pdf')).toBeTruthy();
     expect(screen.getAllByText('页数待分析')).toHaveLength(2);
-    expect(await screen.findByText(/已去除 1 个重复路径/)).toBeTruthy();
+    expect(await screen.findByText(/本次已跳过 1 个重复路径/)).toBeTruthy();
+    expect(screen.getByText('2 份 PDF · 待分析')).toBeTruthy();
     expect(screen.getByRole('button', { name: '开始分析' })).toBeTruthy();
     expect(screen.queryByText('第 4 页 / 片段 1')).toBeNull();
 
@@ -5697,10 +5685,19 @@ describe('App orchestration', () => {
     expect((screen.getByLabelText('裁剪区域') as HTMLElement).style.height).not.toBe('100%');
   });
 
-  it('keeps full-page review decisions when every receipt on a page matches', async () => {
+  it('keeps a native single receipt full page when several keyword hits share it', async () => {
     const user = userEvent.setup();
     const first = match(1, 40, 120);
     const second = match(1, 40, 520);
+    mockPageInspections(async (_path, page, sha) => inspectionPage(page, sha, {
+      crop_template: {
+        status: 'ready', fingerprint: 'e'.repeat(64), receipts: [{
+          anchor_y: 40, bounds: { x0: 0, y0: 0, x1: PAGE_WIDTH, y1: PAGE_HEIGHT },
+          title_key: 'e'.repeat(64), issuer_bank_key: 'f'.repeat(64),
+          issuer_bank_name: '示例银行', template_fingerprint: 'd'.repeat(64),
+        }],
+      },
+    }));
     vi.mocked(localEngineAdapter.search).mockResolvedValue({
       status: 'ok',
       page_count: 20,
@@ -5731,14 +5728,10 @@ describe('App orchestration', () => {
     expect((screen.getByLabelText('裁剪区域') as HTMLElement).style.top).toBe('0%');
     expect((screen.getByLabelText('裁剪区域') as HTMLElement).style.height).toBe('100%');
 
-    const fullPageConfirm = screen.getByRole('button', { name: '确认整组' }) as HTMLButtonElement;
-    await waitFor(() => expect(fullPageConfirm.disabled).toBe(false));
-    await user.click(fullPageConfirm);
-    await waitFor(() => expect(localEngineAdapter.saveReviewSegmentsV2).toHaveBeenCalled());
-    await waitFor(() => expect(confirmedPreviewAction().disabled).toBe(false));
-    const saved = vi.mocked(localEngineAdapter.saveReviewSegmentsV2).mock.calls.at(-1)![2];
+    await completeAllGuidedReview(user);
+    const saved = vi.mocked(localEngineAdapter.saveReviewSegmentsV2).mock.calls.flatMap(call => call[2]);
     expect(saved).toHaveLength(2);
-    expect(saved.every((row) => row.crop_mode === 'full_page' && row.review_status === 'group_confirmed')).toBe(true);
+    expect(saved.every((row) => row.crop_mode === 'full_page' && row.review_status === 'page_confirmed')).toBe(true);
 
   });
 
@@ -5787,8 +5780,8 @@ describe('App orchestration', () => {
     expect(screen.getAllByRole('button', { name: '选择 PDF' })).toHaveLength(1);
     expect(screen.getAllByRole('button', { name: '选择文件夹' })).toHaveLength(1);
     expect(sourcePanel.contains(preview)).toBe(false);
-    expect(previewColumn?.querySelector('.review-action-card')).toBeTruthy();
-    expect(resultsColumn?.querySelector('.review-action-card')).toBeNull();
+    expect(previewColumn?.querySelector('.guided-review-panel')).toBeTruthy();
+    expect(resultsColumn?.querySelector('.guided-review-panel')).toBeNull();
     expect(resultsColumn?.querySelector('.review-navigator')).toBeTruthy();
   });
 
@@ -6001,118 +5994,9 @@ describe('App orchestration', () => {
     await loadResults(user);
     await user.selectOptions(screen.getByRole('combobox', { name: '来源 PDF' }), VIEW_SOURCE_A);
     expect(screen.getByText('当前显示 1 / 总计 2 个片段')).toBeTruthy();
-    expect((screen.getByRole('button', { name: '确认整组' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole('button', { name: '导出审核结果' })).toBeNull();
     expect(screen.queryByRole('button', { name: '生成 PDF 导出预览' })).toBeNull();
     expect(localEngineAdapter.exportPdf).not.toHaveBeenCalled();
-  });
-
-  it('keeps an in-flight crop save tied to its original receipt while the result view changes', async () => {
-    const user = userEvent.setup();
-    configureResultViewSources();
-    render(<App />);
-    await loadResults(user);
-    await validatePreviewForPage(user, 4);
-    let finishSave: (() => void) | undefined;
-    vi.mocked(localEngineAdapter.saveReviewSegmentsV2).mockImplementationOnce((contextKey, resultRevision, segments) => new Promise(resolve => {
-      finishSave = () => resolve(acknowledgeReviewSave(contextKey, resultRevision, segments));
-    }));
-    fireEvent.keyDown(screen.getByLabelText('裁剪区域'), { key: 'ArrowDown' });
-    await waitFor(() => expect(finishSave).toBeTypeOf('function'));
-    const savedSegments = vi.mocked(localEngineAdapter.saveReviewSegmentsV2).mock.calls.at(-1)![2];
-    expect(savedSegments).toHaveLength(1);
-    expect(savedSegments[0]?.source_path).toBe(VIEW_SOURCE_A);
-    await user.selectOptions(screen.getByRole('combobox', { name: '来源 PDF' }), VIEW_SOURCE_B);
-    await user.selectOptions(screen.getByRole('combobox', { name: '结果排序' }), 'confidence_asc');
-    await act(async () => { finishSave?.(); });
-    expect(vi.mocked(localEngineAdapter.saveReviewSegmentsV2).mock.calls.at(-1)![2]).toEqual(savedSegments);
-    await user.click(screen.getByRole('button', { name: '定位当前片段' }));
-    expect(reviewRow(/account-a.*第 4 页/).getAttribute('aria-label')).toContain('人工调整');
-    expect(reviewRow(/account-b.*第 12 页/).getAttribute('aria-label')).not.toContain('人工调整');
-  });
-
-  it('locks a second crop until the first save finishes while keeping each decision tied to its receipt', async () => {
-    const user = userEvent.setup();
-    let releaseFirstSave: (() => void) | undefined;
-    let firstSave = true;
-    const firstGate = new Promise<void>((resolve) => {
-      releaseFirstSave = resolve;
-    });
-    vi.mocked(localEngineAdapter.saveReviewSegmentsV2).mockImplementation(async (contextKey, resultRevision, segments) => {
-      if (firstSave) {
-        firstSave = false;
-        await firstGate;
-      }
-      return acknowledgeReviewSave(contextKey, resultRevision, segments);
-    });
-
-    render(<App />);
-    await loadResults(user);
-    await validatePreviewForPage(user, 4);
-    fireEvent.keyDown(screen.getByLabelText('裁剪区域'), { key: 'ArrowDown' });
-    await waitFor(() => expect(localEngineAdapter.saveReviewSegmentsV2).toHaveBeenCalledTimes(1));
-
-    await validatePreviewForPage(user, 12);
-    fireEvent.keyDown(screen.getByLabelText('裁剪区域'), { key: 'ArrowDown' });
-    await Promise.resolve();
-    expect(localEngineAdapter.saveReviewSegmentsV2).toHaveBeenCalledTimes(1);
-
-    releaseFirstSave?.();
-    await waitFor(() => expect((screen.getByRole('button', { name: '保留整页' }) as HTMLButtonElement).disabled).toBe(false));
-    fireEvent.keyDown(screen.getByLabelText('裁剪区域'), { key: 'ArrowDown' });
-    await waitFor(() => expect(localEngineAdapter.saveReviewSegmentsV2).toHaveBeenCalledTimes(2));
-    const firstCall = vi.mocked(localEngineAdapter.saveReviewSegmentsV2).mock.calls[0]!;
-    const secondCall = vi.mocked(localEngineAdapter.saveReviewSegmentsV2).mock.calls[1]!;
-    expect(secondCall[0]).toBe(firstCall[0]);
-    expect(secondCall[1]).toBe(firstCall[1]);
-    expect(firstCall[2][0]?.source_page).toBe(4);
-    expect(secondCall[2][0]?.source_page).toBe(12);
-  });
-
-  it('keeps a same-segment follow-up locked until confirmation is saved, then records the full-page decision', async () => {
-    const user = userEvent.setup();
-    configureResultViewSources(0.8);
-    let releaseFirstSave: (() => void) | undefined;
-    let saveNumber = 0;
-    const firstGate = new Promise<void>((resolve) => {
-      releaseFirstSave = resolve;
-    });
-    vi.mocked(localEngineAdapter.saveReviewSegmentsV2).mockImplementation(async (contextKey, resultRevision, segments) => {
-      saveNumber += 1;
-      if (saveNumber === 1) await firstGate;
-      return acknowledgeReviewSave(contextKey, resultRevision, segments);
-    });
-
-    render(<App />);
-    await loadResults(user);
-    await validatePreviewForPage(user, 12);
-    const save = vi.mocked(localEngineAdapter.saveReviewSegmentsV2);
-    const confirmCurrent = screen.getByRole('button', { name: '确认当前片段' }) as HTMLButtonElement;
-    expect(confirmCurrent.disabled).toBe(false);
-
-    await user.click(confirmCurrent);
-    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
-    expect(save.mock.calls[0]?.[2][0]).toMatchObject({
-      source_page: 12,
-      review_status: 'page_confirmed',
-    });
-
-    const fullPageNotice = '已选择保留整页；请再次点击“确认当前片段”完成确认。';
-    expect((screen.getByRole('button', { name: '保留整页' }) as HTMLButtonElement).disabled).toBe(true);
-    await user.click(screen.getByRole('button', { name: '保留整页' }));
-    expect(save).toHaveBeenCalledTimes(1);
-
-    releaseFirstSave?.();
-    await waitFor(() => expect((screen.getByRole('button', { name: '保留整页' }) as HTMLButtonElement).disabled).toBe(false));
-    await user.click(screen.getByRole('button', { name: '保留整页' }));
-    await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(screen.getByTitle(fullPageNotice)).toBeTruthy());
-    expect(screen.getByText('当前状态：需复核')).toBeTruthy();
-    expect(save.mock.calls[1]?.[2][0]).toMatchObject({
-      source_page: 12,
-      final_rect: null,
-      crop_mode: 'full_page',
-      review_status: 'needs_review',
-    });
   });
 
   it('reveals a filtered-out segment and returns the controlled filter to all', async () => {

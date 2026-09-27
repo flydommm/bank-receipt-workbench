@@ -1,0 +1,538 @@
+.receipt-batch-review-panel {
+  --receipt-ink: #18364a;
+  --receipt-muted: #718898;
+  --receipt-line: #dce7e7;
+  --receipt-paper: #fffdf8;
+  --receipt-teal: #287f78;
+  --receipt-teal-dark: #1f655f;
+  --receipt-gold: #d7a34f;
+  display: flex;
+  height: min(100%, 860px);
+  max-height: 860px;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--receipt-line);
+  border-radius: 16px;
+  background:
+    linear-gradient(135deg, rgba(245, 250, 247, .85), transparent 40%),
+    var(--receipt-paper);
+  color: var(--receipt-ink);
+  box-shadow: 0 16px 34px rgba(35, 61, 72, .08);
+}
+
+@media (max-width: 900px) {
+  .receipt-batch-review-panel {
+    height: min(100%, 720px);
+    max-height: 720px;
+  }
+}
+
+.receipt-batch-review-panel__header {
+  position: relative;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 22px 22px 17px;
+  border-bottom: 1px solid var(--receipt-line);
+  background:
+    radial-gradient(circle at 100% 0, rgba(215, 163, 79, .19), transparent 32%),
+    linear-gradient(135deg, rgba(255, 255, 255, .96), rgba(247, 251, 248, .92));
+}
+
+.receipt-batch-review-panel__heading {
+  min-width: 0;
+}
+
+.receipt-batch-review-panel__eyebrow,
+.receipt-batch-review-source__kicker {
+  margin: 0;
+  color: var(--receipt-teal);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .14em;
+  line-height: 1.4;
+  text-transform: uppercase;
+}
+
+.receipt-batch-review-panel__heading h2 {
+  margin: 5px 0 0;
+  color: var(--receipt-ink);
+  font-family: Georgia, "Noto Serif SC", "Songti SC", serif;
+  font-size: clamp(19px, 2.1vw, 25px);
+  font-weight: 700;
+  letter-spacing: -.035em;
+  line-height: 1.15;
+}
+
+.receipt-batch-review-panel__status {
+  max-width: 42ch;
+  margin: 8px 0 0;
+  color: var(--receipt-teal-dark);
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.5;
+}
+
+.receipt-batch-review-panel__stamp {
+  display: grid;
+  min-width: 58px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid rgba(40, 127, 120, .26);
+  border-radius: 12px;
+  padding: 8px 9px 7px;
+  background: rgba(255, 255, 255, .72);
+  color: var(--receipt-teal);
+  box-shadow: inset 0 0 0 4px rgba(40, 127, 120, .045);
+  transform: rotate(2deg);
+}
+
+.receipt-batch-review-panel__stamp span {
+  font-family: Georgia, "Noto Serif SC", "Songti SC", serif;
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.receipt-batch-review-panel__stamp small {
+  margin-top: 3px;
+  font-size: 9px;
+  letter-spacing: .12em;
+}
+
+.receipt-batch-review-panel__summary {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  padding: 11px 22px;
+  border-bottom: 1px solid #e8efec;
+  background: rgba(246, 250, 248, .76);
+  color: var(--receipt-muted);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.receipt-batch-review-panel__summary span {
+  position: relative;
+}
+
+.receipt-batch-review-panel__summary span + span::before {
+  position: absolute;
+  top: 50%;
+  left: -11px;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--receipt-gold);
+  content: '';
+  transform: translateY(-50%);
+}
+
+.receipt-batch-review-panel__summary strong {
+  color: var(--receipt-ink);
+  font-size: 12px;
+}
+
+.receipt-batch-review-panel__actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 9px;
+  padding: 14px 22px 13px;
+}
+
+.receipt-batch-review-panel__primary,
+.receipt-batch-review-panel__back {
+  border-radius: 9px;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.25;
+  transition: transform .16s ease, box-shadow .16s ease, background .16s ease, border-color .16s ease;
+}
+
+.receipt-batch-review-panel__primary {
+  min-width: 132px;
+  border: 1px solid var(--receipt-teal-dark);
+  padding: 10px 15px;
+  background: var(--receipt-teal);
+  color: #fff;
+  box-shadow: 0 7px 14px rgba(40, 127, 120, .16);
+}
+
+.receipt-batch-review-panel__primary:hover:not(:disabled) {
+  background: var(--receipt-teal-dark);
+  box-shadow: 0 9px 17px rgba(40, 127, 120, .21);
+  transform: translateY(-1px);
+}
+
+.receipt-batch-review-panel__back {
+  border: 1px solid #d1dedf;
+  padding: 9px 13px;
+  background: transparent;
+  color: #557486;
+}
+
+.receipt-batch-review-panel__back:hover:not(:disabled) {
+  border-color: #a9c5c3;
+  background: #f4f9f7;
+  color: var(--receipt-teal-dark);
+}
+
+.receipt-batch-review-panel__primary:focus-visible,
+.receipt-batch-review-panel__back:focus-visible,
+.receipt-batch-review-row:focus-visible {
+  outline: 3px solid rgba(40, 127, 120, .27);
+  outline-offset: 2px;
+}
+
+.receipt-batch-review-panel__primary:disabled,
+.receipt-batch-review-panel__back:disabled {
+  cursor: not-allowed;
+  opacity: .55;
+}
+
+.receipt-batch-review-panel__groups {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 0 22px 16px;
+  scrollbar-gutter: stable;
+}
+
+.receipt-batch-review-source {
+  padding: 17px 0 3px;
+}
+
+.receipt-batch-review-source + .receipt-batch-review-source {
+  border-top: 1px solid var(--receipt-line);
+}
+
+.receipt-batch-review-source__header,
+.receipt-batch-review-page__header {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.receipt-batch-review-source__header h3 {
+  min-width: 0;
+  margin: 3px 0 0;
+  overflow: hidden;
+  color: var(--receipt-ink);
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.receipt-batch-review-source__header > span,
+.receipt-batch-review-page__header > span {
+  flex: 0 0 auto;
+  color: var(--receipt-muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.receipt-batch-review-source__pages {
+  display: grid;
+  gap: 15px;
+  margin-top: 13px;
+}
+
+.receipt-batch-review-page__header {
+  padding: 0 1px 6px;
+  border-bottom: 1px dashed #d8e4e4;
+}
+
+.receipt-batch-review-page__header h4 {
+  margin: 0;
+  color: #35566a;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.4;
+}
+
+.receipt-batch-review-page__list {
+  display: grid;
+  min-width: 0;
+  gap: 7px;
+  margin: 7px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.receipt-batch-review-row-item {
+  min-width: 0;
+}
+
+.receipt-batch-review-row {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  grid-template-columns: minmax(92px, .75fr) 51px minmax(0, 1.7fr);
+  align-items: center;
+  gap: 11px;
+  border: 1px solid #e0e9e8;
+  border-radius: 11px;
+  padding: 9px 10px;
+  text-align: left;
+  background: rgba(255, 255, 255, .82);
+  color: var(--receipt-ink);
+  cursor: pointer;
+  transition: border-color .16s ease, background .16s ease, box-shadow .16s ease, transform .16s ease;
+}
+
+.receipt-batch-review-row:hover {
+  border-color: #afd0cb;
+  background: #fff;
+  box-shadow: 0 6px 14px rgba(34, 82, 82, .08);
+  transform: translateY(-1px);
+}
+
+.receipt-batch-review-row[data-selected='true'] {
+  border-color: #4d9d94;
+  background: #f3faf7;
+  box-shadow: 0 0 0 2px rgba(40, 127, 120, .13), 0 7px 15px rgba(34, 82, 82, .08);
+}
+
+.receipt-batch-review-row[data-status='needs_review'],
+.receipt-batch-review-row[data-status='pending'],
+.receipt-batch-review-row[data-status='blocked'] {
+  border-left: 3px solid #d7a34f;
+}
+
+.receipt-batch-review-row[data-status='blocked'] {
+  border-left-color: #bd6a61;
+}
+
+.receipt-batch-review-row__lead {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 27px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px 8px;
+}
+
+.receipt-batch-review-row__index {
+  display: grid;
+  width: 27px;
+  height: 27px;
+  place-items: center;
+  border-radius: 8px;
+  background: #eff4f3;
+  color: var(--receipt-teal-dark);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 800;
+  grid-row: span 2;
+}
+
+.receipt-batch-review-row__slot {
+  min-width: 0;
+  overflow: hidden;
+  color: #345a6a;
+  font-size: 11px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.receipt-batch-review-row__slot-id {
+  min-width: 0;
+  overflow: hidden;
+  color: #91a2aa;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.receipt-batch-review-row__candidate {
+  display: grid;
+  width: 51px;
+  height: 66px;
+  place-items: center;
+  border: 1px solid #d9e5e2;
+  border-radius: 7px;
+  background: #f7faf7;
+}
+
+.receipt-batch-review-row__candidate--empty {
+  color: #9aaab0;
+  font-size: 16px;
+}
+
+.receipt-batch-review-row__paper {
+  position: relative;
+  display: block;
+  width: 27px;
+  height: 42px;
+  overflow: hidden;
+  border: 1px solid #cbdad6;
+  border-radius: 2px;
+  background:
+    linear-gradient(#e1e9e6 0 0) 4px 6px / 18px 2px no-repeat,
+    linear-gradient(#e1e9e6 0 0) 4px 11px / 14px 2px no-repeat,
+    linear-gradient(#e1e9e6 0 0) 4px 16px / 17px 2px no-repeat,
+    #fff;
+}
+
+.receipt-batch-review-row__box {
+  position: absolute;
+  display: block;
+  min-width: 2px;
+  min-height: 2px;
+  border: 1.5px solid #298b78;
+  background: rgba(93, 190, 145, .16);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, .76);
+}
+
+.receipt-batch-review-row__meta {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(44px, auto) minmax(0, 1fr);
+  gap: 4px 8px;
+  margin: 0;
+}
+
+.receipt-batch-review-row__meta > div {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 48px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 6px;
+  grid-column: 1 / -1;
+}
+
+.receipt-batch-review-row__meta dt {
+  color: #8a9ca4;
+  font-size: 9px;
+  font-weight: 750;
+  letter-spacing: .03em;
+}
+
+.receipt-batch-review-row__meta dd {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: #466776;
+  font-size: 10px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.receipt-batch-review-status {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 2px 6px;
+  background: #edf3f0;
+  color: #4c716b;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1.25;
+}
+
+.receipt-batch-review-status[data-status='needs_review'],
+.receipt-batch-review-status[data-status='pending'] {
+  background: #fff3d9;
+  color: #946b22;
+}
+
+.receipt-batch-review-status[data-status='blocked'] {
+  background: #fbe8e6;
+  color: #9a4e48;
+}
+
+.receipt-batch-review-status[data-status='confirmed'],
+.receipt-batch-review-status[data-status='page_confirmed'] {
+  background: #dff1e7;
+  color: #32755f;
+}
+
+.receipt-batch-review-row__qualifier {
+  margin-left: 5px;
+  color: #966c2c;
+  font-size: 9px;
+}
+
+.receipt-batch-review-row__candidate-meta dd,
+.receipt-batch-review-row__basis dd {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 9px;
+}
+
+.receipt-batch-review-panel__empty {
+  margin: 0 22px 16px;
+  border: 1px dashed #cbdad6;
+  border-radius: 10px;
+  padding: 22px 14px;
+  color: var(--receipt-muted);
+  font-size: 11px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.receipt-batch-review-panel__footer {
+  flex: 0 0 auto;
+  border-top: 1px solid #e8efec;
+  padding: 9px 22px 11px;
+  color: #83979e;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+@media (max-width: 620px) {
+  .receipt-batch-review-panel__header,
+  .receipt-batch-review-panel__actions,
+  .receipt-batch-review-panel__groups {
+    padding-inline: 15px;
+  }
+
+  .receipt-batch-review-panel__summary {
+    padding-inline: 15px;
+  }
+
+  .receipt-batch-review-row {
+    grid-template-columns: 80px 44px minmax(0, 1fr);
+    gap: 8px;
+    padding-inline: 8px;
+  }
+
+  .receipt-batch-review-row__candidate {
+    width: 44px;
+    height: 58px;
+  }
+
+  .receipt-batch-review-row__paper {
+    width: 23px;
+    height: 37px;
+  }
+
+  .receipt-batch-review-row__meta > div {
+    grid-template-columns: 42px minmax(0, 1fr);
+  }
+
+  .receipt-batch-review-panel__footer {
+    padding-inline: 15px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .receipt-batch-review-panel__primary,
+  .receipt-batch-review-panel__back,
+  .receipt-batch-review-row {
+    transition: none;
+  }
+}

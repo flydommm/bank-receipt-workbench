@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   MAX_EXPORT_NAME_LENGTH,
-  defaultExportName,
+  defaultExportName, defaultReceiptExportName,
   normalizeExportName,
   validateExportName,
 } from './exportNaming';
@@ -26,5 +26,21 @@ describe('export naming', () => {
     '结果 ', 'CON', 'con.pdf', `${'x'.repeat(MAX_EXPORT_NAME_LENGTH + 1)}`,
   ])('rejects unsafe name %j', (value) => {
     expect(validateExportName(value)).toBeTypeOf('string');
+  });
+});
+
+describe('receipt export suggestions', () => {
+  it('keeps source identity and ignores old search terms in split-all mode', () => {
+    expect(defaultReceiptExportName(['银行回单_示例_202601.pdf'], 'split_all', ['旧关键词']))
+      .toBe('银行回单_示例_202601_全部回单');
+    expect(defaultReceiptExportName(['A.pdf'], 'search', ['手续费', '示例公司'])).toBe('A_手续费_示例公司_查找结果');
+    expect(defaultReceiptExportName(['A.pdf', 'B.pdf'], 'split_all', [])).toBe('多来源_2份_全部回单');
+  });
+  it('bounds Windows names and never treats a source path as the destination', () => {
+    for (const source of ['D:\\来源\\CON.pdf', 'x'.repeat(400) + '.pdf', '坏:名?.pdf', '😀'.repeat(140) + '.pdf']) {
+      const name = defaultReceiptExportName([source], 'search', ['<筛选> / 😀'.repeat(40)]);
+      expect(name.length).toBeLessThanOrEqual(MAX_EXPORT_NAME_LENGTH);
+      expect(validateExportName(name)).toBeNull();
+    }
   });
 });

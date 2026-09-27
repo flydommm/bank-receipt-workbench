@@ -16,6 +16,7 @@ DEFAULT_HEADERS = (
     "matched_field", "crop_mode", "review_status", "confidence", "output_file", "processed_at",
     "matched_keywords", "matched_text", "crop_x0", "crop_y0", "crop_x1", "crop_y1",
 )
+MAPPING_HEADERS = ("segment_id", "source_file", "source_page", "segment_no", "output_file", "output_page")
 
 
 def export_index(path: str | Path, rows: Iterable[Mapping[str, object]], headers: tuple[str, ...] = DEFAULT_HEADERS) -> Path:
@@ -24,12 +25,16 @@ def export_index(path: str | Path, rows: Iterable[Mapping[str, object]], headers
 
 @overload
 def export_bundle_index(path: str | Path, rows: Iterable[Mapping[str, object]],
-                        mappings: Iterable[Mapping[str, object]], scope_rows: Iterable[Mapping[str, object]]) -> Path: ...
+                        mappings: Iterable[Mapping[str, object]], scope_rows: Iterable[Mapping[str, object]], *,
+                        headers: tuple[str, ...] = DEFAULT_HEADERS,
+                        mapping_headers: tuple[str, ...] = MAPPING_HEADERS) -> Path: ...
 
 
 @overload
 def export_bundle_index(path: BinaryIO, rows: Iterable[Mapping[str, object]],
-                        mappings: Iterable[Mapping[str, object]], scope_rows: Iterable[Mapping[str, object]]) -> BinaryIO: ...
+                        mappings: Iterable[Mapping[str, object]], scope_rows: Iterable[Mapping[str, object]], *,
+                        headers: tuple[str, ...] = DEFAULT_HEADERS,
+                        mapping_headers: tuple[str, ...] = MAPPING_HEADERS) -> BinaryIO: ...
 
 
 def export_bundle_index(
@@ -37,16 +42,19 @@ def export_bundle_index(
     rows: Iterable[Mapping[str, object]],
     mappings: Iterable[Mapping[str, object]],
     scope_rows: Iterable[Mapping[str, object]],
+    *,
+    headers: tuple[str, ...] = DEFAULT_HEADERS,
+    mapping_headers: tuple[str, ...] = MAPPING_HEADERS,
 ) -> Path | BinaryIO:
     """Write the three worksheets used by a multi-file export bundle."""
 
     return write_xlsx_sheets(
         path,
         (
-            ("索引", DEFAULT_HEADERS, rows),
+            ("索引", headers, rows),
             (
                 "输出映射",
-                ("segment_id", "source_file", "source_page", "segment_no", "output_file", "output_page"),
+                mapping_headers,
                 mappings,
             ),
             ("导出范围", ("item", "value"), scope_rows),

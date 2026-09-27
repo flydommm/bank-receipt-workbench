@@ -479,8 +479,10 @@ def test_killed_save_recovers_complete_version(root: Path, phase: str) -> None:
         """
     )
     creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+    # Kill and wait for the actual lock owner, not the Windows venv launcher.
+    interpreter = getattr(sys, "_base_executable", sys.executable) if os.name == "nt" else sys.executable
     child = subprocess.Popen(
-        [sys.executable, "-E", "-s", "-X", "utf8", "-c", helper, str(root), intent_id, phase],
+        [interpreter, "-E", "-s", "-X", "utf8", "-c", helper, str(root), intent_id, phase],
         cwd=_REPOSITORY,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,

@@ -8,14 +8,18 @@ frontend result arrays.  Only the calling thread uses its BatchStore instance.
 from __future__ import annotations
 
 from contextlib import ExitStack, contextmanager
+from copy import deepcopy
 from threading import Lock
 from typing import Any, Callable, Iterator
 from uuid import uuid4
 
+from .batch_models import canonical_json
 from .batch_pdf import BatchSourceError, open_batch_source
 from .batch_results import assemble_batch_results
 from .batch_store import BatchCapacityExceeded, BatchConflict, BatchStore, BatchStoreError
 from .ocr import OcrRuntimeError, OcrUnavailableError
+from .receipt_checkpoint import encode_receipt_checkpoint
+from .receipt_snapshot import assemble_receipt_results
 from .search import SearchBudget, SearchBudgetExceeded
 
 
@@ -96,12 +100,37 @@ class BatchProcessor:
         self.owner = owner
         self.version = computation_version
         self.progress = progress
+        self.receipt_layouts: dict[tuple[str, int], dict[str, Any]] = {}
+        self.historical_layouts: tuple[dict[str, Any], ...] = ()
 
     def _job(self) -> dict[str, Any]:
         job = self.store.get_job(self.job_id)
         if job["generation"] != self.generation or job["owner"] != self.owner:
             raise BatchConflict("worker no longer owns this generation")
         return job
+
+    def _computation_binding(self, job: dict[str, Any]) -> bytes:
+        """Freeze task parameters separately from mutable progress/control state."""
+        schema = job.get("page_result_schema", 1)
+        if type(schema) is not int or schema not in {1, 2}:
+            raise BatchConflict("worker page result schema is invalid")
+        if job["computation_version"] != self.version:
+            raise BatchConflict("worker computation version changed")
+        return canonical_json({
+            "page_result_schema": schema,
+            "processing_options": job.get("processing_options"),
+            "criteria": job["criteria"],
+            "match_mode": job["match_mode"],
+            "computation_version": job["computation_version"],
+            "criteria_fingerprint": job["criteria_fingerprint"],
+        })
+
+    def _assert_computation_binding(self, expected: bytes) -> None:
+        # A pause request must not consume the completed page or its budget.
+        # _job checks ownership without advancing a durable control state;
+        # commit_page remains the final transaction-level control guard.
+        if self._computation_binding(self._job()) != expected:
+            raise BatchConflict("task processing parameters changed during computation")
 
     def _transition(self, state: str, *, error: dict[str, str] | None = None) -> dict[str, Any]:
         job = self._checkpoint()
@@ -153,7 +182,7 @@ class BatchProcessor:
                 first_failure = first_failure or failure
         return valid, first_failure
 
-    def _compute_source(self, source: dict[str, Any], criteria: dict[str, Any], mode: str) -> None:
+    def _compute_source(self, source: dict[str, Any]) -> None:
         pending = self.store.pending_pages(self.job_id, source["source_id"])
         if not pending:
             return
@@ -164,13 +193,26 @@ class BatchProcessor:
                 with self.progress.unit("source_open", source["source_id"]):
                     opened = resources.enter_context(open_batch_source(source["access_path"], source["sha256"], reuse_ocr=True))
                 for page in pending:
-                    self._checkpoint()
+                    job = self._checkpoint()
+                    binding = self._computation_binding(job)
                     with self.progress.unit("page", source["source_id"], page):
                         claim = self.store.begin_page(self.job_id, self.generation, self.owner, source["source_id"], page)
                         budget = SearchBudget.from_dict(claim["budget"])
                         try:
-                            payload = opened.compute_page(page, criteria, mode, budget)
+                            if job.get("page_result_schema", 1) == 2:
+                                saved_layout = self.receipt_layouts.get((source["source_id"], page))
+                                computation = opened.compute_receipt_page(
+                                    page, deepcopy(job["processing_options"]), job["match_mode"], budget,
+                                    **({"reused_layout_definition": saved_layout} if saved_layout is not None else {}),
+                                    **({"historical_layouts": self.historical_layouts} if self.historical_layouts else {}),
+                                )
+                                payload = encode_receipt_checkpoint(computation)
+                            else:
+                                payload = opened.compute_page(page, deepcopy(job["criteria"]), job["match_mode"], budget)
+                        except BatchConflict:
+                            raise
                         except Exception as error:
+                            self._assert_computation_binding(binding)
                             # Settle known work even if OCR failed before
                             # search, or search hit a cumulative limit.
                             failure = _failure(error, "page")
@@ -181,6 +223,7 @@ class BatchProcessor:
                                 self._transition("blocked", error=failure)
                                 raise _Stopped() from None
                         else:
+                            self._assert_computation_binding(binding)
                             try:
                                 self.store.commit_page(self.job_id, self.generation, self.owner, source["source_id"],
                                                        page, claim["attempt"], payload, budget.to_dict())
@@ -220,8 +263,16 @@ class BatchProcessor:
         self._checkpoint()
         with self.progress.unit("assembling"):
             job = self._checkpoint()
-            result = assemble_batch_results(self.job_id, job["sources"], job["criteria"], job["match_mode"],
-                                            self.version, self.store.read_page_results(self.job_id))
+            binding = self._computation_binding(job)
+            if job.get("page_result_schema", 1) == 2:
+                result = assemble_receipt_results(
+                    self.job_id, job["sources"], job["processing_options"], job["match_mode"],
+                    job["computation_version"], self.store.read_page_results(self.job_id),
+                )
+            else:
+                result = assemble_batch_results(self.job_id, job["sources"], job["criteria"], job["match_mode"],
+                                                self.version, self.store.read_page_results(self.job_id))
+            self._assert_computation_binding(binding)
             self._checkpoint()
             self.store.publish_snapshot(self.job_id, self.generation, self.owner, **result)
         self.progress.emit("state_changed", public_summary(self._job()))
@@ -235,17 +286,23 @@ class BatchProcessor:
                 self._transition("blocked", error={"code": "computation_version_changed", "stage": "validating"})
                 return self._job()
             self.progress.emit("snapshot", public_summary(job))
+            if job.get("page_result_schema", 1) == 2:
+                from .receipt_layout_history import pin_historical_receipt_layouts
+                self.historical_layouts = pin_historical_receipt_layouts(self.store, self.job_id, self.generation, self.owner)
             valid, failure = self._validate_sources()
             # Resume must verify *all* originals before trusting any saved
             # page.  A first run can still settle the other valid sources.
             if failure and (self.generation > 1 or failure["code"] == "source_changed"):
                 self._transition("blocked", error=failure)
                 return self._job()
+            if job.get("page_result_schema", 1) == 2:
+                from .receipt_layout_reuse import pin_saved_receipt_layouts
+                self.receipt_layouts = pin_saved_receipt_layouts(self.store, self.job_id, self.generation, self.owner)
             job = self._transition("running")
             for source in job["sources"]:
                 self._checkpoint()
                 if source["source_id"] in valid:
-                    self._compute_source(source, job["criteria"], job["match_mode"])
+                    self._compute_source(source)
             job = self._checkpoint()
             if any(source["state"] in {"failed", "blocked"} for source in job["sources"]) or any(
                 job["page_summary"][state] for state in ("pending", "processing", "failed")

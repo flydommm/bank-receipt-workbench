@@ -1,0 +1,358 @@
+{
+  "options_valid": [
+    {
+      "name": "split_all",
+      "input": {
+        "processing_mode": "split_all",
+        "criteria": null
+      },
+      "output": {
+        "processing_mode": "split_all",
+        "criteria": null
+      }
+    },
+    {
+      "name": "search_normalization",
+      "input": {
+        "processing_mode": "search",
+        "criteria": {
+          "include": [
+            " café ",
+            "café"
+          ],
+          "includeMode": "all",
+          "exclude": [
+            " z "
+          ]
+        }
+      },
+      "output": {
+        "processing_mode": "search",
+        "criteria": {
+          "include": [
+            "café"
+          ],
+          "includeMode": "all",
+          "exclude": [
+            "z"
+          ]
+        }
+      }
+    },
+    {
+      "name": "ecmascript_bom_trim",
+      "input": {
+        "processing_mode": "search",
+        "criteria": {
+          "include": [
+            "﻿fee﻿"
+          ],
+          "includeMode": "any",
+          "exclude": []
+        }
+      },
+      "output": {
+        "processing_mode": "search",
+        "criteria": {
+          "include": [
+            "fee"
+          ],
+          "includeMode": "any",
+          "exclude": []
+        }
+      }
+    },
+    {
+      "name": "unicode_nel_is_not_ecmascript_whitespace",
+      "input": {
+        "processing_mode": "search",
+        "criteria": {
+          "include": [
+            "fee"
+          ],
+          "includeMode": "all",
+          "exclude": []
+        }
+      },
+      "output": {
+        "processing_mode": "search",
+        "criteria": {
+          "include": [
+            "fee"
+          ],
+          "includeMode": "all",
+          "exclude": []
+        }
+      }
+    },
+    {
+      "name": "astral_unicode_length",
+      "input": {
+        "processing_mode": "search",
+        "criteria": {
+          "include": [
+            "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+          ],
+          "includeMode": "all",
+          "exclude": []
+        }
+      },
+      "output": {
+        "processing_mode": "search",
+        "criteria": {
+          "include": [
+            "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+          ],
+          "includeMode": "all",
+          "exclude": []
+        }
+      }
+    }
+  ],
+  "options_invalid": [
+    {
+      "name": "empty_search",
+      "input": {
+        "processing_mode": "search",
+        "criteria": {
+          "include": [],
+          "includeMode": "all",
+          "exclude": []
+        }
+      },
+      "code": "invalid_processing"
+    },
+    {
+      "name": "absent_mode",
+      "input": {
+        "criteria": null
+      },
+      "code": "invalid_shape"
+    },
+    {
+      "name": "stale_split_criteria",
+      "input": {
+        "processing_mode": "split_all",
+        "criteria": {
+          "include": [
+            "fee"
+          ],
+          "includeMode": "all",
+          "exclude": []
+        }
+      },
+      "code": "invalid_processing"
+    },
+    {
+      "name": "unknown_mode",
+      "input": {
+        "processing_mode": "other",
+        "criteria": null
+      },
+      "code": "invalid_processing"
+    },
+    {
+      "name": "non_string_keyword",
+      "input": {
+        "processing_mode": "search",
+        "criteria": {
+          "include": [
+            "fee",
+            false
+          ],
+          "includeMode": "all",
+          "exclude": []
+        }
+      },
+      "code": "invalid_processing"
+    },
+    {
+      "name": "invalid_keyword_mode",
+      "input": {
+        "processing_mode": "search",
+        "criteria": {
+          "include": [
+            "fee"
+          ],
+          "includeMode": "other",
+          "exclude": []
+        }
+      },
+      "code": "invalid_processing"
+    },
+    {
+      "name": "raw_clause_budget",
+      "input": {
+        "processing_mode": "search",
+        "criteria": {
+          "include": [
+            "fee",
+            "fee",
+            "fee",
+            "fee",
+            "fee",
+            "fee",
+            "fee",
+            "fee",
+            "fee",
+            "fee",
+            "fee",
+            "fee",
+            "fee",
+            "fee",
+            "fee",
+            "fee",
+            "fee",
+            "fee",
+            "fee",
+            "fee",
+            "fee",
+            "fee",
+            "fee",
+            "fee",
+            "fee",
+            "fee",
+            "fee",
+            "fee",
+            "fee",
+            "fee",
+            "fee",
+            "fee",
+            "fee"
+          ],
+          "includeMode": "all",
+          "exclude": []
+        }
+      },
+      "code": "invalid_processing"
+    },
+    {
+      "name": "long_keyword",
+      "input": {
+        "processing_mode": "search",
+        "criteria": {
+          "include": [
+            "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+          ],
+          "includeMode": "all",
+          "exclude": []
+        }
+      },
+      "code": "invalid_processing"
+    },
+    {
+      "name": "lone_surrogate",
+      "input": {
+        "processing_mode": "search",
+        "criteria": {
+          "include": [
+            "\ud800"
+          ],
+          "includeMode": "all",
+          "exclude": []
+        }
+      },
+      "code": "invalid_processing"
+    }
+  ],
+  "capabilities_valid": [
+    {
+      "name": "all_modes",
+      "input": {
+        "contract_version": 1,
+        "processing_modes": [
+          "search",
+          "split_all"
+        ],
+        "layout_schema_versions": [
+          1
+        ]
+      }
+    },
+    {
+      "name": "search_only",
+      "input": {
+        "contract_version": 1,
+        "processing_modes": [
+          "search"
+        ],
+        "layout_schema_versions": [
+          1
+        ]
+      }
+    }
+  ],
+  "capabilities_invalid": [
+    {
+      "name": "old_endpoint",
+      "input": null,
+      "code": "invalid_shape"
+    },
+    {
+      "name": "future_contract",
+      "input": {
+        "contract_version": 2,
+        "processing_modes": [
+          "search"
+        ],
+        "layout_schema_versions": [
+          1
+        ]
+      },
+      "code": "unsupported_version"
+    },
+    {
+      "name": "boolean_contract",
+      "input": {
+        "contract_version": true,
+        "processing_modes": [
+          "search"
+        ],
+        "layout_schema_versions": [
+          1
+        ]
+      },
+      "code": "unsupported_version"
+    },
+    {
+      "name": "boolean_schema",
+      "input": {
+        "contract_version": 1,
+        "processing_modes": [
+          "search"
+        ],
+        "layout_schema_versions": [
+          true
+        ]
+      },
+      "code": "unsupported_capability"
+    },
+    {
+      "name": "unknown_mode",
+      "input": {
+        "contract_version": 1,
+        "processing_modes": [
+          "all"
+        ],
+        "layout_schema_versions": [
+          1
+        ]
+      },
+      "code": "unsupported_capability"
+    },
+    {
+      "name": "duplicate_mode",
+      "input": {
+        "contract_version": 1,
+        "processing_modes": [
+          "search",
+          "search"
+        ],
+        "layout_schema_versions": [
+          1
+        ]
+      },
+      "code": "unsupported_capability"
+    }
+  ]
+}

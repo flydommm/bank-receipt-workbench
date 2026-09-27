@@ -118,15 +118,17 @@ pub fn validate_request(request: &Value) -> Result<&str, String> {
                 "include_xlsx",
             ];
             let scope_object = scope.as_object().ok_or("导出请求无效")?;
-            if (scope_object.len() != base_fields.len()
-                && scope_object.len() != base_fields.len() + 1)
-                || base_fields.iter().any(|field| !scope_object.contains_key(*field))
-                || scope_object.keys().any(|field| field != "output_name" && !base_fields.contains(&field.as_str()))
+            if base_fields.iter().any(|field| !scope_object.contains_key(*field))
+                || scope_object.keys().any(|field| !matches!(field.as_str(), "output_name" | "include_manifest")
+                    && !base_fields.contains(&field.as_str()))
             {
                 return Err("导出请求字段无效".into());
             }
             if scope_object.contains_key("output_name") {
                 output_name(&scope["output_name"])?;
+            }
+            if scope_object.contains_key("include_manifest") && !scope["include_manifest"].is_boolean() {
+                return Err("导出清单选项无效".into());
             }
             text(&scope["job_id"], 1024)?;
             text(&scope["result_revision"], 1024)?;
@@ -164,7 +166,7 @@ pub fn validate_request(request: &Value) -> Result<&str, String> {
                 if !revisions.insert(text(&row["id"], 1024)?)
                     || row["record_revision"]
                         .as_u64()
-                        .is_none_or(|revision| revision == 0 || revision >= (1 << 53))
+                        .is_none_or(|revision| revision >= (1 << 53))
                 {
                     return Err("审核修订无效".into());
                 }
@@ -225,6 +227,7 @@ fn validate_rendered(created: &Value, rendered: &Value, root: &Path) -> Result<(
             "selected_segment_ids",
             "output_mode",
             "include_xlsx",
+            "include_manifest",
             "output_name",
             "source_fingerprint",
             "review_revision",
@@ -508,12 +511,36 @@ mod tests {
     }
 
     #[test]
-    fn rejects_forged_duplicate_or_unpersisted_scope_revisions() {
+    fn accepts_automatic_candidate_revision_zero() {
+        // The Python receipt scope validates zero against its authoritative
+        // analysis manifest; it is not a caller-supplied confirmed record.
+        let mut request = create();
+        request["scope"]["expected_records"][0]["record_revision"] = json!(0);
+        assert!(validate_request(&request).is_ok());
+    }
+
+    #[test]
+    fn accepts_only_boolean_optional_manifest_contract() {
+        for included in [true, false] {
+            let mut request = create();
+            request["scope"]["include_manifest"] = json!(included);
+            request["scope"]["output_name"] = json!("合成来源_回单分割");
+            assert!(validate_request(&request).is_ok());
+        }
+        for value in [json!(null), json!(0), json!("false"), json!([])] {
+            let mut request = create();
+            request["scope"]["include_manifest"] = value;
+            assert!(validate_request(&request).is_err());
+        }
+    }
+
+    #[test]
+    fn rejects_forged_duplicate_or_invalid_scope_revisions() {
         for change in 0..6 {
             let mut request = create();
             match change {
                 0 => request["scope"]["selected_segment_ids"] = json!(["one", "one"]),
-                1 => request["scope"]["expected_records"][0]["record_revision"] = json!(0),
+                1 => request["scope"]["expected_records"][0]["record_revision"] = json!(-1),
                 2 => request["scope"]["expected_records"][0]["record_revision"] = json!(1.5),
                 3 => request["scope"]["expected_records"][0]["id"] = json!("other"),
                 4 => request["scope"]["include_xlsx"] = json!("false"),
@@ -549,7 +576,18 @@ mod tests {
         data["files"][0]["size_bytes"] = json!(300);
         let response = json!({"status":"ok","data":data});
         assert!(validate_rendered(&created, &response, &root).is_ok());
-        for field in ["job_id", "scope_kind", "summary", "total_pages"] {
+        for included in [false, true] {
+            let mut declared = created.clone();
+            declared["include_manifest"] = json!(included);
+            let mut rendered = response.clone();
+            rendered["data"]["include_manifest"] = json!(included);
+            assert!(validate_rendered(&declared, &rendered, &root).is_ok());
+            rendered["data"]["include_manifest"] = json!(!included);
+            assert!(validate_rendered(&declared, &rendered, &root).is_err());
+            rendered["data"].as_object_mut().unwrap().remove("include_manifest");
+            assert!(validate_rendered(&declared, &rendered, &root).is_err());
+        }
+        for field in ["job_id", "scope_kind", "summary", "total_pages", "include_manifest"] {
             let mut changed = response.clone();
             changed["data"][field] = json!("changed");
             assert!(validate_rendered(&created, &changed, &root).is_err());

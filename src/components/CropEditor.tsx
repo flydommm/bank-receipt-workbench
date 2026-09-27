@@ -28,6 +28,8 @@ export type CropEditorProps = {
   value: PdfRect;
   matchRect: PdfRect;
   disabled?: boolean;
+  /** Whole-layout drafts may temporarily cross a page edge while other slots are placed. */
+  preserveDraftGeometry?: boolean;
   /** PDF y-coordinates to which north/south handles should snap. */
   snapPoints?: readonly number[];
   snapTolerance?: number;
@@ -196,6 +198,7 @@ export function CropEditor({
   value,
   matchRect,
   disabled = false,
+  preserveDraftGeometry = false,
   snapPoints = [],
   snapTolerance = 6,
   onChange,
@@ -204,7 +207,8 @@ export function CropEditor({
   const safePageWidth = isFinitePositive(pageWidth) ? pageWidth : 1;
   const safePageHeight = isFinitePositive(pageHeight) ? pageHeight : 1;
   const fallbackRect: PdfRect = { x0: 0, y0: 0, x1: safePageWidth, y1: safePageHeight };
-  const normalizedValue = safeCropRect(value, safePageWidth, safePageHeight, fallbackRect);
+  const normalizedValue = preserveDraftGeometry && isPdfRect(value) && value.x1 > value.x0 && value.y1 > value.y0
+    ? value : safeCropRect(value, safePageWidth, safePageHeight, fallbackRect);
   const highlightRect = safeMatchRect(matchRect, safePageWidth, safePageHeight);
 
   const pageRef = useRef<HTMLDivElement>(null);
@@ -301,6 +305,35 @@ export function CropEditor({
     onChange(rect);
   }
 
+  function moveRect(rect: PdfRect, delta: PdfPoint): PdfRect {
+    if (!preserveDraftGeometry) return movePdfRect(rect, delta, safePageWidth, safePageHeight);
+    const width = rect.x1 - rect.x0, height = rect.y1 - rect.y0;
+    const x0 = delta.x === 0 ? rect.x0 : Math.max(0, Math.min(Math.max(0, safePageWidth - width), rect.x0 + delta.x));
+    const y0 = delta.y === 0 ? rect.y0 : Math.max(0, Math.min(Math.max(0, safePageHeight - height), rect.y0 + delta.y));
+    return { x0, y0, x1: delta.x === 0 ? rect.x1 : x0 + width, y1: delta.y === 0 ? rect.y1 : y0 + height };
+  }
+
+  function resizeRect(rect: PdfRect, handle: ResizeHandle, point: PdfPoint): PdfRect {
+    if (!preserveDraftGeometry) {
+      return preservePageWidth(snapResizeRect(
+        resizePdfRect(rect, handle, point, safePageWidth, safePageHeight),
+        handle, snapPoints, snapTolerance, safePageWidth, safePageHeight,
+      ), rect, safePageWidth);
+    }
+    // Never normalize the whole draft: an unrelated edge may deliberately be
+    // outside the page until the user finishes positioning the other slots.
+    const next = { ...rect };
+    const x = Math.max(0, Math.min(safePageWidth, point.x));
+    const y = Math.max(0, Math.min(safePageHeight, snapCoordinate(point.y, snapPoints, snapTolerance)));
+    const minimumWidth = Math.min(MIN_CROP_SIZE, safePageWidth);
+    const minimumHeight = Math.min(MIN_CROP_SIZE, safePageHeight);
+    if (handle.includes('w')) next.x0 = Math.min(x, rect.x1 - minimumWidth);
+    else if (handle.includes('e')) next.x1 = Math.max(x, rect.x0 + minimumWidth);
+    if (handle.includes('n')) next.y0 = Math.min(y, rect.y1 - minimumHeight);
+    else if (handle.includes('s')) next.y1 = Math.max(y, rect.y0 + minimumHeight);
+    return next;
+  }
+
   function getPdfPoint(event: CropPointEvent): PdfPoint | null {
     const page = pageRef.current;
     if (!page || !Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) return null;
@@ -367,19 +400,13 @@ export function CropEditor({
     if (!point) return;
 
     const resizedRect = mode === 'move'
-      ? movePdfRect(startRect, { x: point.x - startPoint.x, y: point.y - startPoint.y }, safePageWidth, safePageHeight)
+      ? moveRect(startRect, { x: point.x - startPoint.x, y: point.y - startPoint.y })
       : mode === 'draw'
         ? drawRect(startPoint, point, safePageWidth, safePageHeight)
-        : resizePdfRect(startRect, mode, point, safePageWidth, safePageHeight);
-    const nextRect = mode === 'draw'
-      ? resizedRect
-      : preservePageWidth(
-        mode === 'move'
-          ? resizedRect
-          : snapResizeRect(resizedRect, mode, snapPoints, snapTolerance, safePageWidth, safePageHeight),
-        startRect,
-        safePageWidth,
-      );
+        : resizeRect(startRect, mode, point);
+    const nextRect = mode === 'move' && !preserveDraftGeometry
+      ? preservePageWidth(resizedRect, startRect, safePageWidth)
+      : resizedRect;
     emitChange(nextRect);
     event.preventDefault();
   }
@@ -440,11 +467,9 @@ export function CropEditor({
     if (!movement) return;
     event.preventDefault();
     const amount = event.shiftKey ? 5 : 1;
-    const nextRect = movePdfRect(
+    const nextRect = moveRect(
       currentRectRef.current,
       { x: movement.x * amount, y: movement.y * amount },
-      safePageWidth,
-      safePageHeight,
     );
     emitChange(nextRect);
     onCommit?.(nextRect);
@@ -469,18 +494,7 @@ export function CropEditor({
       x: handle.includes('w') ? current.x0 + deltaX : current.x1 + deltaX,
       y: handle.includes('n') ? current.y0 + deltaY : current.y1 + deltaY,
     };
-    const nextRect = preservePageWidth(
-      snapResizeRect(
-        resizePdfRect(current, handle, point, safePageWidth, safePageHeight),
-        handle,
-        snapPoints,
-        snapTolerance,
-        safePageWidth,
-        safePageHeight,
-      ),
-      current,
-      safePageWidth,
-    );
+    const nextRect = resizeRect(current, handle, point);
     emitChange(nextRect);
     onCommit?.(nextRect);
   }

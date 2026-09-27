@@ -1,0 +1,110 @@
+.receipt-layout-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  min-height: 0;
+  color: #183b45;
+  background: #fff;
+  font: inherit;
+  font-size: 13px;
+}
+.receipt-layout-editor__header {
+  display: flex;
+  flex: none;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+.receipt-layout-editor__header h2,
+.receipt-calibration-pane .receipt-layout-editor__header h2 {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.4;
+}
+.receipt-layout-editor__slots { display: flex; flex-wrap: wrap; gap: 4px; }
+.receipt-layout-editor__slots button,
+.receipt-calibration-pane .receipt-layout-editor__slots button {
+  position: relative;
+  min-height: 30px;
+  padding: 4px 12px;
+  border: 1px solid #d9e5e7;
+  border-radius: 6px;
+  background: #fff;
+  color: #315f66;
+  font: inherit;
+  line-height: 1.4;
+  cursor: pointer;
+}
+.receipt-layout-editor__slots button.is-selected { border-color: #338f83; background: #ecf8f4; }
+.receipt-layout-editor__slot-details,
+.receipt-layout-editor__rect {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.receipt-layout-editor__body { min-height: 0; overflow: auto; scrollbar-gutter: stable; }
+.receipt-layout-editor__controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-content: start;
+  gap: 8px 20px;
+}
+.receipt-layout-editor__controls > label:not(.receipt-layout-editor__checkbox) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  font-size: 13px;
+}
+.receipt-layout-editor input[type=number] {
+  width: min(124px, 100%);
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 5px 8px;
+  border: 1px solid #b8cfd2;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.4;
+}
+.receipt-layout-editor__checkbox { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+.receipt-layout-editor__checkbox input { flex: none; margin: 0; accent-color: #338f83; }
+.receipt-layout-editor__copy { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.receipt-layout-editor__copy button,
+.receipt-calibration-pane .receipt-layout-editor__copy button {
+  min-height: 28px;
+  padding: 4px 8px;
+  border: 1px solid #d5e1e9;
+  border-radius: 6px;
+  background: white;
+  color: #355c74;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.receipt-layout-editor__advanced,
+.receipt-calibration-pane .receipt-layout-editor__advanced { grid-column: 1 / -1; margin: 0; line-height: 1.5; }
+.receipt-layout-editor__advanced summary { color: #567985; cursor: pointer; font-size: 12px; }
+.receipt-layout-editor__summary,
+.receipt-calibration-pane p.receipt-layout-editor__summary { margin: 6px 0; color: #5d7b82; font-size: 12px; line-height: 1.5; }
+.receipt-layout-editor__advanced-fields { display: flex; flex-wrap: wrap; gap: 8px 20px; margin-top: 8px; }
+.receipt-layout-editor__advanced-fields label { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; }
+.receipt-layout-editor__error,
+.receipt-calibration-pane p.receipt-layout-editor__error { margin: 8px 0 0; border-radius: 6px; background: #fff1ef; color: #ad3f36; padding: 8px; font-size: 13px; line-height: 1.45; }
+.receipt-layout-editor__actions { display: flex; flex: none; justify-content: flex-end; flex-wrap: wrap; gap: 8px; border-top: 1px solid #e2eaf0; padding-top: 8px; margin-top: auto; }
+.receipt-layout-editor__actions button,
+.receipt-calibration-pane .receipt-layout-editor__actions button { min-height: 34px; padding: 6px 12px; border: 1px solid #d5e1e9; border-radius: 7px; font: inherit; font-size: 13px; cursor: pointer; }
+.receipt-layout-editor__actions .primary { background: #338f83; color: #fff; }
+.receipt-layout-editor__actions .secondary { background: #fff; color: #31565d; }
+.receipt-layout-editor button:disabled { cursor: default; opacity: .5; }
+.receipt-layout-editor button:focus-visible { outline: 2px solid #3f90d5; outline-offset: 2px; }
+@media (max-width: 700px) {
+  .receipt-layout-editor__controls { column-gap: 12px; }
+  .receipt-layout-editor__copy,
+  .receipt-layout-editor__controls > .receipt-layout-editor__checkbox { grid-column: 1 / -1; }
+}

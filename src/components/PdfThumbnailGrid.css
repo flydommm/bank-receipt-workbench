@@ -1,0 +1,123 @@
+.pdf-thumbnail-grid {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 180px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  overflow-anchor: none;
+  scrollbar-gutter: stable;
+  background: #e7edf2;
+  outline-offset: -3px;
+}
+.pdf-thumbnail-grid[hidden] { display: none; }
+.pdf-thumbnail-spacer { position: relative; width: 100%; }
+.pdf-thumbnail-window {
+  position: absolute;
+  top: 0;
+  right: 16px;
+  left: 16px;
+  display: grid;
+  grid-auto-rows: var(--thumbnail-row-height);
+  gap: 16px;
+  justify-content: center;
+}
+.pdf-thumbnail-card {
+  position: relative;
+  min-width: 0;
+  height: var(--thumbnail-row-height);
+  overflow: hidden;
+  border: 1px solid #d2dde6;
+  border-radius: 9px;
+  background: #fff;
+  box-shadow: 0 2px 5px rgb(29 56 78 / 5%);
+}
+.pdf-thumbnail-card.is-focused { border-color: #426d8f; box-shadow: 0 0 0 1px #426d8f; }
+.pdf-thumbnail-card.is-selected { border-color: #178880; box-shadow: 0 0 0 2px rgb(23 136 128 / 24%); }
+.pdf-thumbnail-open {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  flex-direction: column;
+  align-items: stretch;
+  border: 0;
+  border-radius: 8px;
+  padding: 0;
+  overflow: hidden;
+  background: transparent;
+  color: #243f57;
+  text-align: left;
+  cursor: pointer;
+}
+.pdf-thumbnail-open:hover { background: #f6fafb; }
+.pdf-thumbnail-open:focus-visible { outline: 3px solid #168980; outline-offset: -3px; }
+.pdf-thumbnail-open:disabled { cursor: not-allowed; }
+.pdf-thumbnail-image {
+  position: relative;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  padding: 10px;
+  overflow: hidden;
+  background: #dce4eb;
+  box-sizing: border-box;
+}
+.pdf-thumbnail-card.attention-suspected .pdf-thumbnail-image { background: #f9ecd6; }
+.pdf-thumbnail-card.attention-special .pdf-thumbnail-image { background: #e8e5f8; }
+.pdf-thumbnail-card.attention-suspected .pdf-thumbnail-image::after,
+.pdf-thumbnail-card.attention-special .pdf-thumbnail-image::after {
+  content: '';
+  position: absolute;
+  inset: 9px;
+  border: 2px solid;
+  pointer-events: none;
+}
+.pdf-thumbnail-card.attention-suspected .pdf-thumbnail-image::after { border-color: #c67c16; background: rgb(249 177 48 / 8%); }
+.pdf-thumbnail-card.attention-special .pdf-thumbnail-image::after { border-color: #7861a4; background: rgb(117 91 164 / 8%); }
+.pdf-thumbnail-card.tone-excluded .pdf-thumbnail-image { background: #f4e6d8; }
+.pdf-thumbnail-card.tone-excluded .pdf-thumbnail-image::after {
+  content: '';
+  position: absolute;
+  inset: 9px;
+  border: 2px dashed #ad713c;
+  background: rgb(190 112 52 / 10%);
+  pointer-events: none;
+}
+.pdf-thumbnail-image svg { display: block; width: 100%; height: 100%; overflow: hidden; }
+.pdf-thumbnail-placeholder { padding: 20px 8px; color: #6d8192; font-size: 11px; text-align: center; }
+.pdf-thumbnail-placeholder.has-error { color: #955645; }
+.pdf-thumbnail-meta { display: flex; min-width: 0; flex-direction: column; gap: 3px; padding: 10px 11px; font-size: 10px; line-height: 1.3; }
+.pdf-thumbnail-meta strong, .pdf-thumbnail-meta > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pdf-thumbnail-meta strong { color: #243f57; font-size: 12px; font-weight: 650; }
+.pdf-thumbnail-meta > span { color: #6c8294; }
+.pdf-thumbnail-select {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  display: grid;
+  place-items: center;
+  width: 29px;
+  height: 29px;
+  border: 1px solid #d3e0e7;
+  border-radius: 6px;
+  background: rgb(255 255 255 / 95%);
+  cursor: pointer;
+}
+.pdf-thumbnail-select input { width: 16px; height: 16px; margin: 0; accent-color: #168880; cursor: pointer; }
+.pdf-thumbnail-select:focus-within { outline: 2px solid #168880; outline-offset: 2px; }
+.pdf-thumbnail-badge { position: absolute; top: 10px; right: 9px; max-width: calc(100% - 56px); overflow: hidden; border: 1px solid #d5e1e8; border-radius: 5px; padding: 3px 6px; background: #f6fafc; color: #49697f; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; }
+.tone-confirmed .pdf-thumbnail-badge { border-color: #b9e0d6; background: #e8f6f0; color: #20786a; }
+.tone-excluded .pdf-thumbnail-badge { background: #eef0f2; color: #77848e; }
+.pdf-thumbnail-attention { position: absolute; right: 9px; bottom: 74px; max-width: calc(100% - 18px); overflow: hidden; border: 1px solid; border-radius: 5px; padding: 3px 6px; background: #fff; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; }
+.pdf-thumbnail-attention.attention-suspected { color: #8a560f; border-color: #dfa343; background: #fff5e4; }
+.pdf-thumbnail-attention.attention-special { color: #624986; border-color: #b8a6d5; background: #f5f0ff; }
+.pdf-thumbnail-overlay { fill: rgb(219 154 33 / 10%); stroke: #c48920; stroke-width: 1.5px; }
+.pdf-thumbnail-overlay.tone-confirmed { fill: rgb(25 152 129 / 10%); stroke: #159580; }
+.pdf-thumbnail-overlay.tone-excluded { fill: rgb(190 112 52 / 14%); stroke: #ad713c; stroke-dasharray: 4 3; }
+.pdf-thumbnail-overlay.attention-suspected { fill: rgb(249 177 48 / 16%); stroke: #c67c16; stroke-width: 2px; }
+.pdf-thumbnail-overlay.attention-special { fill: rgb(117 91 164 / 14%); stroke: #7861a4; stroke-width: 2px; }
+.pdf-thumbnail-retry { position: absolute; top: 42px; right: 8px; border: 1px solid #c7d7e1; border-radius: 5px; padding: 4px 8px; background: #fff; color: #385f7b; font-size: 11px; cursor: pointer; }
+.pdf-thumbnail-empty { margin: 0; padding: 60px 20px; color: #6f8494; font-size: 12px; text-align: center; }
+@media (prefers-reduced-motion: reduce) { .pdf-thumbnail-grid { scroll-behavior: auto; } }
