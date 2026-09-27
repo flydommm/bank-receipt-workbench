@@ -2618,7 +2618,13 @@ mod tests {
             std::fs::write(&python, b"synthetic runtime executable").unwrap();
             let canonical = python.canonicalize().unwrap();
             let launch = super::engine_launch_program(&canonical).unwrap();
-            assert_eq!(launch, python);
+            assert!(
+                !launch
+                    .as_os_str()
+                    .to_string_lossy()
+                    .starts_with("\\\\?\\"),
+                "launch path must use a normal disk path: {launch:?}"
+            );
             assert_eq!(launch.canonicalize().unwrap(), canonical);
             if length > 0 {
                 assert!(launch.as_os_str().encode_wide().count() > 260);
@@ -2645,6 +2651,7 @@ mod tests {
         std::fs::create_dir_all(&runtime_dir).unwrap();
         let python = runtime_dir.join(ENGINE_PYTHON_EXECUTABLE_FILE_NAME);
         std::fs::write(&python, b"synthetic runtime executable").unwrap();
+        let canonical_python = python.canonicalize().unwrap();
         let runtime = super::EngineRuntime {
             python_executable: resolve_bundled_engine_python(&root).unwrap(),
             script_path: root.canonicalize().unwrap().join("engine").join("engine.py"),
@@ -2653,7 +2660,20 @@ mod tests {
             read_service: Default::default(),
         };
         let spec = super::engine_process_spec(&runtime, vec!["--serve".into()], true).unwrap();
-        assert_eq!(spec.program, python);
+        assert_eq!(
+            runtime.python_executable.canonicalize().unwrap(),
+            canonical_python
+        );
+        assert!(
+            !spec
+                .program
+                .as_os_str()
+                .to_string_lossy()
+                .starts_with("\\\\?\\"),
+            "engine process must use a normal disk path: {:?}",
+            spec.program
+        );
+        assert_eq!(spec.program.canonicalize().unwrap(), runtime.python_executable);
         assert!(spec.args.contains(&runtime.script_path.as_os_str().to_owned()));
         assert!(spec.env.contains(&(
             super::ENGINE_PRIVATE_TEMP_ENV.into(),
