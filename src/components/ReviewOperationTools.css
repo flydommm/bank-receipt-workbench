@@ -94,6 +94,66 @@
   white-space: nowrap;
 }
 
+.review-operation-tools-more-toggle {
+  flex: 0 0 auto;
+  min-width: 7rem;
+  border: 1px solid var(--review-operation-line);
+  border-radius: 7px;
+  padding: 7px 10px;
+  background: var(--review-operation-wash);
+  color: var(--review-operation-muted);
+  font: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.35;
+  cursor: pointer;
+  transition: border-color .16s ease, background-color .16s ease, color .16s ease;
+}
+
+.review-operation-tools-more-toggle:hover,
+.review-operation-tools-more-toggle:focus-visible {
+  border-color: #b9d3cd;
+  background: #eef8f4;
+  color: var(--review-operation-moss-dark);
+}
+
+.review-operation-tools-more-toggle:focus-visible {
+  outline: 2px solid rgba(63, 139, 123, .35);
+  outline-offset: 1px;
+}
+
+.review-operation-tools-more {
+  display: grid;
+  gap: 7px;
+  padding: 8px 9px;
+  border: 1px solid var(--review-operation-line);
+  border-radius: 8px;
+  background: var(--review-operation-wash);
+}
+
+.review-operation-tools-more-hint,
+.review-operation-tools-batch-hint {
+  margin: 0;
+  color: var(--review-operation-muted);
+  font-size: 10px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.review-operation-tools-more .review-operation-tools-action-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.review-operation-tools-more .review-operation-tools-button {
+  flex: 0 1 auto;
+}
+
+.review-operation-tools-batch-hint {
+  flex: 1 1 100%;
+}
+
 .review-operation-tools-button,
 .review-operation-tools-inline-button {
   min-width: 0;
@@ -228,6 +288,23 @@
   white-space: nowrap;
   border: 0;
 }
+
+.review-operation-tools-sync {
+  padding: 7px 9px;
+  border: 1px solid var(--review-operation-line);
+  border-radius: 7px;
+  background: var(--review-operation-wash);
+}
+
+.review-operation-tools-sync label {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  font-weight: 700;
+}
+
+.review-operation-tools-sync input { accent-color: var(--review-operation-moss); }
+.review-operation-tools-sync p { margin: 5px 0 0; color: var(--review-operation-muted); }
 
 @media (max-width: 520px) {
   .review-operation-tools {

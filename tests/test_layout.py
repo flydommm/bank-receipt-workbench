@@ -38,6 +38,78 @@ def _page() -> ParsedPage:
     )
 
 
+def _print_count_page(style: str = "split", *, marker_offset: float = -20) -> ParsedPage:
+    blocks: list[TextBlock] = []
+
+    def add(text: str, x0: float, y0: float, x1: float, y1: float) -> None:
+        blocks.append(TextBlock(1, text, x0, y0, x1, y1, len(blocks)))
+
+    for start in (60.0, 360.0, 660.0):
+        if style == "merged":
+            add("打印次数：0\n上海银行业务回单", 100, start - 20, 530, start + 15)
+        else:
+            if style == "inline":
+                add("打印次数：0", 430, start + marker_offset, 502, start + marker_offset + 11)
+            else:
+                add("打印次数：", 430, start + marker_offset, 488, start + marker_offset + 11)
+                add("0", 496, start + marker_offset, 502, start + marker_offset + 11)
+                if style == "ambiguous":
+                    add("1", 492, start + marker_offset, 494, start + marker_offset + 11)
+            add("上海银行业务回单", 100, start, 260, start + 15)
+        for index in range(10):
+            add("普通字段", 30, start + 30 + index * 18, 500, start + 40 + index * 18)
+    return ParsedPage(1, 600, 950, "\n".join(block.text for block in blocks), tuple(blocks))
+
+
+@pytest.mark.parametrize("style", ["inline", "split", "merged"])
+def test_automatic_receipts_keep_own_print_count_and_exclude_next(style: str) -> None:
+    page = _print_count_page(style)
+    original_blocks = page.blocks
+    candidates = infer_receipt_candidates(
+        page,
+        separators=[HorizontalSeparator(start + 220, 20, 580) for start in (60, 360, 660)],
+    )
+
+    assert len(candidates) == 3
+    for index, (candidate, start) in enumerate(zip(candidates, (60, 360, 660), strict=True)):
+        assert candidate.rect.y0 <= start - 20
+        assert candidate.rect.y1 >= start + 220
+        if index < 2:
+            assert candidate.rect.y1 < start + 280
+        for row in (30, 84, 192):
+            assert select_candidate_for_match(candidates, Rect(30, start + row, 500, start + row + 10)) is candidate
+    assert page.blocks is original_blocks
+
+
+@pytest.mark.parametrize("style", ["inline", "split"])
+def test_automatic_receipt_keeps_print_count_footer_far_from_next_title(style: str) -> None:
+    candidates = infer_receipt_candidates(_print_count_page(style, marker_offset=225))
+
+    for candidate, start in zip(candidates, (60, 360, 660), strict=True):
+        assert candidate.rect.y0 == start - 8
+        assert candidate.rect.y1 >= start + 236
+
+
+def test_automatic_receipt_does_not_assign_ambiguous_print_count_pair() -> None:
+    candidates = infer_receipt_candidates(_print_count_page("ambiguous"))
+
+    # Two possible values do not establish a heading prefix. The text stays
+    # in its ordinary stream instead of being silently moved to another copy.
+    assert candidates[0].rect.y0 == 52
+    assert candidates[0].rect.y1 >= 351
+
+
+def test_automatic_print_count_budget_fails_closed(monkeypatch) -> None:
+    monkeypatch.setattr(layout_module, "MAX_PRINT_COUNT_PAIR_COMPARISONS", 2)
+
+    candidates = infer_receipt_candidates(_print_count_page())
+
+    assert len(candidates) == 1
+    assert candidates[0].rect == Rect(0, 0, 600, 950)
+    assert candidates[0].confidence < 0.9
+    assert "layout_budget_exceeded" in candidates[0].evidence
+
+
 def test_infer_candidates_splits_large_vertical_gap() -> None:
     candidates = infer_candidates(_page())
     assert len(candidates) == 2
@@ -1045,6 +1117,43 @@ def test_receipt_titles_normalize_spaces_between_cjk_characters() -> None:
     assert [candidate.slot for candidate in candidates] == ["top", "middle", "bottom"]
 
 
+@pytest.mark.parametrize("title", [
+    "客户回单    大额支付系统业务",
+    "客 户 回 单 大 额 支 付 系 统 业 务",
+    "客户回单大额支付系统业务（补打）",
+])
+def test_payment_system_title_keeps_mixed_three_receipts_separate(title: str) -> None:
+    blocks = []
+    frames = []
+    for index, heading in enumerate(("客户回单小额支付系统业务", title, "客户回单通用回单")):
+        top = 20 + 260 * index
+        blocks.extend((
+            TextBlock(1, heading, 180, top + 20, 460, top + 38, index * 2),
+            TextBlock(1, "用途：往来", 45, top + 70, 260, top + 90, index * 2 + 1),
+        ))
+        frames.append(VisualAnchor("frame", 30, top, 570, top + 240))
+    page = ParsedPage(1, 600, 800, "\n".join(block.text for block in blocks), tuple(blocks))
+
+    candidates = infer_receipt_candidates(page, visual_anchors=frames)
+
+    assert len(candidates) == 3
+    assert [candidate.slot for candidate in candidates] == ["top", "middle", "bottom"]
+    assert all("frame" in candidate.evidence for candidate in candidates)
+    assert all(left.rect.y1 < right.rect.y0 for left, right in zip(candidates, candidates[1:]))
+    for candidate, frame in zip(candidates, frames):
+        assert candidate.rect.y0 <= frame.y0 < frame.y1 <= candidate.rect.y1
+
+
+@pytest.mark.parametrize("text", [
+    "大额支付系统业务",
+    "业务种类：大额支付系统业务",
+    "摘要：客户回单大额支付系统业务",
+    "本凭证为客户回单大额支付系统业务",
+])
+def test_payment_system_body_text_is_not_receipt_title(text: str) -> None:
+    assert not layout_module._is_receipt_title(text)
+
+
 def test_receipt_title_recognizes_bank_credit_notice_without_matching_field_text() -> None:
     blocks = (
         TextBlock(1, "中国 光 大 银 行 贷 记 通 知", 40, 20, 260, 38, 0),
@@ -1444,3 +1553,52 @@ def test_receipt_candidate_clamps_page_edges_and_contains_text_extent() -> None:
         and candidate.rect.y0 <= block.y0 <= block.y1 <= candidate.rect.y1
         for block in blocks
     )
+
+
+def _standalone_issuer_page(starts=(65.0, 365.0, 665.0)) -> ParsedPage:
+    blocks = []
+    for start in starts:
+        for text, x, y in (
+            ("中国民生银行", 30, start - 22),
+            ("支付业务回单（付款）", 190, start),
+            ("付款人名称：合成甲公司", 30, start + 40),
+            ("付款人开户行：中国建设银行", 30, start + 70),
+            ("金额（小写）：123.00", 30, start + 110),
+        ):
+            blocks.append(TextBlock(1, text, x, y, x + 150, y + 12, len(blocks)))
+    return ParsedPage(1, 600, 900, "\n".join(block.text for block in blocks), tuple(blocks))
+
+
+def test_standalone_issuer_belongs_to_following_receipt_and_tail_size_matches():
+    page = _standalone_issuer_page()
+    candidates = infer_receipt_candidates(page)
+    tail = infer_receipt_candidates(_standalone_issuer_page((65.0,)))[0]
+    assert len(candidates) == 3
+    assert len({candidate.rect.y1 - candidate.rect.y0 for candidate in candidates}) == 1
+    assert candidates[0].rect == tail.rect
+    for index, candidate in enumerate(candidates):
+        own_header = page.blocks[index * 5]
+        assert candidate.rect.y0 <= own_header.y0 < own_header.y1 <= candidate.rect.y1
+        if index < 2:
+            assert candidate.rect.y1 < page.blocks[(index + 1) * 5].y0
+
+
+def test_closed_frames_use_issuer_boundaries_without_next_receipt_header():
+    page = _standalone_issuer_page()
+    frames = tuple(VisualAnchor("frame", 10, start - 30, 590, start + 160) for start in (65, 365, 665))
+    candidates = infer_receipt_candidates(page, visual_anchors=frames)
+    assert all("frame" in candidate.evidence for candidate in candidates)
+    assert len({candidate.rect.y1 - candidate.rect.y0 for candidate in candidates}) == 1
+    assert all(candidate.rect.y0 <= page.blocks[index * 5].y0 for index, candidate in enumerate(candidates))
+
+
+def test_split_account_bank_value_before_next_title_stays_with_previous_receipt():
+    from dataclasses import replace
+    page = _standalone_issuer_page((65.0, 365.0))
+    blocks = tuple(block for index, block in enumerate(page.blocks) if index != 5) + (
+        TextBlock(1, "付款人开户行：", 20, 323, 100, 335, 100),
+        TextBlock(1, "中国建设银行", 120, 323, 250, 335, 101),
+    )
+    candidates = infer_receipt_candidates(replace(page, blocks=blocks))
+    assert candidates[0].rect.y1 >= 335
+    assert candidates[1].rect.y0 > 335

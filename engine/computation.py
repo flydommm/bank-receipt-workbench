@@ -20,6 +20,10 @@ from .ocr import OCR_RUNTIME_PROFILE
 
 RESULT_SCHEMA_VERSION = "analysis-result-v3-page-checkpoints"
 FRONTEND_ASSEMBLY_VERSION = "review-context-v2"
+# The desktop launcher affects OCR availability even when Python sources and
+# dependencies are unchanged. Invalidate results produced with a verbatim
+# Windows executable path, which prevented Paddle's native libraries loading.
+HOST_RUNTIME_VERSION = "bundled-python-launch-v2"
 
 # Keep this set explicit.  A future result-producing module must be added here
 # intentionally so changing it invalidates persisted analysis/review context.
@@ -28,6 +32,33 @@ COMPUTATION_SOURCE_FILES: tuple[str, ...] = (
     "engine/pdf_parser.py",
     "engine/search.py",
     "engine/layout.py",
+    "engine/receipt_layout_models.py",
+    "engine/pdf_geometry.py",
+    "engine/receipt_layout.py",
+    "engine/receipt_layout_calibration.py",
+    "engine/receipt_layout_review.py",
+    "engine/receipt_calibration_journal.py",
+    "engine/receipt_layout_reference.py",
+    "engine/receipt_layout_reuse.py",
+    "engine/receipt_layout_history.py",
+    "engine/receipt_selection.py",
+    "engine/receipt_checkpoint.py",
+    "engine/receipt_snapshot.py",
+    "engine/receipt_review_models.py",
+    "engine/receipt_review_store.py",
+    "engine/receipt_review_read.py",
+    "engine/validated_read_cache.py",
+    "engine/review_store_v2.py",
+    "engine/batch_review.py",
+    "engine/source_layout.py",
+    "engine/receipt_issuer.py",
+    "engine/receipt_headers.py",
+    "engine/receipt_image_issuer.py",
+    "engine/receipt_document_types.py",
+    "engine/receipt_classification.py",
+    "engine/receipt_visual_identity.py",
+    "engine/crop_templates.py",
+    "engine/layout_template_store.py",
     "engine/ocr.py",
     "engine/ocr_cache.py",
     "engine/ocr_pdf.py",
@@ -35,6 +66,8 @@ COMPUTATION_SOURCE_FILES: tuple[str, ...] = (
     "engine/config.py",
     "engine/computation.py",
     "engine/batch_models.py",
+    "engine/batch_store.py",
+    "engine/batch_schema.py",
     "engine/batch_pdf.py",
     "engine/batch_processor.py",
     "engine/batch_results.py",
@@ -130,6 +163,7 @@ def _summary(config: EngineConfig) -> dict[str, object]:
     return {
         "result_schema_version": RESULT_SCHEMA_VERSION,
         "frontend_assembly_version": FRONTEND_ASSEMBLY_VERSION,
+        "host_runtime_version": HOST_RUNTIME_VERSION,
         # The explicit constant defines the ordered set; this single mapping
         # carries the content digest for every result-producing module.
         "engine_modules": engine_modules,

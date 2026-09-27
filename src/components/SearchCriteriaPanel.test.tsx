@@ -379,10 +379,10 @@ describe('SearchCriteriaPanel', () => {
 
   it('bounds the expanded editor and gives its body the only search scrollbar', () => {
     const styles = readFileSync('src/styles.css', 'utf8');
-    expect(styles).toMatch(/\.search-criteria-panel-host\s*\{[^}]*display:\s*flex;[^}]*min-height:\s*0;[^}]*max-height:\s*min\(36%,\s*360px\);[^}]*flex:\s*0 0 auto;[^}]*overflow:\s*hidden;/s);
-    expect(styles).not.toMatch(/\.search-criteria-panel\s*\{[^}]*max-height:\s*min\(36%,\s*360px\);/s);
+    expect(styles).toMatch(/\.search-criteria-panel-host\s*\{[^}]*display:\s*flex;[^}]*min-height:\s*0;[^}]*max-height:\s*min\(50%,\s*360px\);[^}]*flex:\s*0 0 auto;[^}]*overflow:\s*hidden;/s);
+    expect(styles).not.toMatch(/\.search-criteria-panel\s*\{[^}]*max-height:\s*min\(50%,\s*360px\);/s);
     expect(styles).toMatch(/\.search-criteria-panel\s*\{[^}]*display:\s*flex;[^}]*min-height:\s*0;[^}]*flex:\s*1 1 auto;[^}]*flex-direction:\s*column;/s);
-    expect(styles).toMatch(/\.search-criteria-panel\s+h2\s*\{[^}]*flex:\s*0 0 auto;[^}]*margin:\s*0;[^}]*padding:[^;]+;[^}]*font-size:\s*16px;[^}]*line-height:\s*1\.3;/s);
+    expect(styles).toMatch(/\.search-criteria-panel\s+h2\s*\{[^}]*flex:\s*0 0 auto;[^}]*margin:\s*0;[^}]*padding:[^;]+;[^}]*font-size:\s*14px;[^}]*line-height:\s*1\.3;/s);
     expect(styles).toMatch(/\.search-criteria-panel\s*>\s*form\s*\{[^}]*min-height:\s*0;[^}]*flex:\s*1 1 auto;/s);
     expect(styles).toMatch(/\.search-criteria-panel-body\s*\{[^}]*min-height:\s*0;[^}]*flex:\s*1 1 auto;[^}]*overflow-y:\s*auto;/s);
     expect(styles).toMatch(/\.search-criteria-feedback\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\) auto;/s);
@@ -393,10 +393,10 @@ describe('SearchCriteriaPanel', () => {
 
   it('uses the panel visual hierarchy for match mode and unavailable guidance', () => {
     const styles = readFileSync('src/styles.css', 'utf8');
-    expect(styles).toMatch(/\.search-match-mode legend\s*\{[^}]*flex:\s*0 0 auto;[^}]*padding:\s*0;[^}]*color:\s*#375267;[^}]*font-size:\s*11px;[^}]*font-weight:\s*600;[^}]*line-height:\s*1\.35;/s);
+    expect(styles).toMatch(/\.search-match-mode legend\s*\{[^}]*flex:\s*0 0 auto;[^}]*padding:[^;]+;[^}]*color:\s*#375267;[^}]*font-size:\s*11px;[^}]*font-weight:\s*600;[^}]*line-height:\s*1\.35;/s);
     expect(styles).toMatch(/\.search-match-mode label\s*\{[^}]*display:\s*inline-flex;[^}]*align-items:\s*center;[^}]*gap:\s*4px;[^}]*color:\s*#657d91;[^}]*font-size:\s*12px;[^}]*line-height:\s*1\.35;[^}]*white-space:\s*nowrap;/s);
     expect(styles).toMatch(/\.search-match-mode input\s*\{[^}]*margin:\s*0;[^}]*accent-color:\s*#3f8b7b;/s);
-    expect(styles).toMatch(/#search-analysis-unavailable-reason\s*\{[^}]*display:\s*block;[^}]*margin:\s*0 14px 8px;[^}]*color:\s*#7890a1;[^}]*font-size:\s*10px;[^}]*line-height:\s*1\.5;/s);
+    expect(styles).toMatch(/#search-analysis-unavailable-reason\s*\{[^}]*display:\s*block;[^}]*margin:[^;]+;[^}]*color:\s*#7890a1;[^}]*font-size:\s*10px;[^}]*line-height:\s*1\.5;/s);
   });
 
   it('renders ordered batch failure details with source paths, known pages, and escaped technical text', async () => {

@@ -25,6 +25,7 @@ from .batch_models import (
     canonical_json,
 )
 from .batch_store import BatchStore
+from .receipt_review_models import ReceiptReviewError, validate_receipt_context
 from .review_store_v2 import (
     ReviewStoreError,
     ReviewStoreV2,
@@ -154,11 +155,23 @@ def _digest(value: object) -> str:
 
 def _context_key(value: object) -> str:
     try:
-        _descriptor, _sha_by_key, context_key = _validate_review_context(
-            value,
-            trusted_aliases=True,
-        )
-    except ReviewStoreError as exc:
+        if isinstance(value, dict) and type(value.get("version")) is int and value["version"] == 3:
+            # Receipt snapshots use the source SHA/path binding defined by
+            # the schema-3 codec.  Cleanup runs after the batch store has
+            # verified those paths, so aliases are accepted while the stable
+            # context identity still excludes access-path spelling.
+            _descriptor, _sha_by_key, context_key = validate_receipt_context(
+                value,
+                trusted_aliases=True,
+            )
+        else:
+            # Preserve the legacy context validator and its existing alias
+            # behavior for schema-2 jobs.
+            _descriptor, _sha_by_key, context_key = _validate_review_context(
+                value,
+                trusted_aliases=True,
+            )
+    except (ReceiptReviewError, ReviewStoreError) as exc:
         raise BatchCleanupError(f"snapshot review context is invalid: {exc}") from None
     return context_key
 

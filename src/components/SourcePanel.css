@@ -1,0 +1,83 @@
+.source-panel .source-panel-header {
+  align-items: flex-start;
+  gap: 8px;
+  border-bottom: 1px solid #e8eff3;
+  padding: 13px 16px;
+}
+
+.source-panel .source-panel-header h2 {
+  flex: 0 0 auto;
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.source-panel-header-meta {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+}
+
+.source-panel .source-panel-task-actions {
+  flex: 0 0 auto;
+}
+
+.source-panel .source-panel-task-actions .text-button {
+  color: #688092;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.source-panel .source-panel-file-actions {
+  margin: 0;
+  border-bottom: 1px solid #e8eff3;
+  padding: 12px 0 10px;
+}
+
+.source-panel-file-count {
+  color: #71899a;
+  font-size: 11px;
+  line-height: 1.3;
+  text-align: right;
+}
+
+.source-panel .source-panel-actions {
+  padding-bottom: 0;
+}
+
+.source-panel .source-panel-actions .ghost-button {
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.source-panel .source-panel-remove {
+  grid-column: auto;
+  padding: 3px 0;
+  font-size: 11px;
+}
+
+.source-panel .source-list-scroll {
+  padding-top: 10px;
+}
+
+.source-panel .source-row:focus-visible {
+  outline: 2px solid #2f8f83;
+  outline-offset: -2px;
+}
+
+.source-panel .source-row-name {
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.source-panel .source-row-status,
+.source-panel .source-row-analysis,
+.source-panel .source-row-remove,
+.source-panel .source-panel-footer,
+.source-panel .source-panel-notice {
+  font-size: 11px;
+}

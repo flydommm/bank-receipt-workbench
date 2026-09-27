@@ -371,7 +371,10 @@ export function BatchCropDialog({
                     <span>第 {activeItem.before.sourcePage} 页 · 片段 {activeItem.before.segmentNo}</span>
                   </>
                 ) : (
-                  <strong>没有可应用的同类片段。</strong>
+                  <div className="batch-crop-dialog-no-target" role="status">
+                    <strong>当前没有可应用的同类片段。</strong>
+                    <span>已同步、已确认或独立调整的片段会自动跳过，无需重复应用。</span>
+                  </div>
                 )}
               </div>
               <label className="batch-crop-dialog-item-select-label">
@@ -488,7 +491,7 @@ export function BatchCropDialog({
               if (canApply) callbacksRef.current.onApply();
             }}
           >
-            应用到 {applicable.length} 个片段
+            {applicable.length > 0 ? `应用到 ${applicable.length} 个片段` : '无需应用'}
           </button>
         </footer>
       </div>

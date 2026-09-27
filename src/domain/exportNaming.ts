@@ -69,3 +69,18 @@ export function defaultExportName(includeKeywords: readonly string[]): string {
   const prefix = limitUtf16(safe, MAX_EXPORT_NAME_LENGTH - utf16Length(suffix));
   return `${prefix || '导出'}${suffix}`;
 }
+
+/** Suggest a name from the committed sources and analysis mode, never PDF text. */
+export function defaultReceiptExportName(sourceNames: readonly string[], processingMode: 'search' | 'split_all', includeKeywords: readonly string[]): string {
+  const source = sourceNames.length === 1
+    ? normalizeExportName(sourceNames[0]!.split(/[\\/]/u).pop() ?? '')
+    : sourceNames.length > 1 ? `多来源_${sourceNames.length}份` : '回单';
+  const safeSource = source.replace(WINDOWS_ILLEGAL_GLOBAL, '_').replace(/[ .]+$/gu, '') || '回单';
+  const keywords = includeKeywords.map((value) => value.trim().normalize('NFC')).filter(Boolean)
+    .join('_').replace(WINDOWS_ILLEGAL_GLOBAL, '_');
+  const suffix = processingMode === 'split_all' ? '_全部回单'
+    : `${keywords ? `_${limitUtf16(keywords, 40).replace(/[ .]+$/gu, '')}` : ''}_查找结果`;
+  const prefix = limitUtf16(safeSource, MAX_EXPORT_NAME_LENGTH - suffix.length);
+  const name = `${prefix}${suffix}`;
+  return RESERVED_DEVICE_NAME.test(name) ? `回单${suffix}` : name;
+}

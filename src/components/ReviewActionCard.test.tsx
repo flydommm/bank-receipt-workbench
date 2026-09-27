@@ -66,6 +66,7 @@ describe('ReviewActionCard', () => {
     const onRestoreLegacySuggestion = vi.fn();
     const props = reviewProps({ hasLegacySuggestion: true, onRestoreLegacySuggestion });
     const view = render(<ReviewActionCard {...props} fragmentActionsEnabled={false} />);
+    await user.click(screen.getByRole('button', { name: '更多操作' }));
     const restore = screen.getByRole('button', { name: '恢复历史裁剪建议' });
     expect((restore as HTMLButtonElement).disabled).toBe(true);
     await user.click(restore);
@@ -78,14 +79,41 @@ describe('ReviewActionCard', () => {
     expect((screen.getByRole('button', { name: '恢复历史裁剪建议' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it('shows only review actions before group confirmation', () => {
+  it('shows only common review actions before group confirmation', () => {
     render(<ReviewActionCard {...reviewProps({ groupConfirmed: false })} />);
     const card = screen.getByRole('region', { name: '当前审核操作' });
     expect(card.getAttribute('data-phase')).toBe('review');
-    expect(screen.getByRole('button', { name: '保留整页' })).toBeTruthy();
     expect(screen.getByRole('button', { name: '确认当前片段' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: '确认整组' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '保留整页' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '确认整组' })).toBeNull();
+    expect(screen.getByRole('button', { name: '更多操作' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: /生成 PDF 导出预览/ })).toBeNull();
+  });
+
+  it('shows optional fragment guidance near the current status and hides it during a crop draft', () => {
+    const guidance = '当前保留整页且需复核；请在更多审核工具中选择按单张候选分割。';
+    const { rerender } = render(<ReviewActionCard {...reviewProps({ fragmentGuidance: guidance })} />);
+
+    expect(screen.getByText(guidance)).toBeTruthy();
+    expect(screen.getByText(guidance).className).toContain('review-action-card-fragment-guidance');
+
+    rerender(<ReviewActionCard
+      {...reviewProps({
+        groupConfirmed: true,
+        fragmentGuidance: guidance,
+        cropDraft: { syncEnabled: false, disabled: false, onSave: vi.fn(), onCancel: vi.fn() },
+      })}
+    />);
+    expect(screen.queryByText(guidance)).toBeNull();
+  });
+
+  it('reveals secondary review operations only after opening more actions', async () => {
+    const user = userEvent.setup();
+    render(<ReviewActionCard {...reviewProps({ groupConfirmed: false })} />);
+    await user.click(screen.getByRole('button', { name: '更多操作' }));
+    expect(screen.getByRole('button', { name: '保留整页' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '确认整组' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '收起更多操作' })).toBeTruthy();
   });
 
   it('replaces review actions with preview generation after confirmation', () => {
@@ -93,6 +121,62 @@ describe('ReviewActionCard', () => {
     expect(screen.getByText('已确认 28 / 28')).toBeTruthy();
     expect(screen.queryByRole('button', { name: '确认整组' })).toBeNull();
     expect(screen.getByRole('button', { name: /生成 PDF 导出预览/ })).toBeTruthy();
+  });
+
+  it('prioritizes the unsaved crop draft and waits for explicit completion', async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    const onCancel = vi.fn();
+    const onOpenHelp = vi.fn();
+    const props = reviewProps({
+      groupConfirmed: true,
+      cropDraft: { syncEnabled: true, disabled: false, onSave, onCancel },
+      onOpenHelp,
+    });
+
+    const view = render(<ReviewActionCard {...props} />);
+    const card = screen.getByRole('region', { name: '当前审核操作' });
+    expect(card.getAttribute('data-phase')).toBe('draft');
+    expect(screen.getByText('微调尚未保存，可继续拖动边框')).toBeTruthy();
+    expect(screen.getByText('点击“完成微调”后才会检查版式；同步完成后无需再次点击应用。')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '完成微调并同步' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '取消微调' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '查看微调说明' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '确认整组' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '选择导出范围' })).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: '完成微调并同步' }));
+    await user.click(screen.getByRole('button', { name: '取消微调' }));
+    await user.click(screen.getByRole('button', { name: '查看微调说明' }));
+    expect(onSave).toHaveBeenCalledOnce();
+    expect(onCancel).toHaveBeenCalledOnce();
+    expect(onOpenHelp).toHaveBeenCalledOnce();
+
+    view.rerender(<ReviewActionCard {...props} cropDraft={{ ...props.cropDraft!, disabled: true }} />);
+    expect((screen.getByRole('button', { name: '完成微调并同步' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: '取消微调' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('does not steal focus from the crop editor when a draft begins', () => {
+    const cropHandle = document.createElement('button');
+    cropHandle.type = 'button';
+    cropHandle.setAttribute('aria-label', '裁剪边框');
+    document.body.appendChild(cropHandle);
+
+    try {
+      const { rerender } = render(<ReviewActionCard {...reviewProps()} />);
+      cropHandle.focus();
+      expect(document.activeElement).toBe(cropHandle);
+
+      rerender(<ReviewActionCard
+        {...reviewProps({
+          cropDraft: { syncEnabled: false, disabled: false, onSave: vi.fn(), onCancel: vi.fn() },
+        })}
+      />);
+      expect(document.activeElement).toBe(cropHandle);
+    } finally {
+      cropHandle.remove();
+    }
   });
 
   it('shows only final-preview export actions and keeps XLSX opt-in unchecked', () => {
@@ -105,14 +189,18 @@ describe('ReviewActionCard', () => {
     expect(screen.queryByRole('button', { name: /生成 PDF 导出预览/ })).toBeNull();
   });
 
-  it('describes a frozen review and disables every mutation action', () => {
+  it('describes a frozen review and disables every mutation action', async () => {
+    const user = userEvent.setup();
     render(<ReviewActionCard {...reviewProps({ reviewFrozenReason: '修改完成前暂停审核' })} />);
     expect(screen.getByText('修改完成前暂停审核')).toBeTruthy();
-    for (const name of ['保留整页', '确认当前片段', '确认整组']) {
+    expect((screen.getByRole('button', { name: '确认当前片段' }) as HTMLButtonElement).disabled).toBe(true);
+    await user.click(screen.getByRole('button', { name: '更多操作' }));
+    for (const name of ['保留整页', '确认整组']) {
       const button = screen.getByRole('button', { name });
       expect((button as HTMLButtonElement).disabled).toBe(true);
       expect(button.getAttribute('aria-describedby')).toBe('review-action-card-frozen-reason');
     }
+    expect(screen.getByRole('button', { name: '确认当前片段' }).getAttribute('aria-describedby')).toBe('review-action-card-frozen-reason');
     expect(screen.getAllByRole('status').some((node) => node.textContent?.includes('修改完成前暂停审核'))).toBe(true);
   });
 
@@ -123,7 +211,7 @@ describe('ReviewActionCard', () => {
     expect((preview as HTMLButtonElement).disabled).toBe(true);
     expect(preview.getAttribute('aria-describedby')).toBe('review-action-card-preview-disabled-reason');
 
-    await user.click(screen.getByRole('button', { name: '查看详情' }));
+    await user.click(screen.getByRole('button', { name: '更多操作' }));
     expect(screen.getByText('预览操作：整组确认和页面校验完成后才能生成 PDF 导出预览')).toBeTruthy();
   });
 
@@ -131,10 +219,10 @@ describe('ReviewActionCard', () => {
     const { rerender } = render(<ReviewActionCard {...reviewProps({ feedback: { kind: 'status', message: '保存完成' } })} />);
     expect((screen.getByTestId('review-action-card-details') as HTMLDivElement).hidden).toBe(true);
     expect(screen.getByText('状态：保存完成', { selector: '.review-action-card-feedback-compact' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: '查看详情' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '更多操作' })).toBeTruthy();
 
     rerender(<ReviewActionCard {...reviewProps({ feedback: { kind: 'error', message: '保存失败' } })} />);
-    expect(await screen.findByRole('button', { name: '收起详情' })).toBeTruthy();
+    expect(await screen.findByRole('button', { name: '收起更多操作' })).toBeTruthy();
     expect(screen.getByRole('alert').textContent).toContain('保存失败');
   });
 
@@ -158,7 +246,7 @@ describe('ReviewActionCard', () => {
       feedback: { kind: 'error', message: '预览生成失败' },
     });
     render(<ReviewActionCard {...props} />);
-    expect(await screen.findByRole('button', { name: '收起详情' })).toBeTruthy();
+    expect(await screen.findByRole('button', { name: '收起更多操作' })).toBeTruthy();
     expect(screen.getByRole('alert').textContent).toContain('预览生成失败');
     expect(screen.getByText('已确认 28 / 28')).toBeTruthy();
     const retry = screen.getByRole('button', { name: '生成 PDF 导出预览' }) as HTMLButtonElement;
@@ -167,28 +255,26 @@ describe('ReviewActionCard', () => {
     expect(props.onGeneratePreview).toHaveBeenCalledOnce();
   });
 
-  it('collapses an old error into one compact visible success status', async () => {
+  it('keeps export details open while showing the latest success status', async () => {
     const { rerender } = render(<ReviewActionCard {...exportProps({ feedback: { kind: 'error', message: '导出失败' } })} />);
     expect(await screen.findByRole('button', { name: '收起详情' })).toBeTruthy();
 
     rerender(<ReviewActionCard {...exportProps({ feedback: { kind: 'status', message: '导出成功' } })} />);
-    expect(screen.getByRole('button', { name: '查看详情' })).toBeTruthy();
-    expect((screen.getByTestId('review-action-card-details') as HTMLDivElement).hidden).toBe(true);
-    const compact = screen.getByText('状态：导出成功', { selector: '.review-action-card-feedback-compact' });
-    expect(compact).toBeTruthy();
-    expect(screen.getByRole('status')).toBe(compact);
+    expect(screen.getByRole('button', { name: '收起详情' })).toBeTruthy();
+    expect((screen.getByTestId('review-action-card-details') as HTMLDivElement).hidden).toBe(false);
+    expect(screen.getByRole('status').textContent).toContain('导出成功');
     expect(screen.queryAllByText(/导出成功/)).toHaveLength(1);
   });
 
   it('returns focus to the details trigger when details close', async () => {
     const user = userEvent.setup();
     render(<ReviewActionCard {...reviewProps()} />);
-    await user.click(screen.getByRole('button', { name: '查看详情' }));
-    const close = screen.getByRole('button', { name: '收起详情' });
+    await user.click(screen.getByRole('button', { name: '更多操作' }));
+    const close = screen.getByRole('button', { name: '收起更多操作' });
     expect(close.getAttribute('aria-expanded')).toBe('true');
     expect(close.getAttribute('aria-controls')).toBe('review-action-card-details');
     await user.click(close);
-    const reopen = screen.getByRole('button', { name: '查看详情' });
+    const reopen = screen.getByRole('button', { name: '更多操作' });
     expect(reopen.getAttribute('aria-expanded')).toBe('false');
     expect(document.activeElement).toBe(reopen);
   });
@@ -198,7 +284,7 @@ describe('ReviewActionCard', () => {
     rerender(<ReviewActionCard {...reviewProps({ groupConfirmed: true, canGeneratePreview: true })} />);
     const previewAction = screen.getByRole('button', { name: /生成 PDF 导出预览/ });
     await waitFor(() => expect(document.activeElement).toBe(previewAction));
-    expect(screen.getByRole('button', { name: '查看详情' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '更多操作' })).toBeTruthy();
   });
 
   it('focuses the confirmed primary action when returning from export mode', async () => {
@@ -225,8 +311,10 @@ describe('ReviewActionCard', () => {
     await waitFor(() => expect(document.activeElement).toBe(exportAction));
   });
 
-  it('moves from pending group save to an enabled confirmed preview action', () => {
+  it('moves from pending group save to an enabled confirmed preview action', async () => {
+    const user = userEvent.setup();
     const { rerender } = render(<ReviewActionCard {...reviewProps({ groupSavePending: true })} />);
+    await user.click(screen.getByRole('button', { name: '更多操作' }));
     const saving = screen.getByRole('button', { name: '保存中…' });
     expect((saving as HTMLButtonElement).disabled).toBe(true);
     expect(saving.getAttribute('aria-busy')).toBe('true');
@@ -259,9 +347,8 @@ describe('ReviewActionCard', () => {
         pageCount: 18,
       }}
     />);
-    expect((screen.getByTestId('review-action-card-details') as HTMLDivElement).hidden).toBe(true);
-    expect(screen.getByText('状态：导出成功', { selector: '.review-action-card-feedback-compact' })).toBeTruthy();
-    await user.click(screen.getByRole('button', { name: '查看详情' }));
+    expect((screen.getByTestId('review-action-card-details') as HTMLDivElement).hidden).toBe(false);
+    expect(screen.getByRole('status').textContent).toContain('导出成功');
     expect(screen.getByText('审核索引.xlsx')).toBeTruthy();
     expect(screen.getByText('最终回单.pdf')).toBeTruthy();
     expect(screen.getByText(/18 页 PDF/)).toBeTruthy();

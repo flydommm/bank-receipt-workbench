@@ -235,6 +235,40 @@ def test_plan_binds_snapshot_counts_and_does_not_mark_deletion_pending(tmp_path:
         store.close()
 
 
+def test_task_cleanup_keeps_independent_layout_template_history(tmp_path: Path) -> None:
+    from engine.layout_template_store import LayoutTemplateStore
+
+    task_database = tmp_path / "tasks.sqlite3"
+    template_database = tmp_path / "templates.sqlite3"
+    with BatchStore(task_database) as store:
+        job, _context = _make_job(store, path=str(tmp_path / "report.pdf"), page_count=1)
+        template_store = LayoutTemplateStore(template_database)
+        template = template_store.save({
+            "source_scope": "workspace-main",
+            "layout_fingerprint": "a" * 64,
+            "page_geometry": {
+                "pdf_box": {"x0": 0, "y0": 0, "x1": 600, "y1": 900},
+                "rotation": 0,
+                "user_unit": 1,
+                "width_pt": 600,
+                "height_pt": 900,
+            },
+            "slots": [{
+                "slot_id": "slot-1", "position_index": 1,
+                "rect": {"x0": 0, "y0": 0, "x1": 600, "y1": 900},
+            }],
+            "evidence_summary": {"line_count": 1},
+            "source_operation_id": "review-op-1",
+        })
+        plan = plan_cleanup(store, tmp_path / "review.sqlite3", job["id"], [])
+        result = execute_cleanup(store, tmp_path / "review.sqlite3", plan["id"], False,
+                                 lambda _identities: {"state": "absent"})
+
+        assert result["task_data_state"] == "deleted"
+        assert template_store.get(template["id"])["active"] is True
+        assert template_store.get(template["id"])["slots"] == template["slots"]
+
+
 def test_exclusive_cleanup_deletes_job_and_review_without_touching_original(tmp_path: Path) -> None:
     review_path = tmp_path / "review.sqlite3"
     source_path = tmp_path / "original.pdf"

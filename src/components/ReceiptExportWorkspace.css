@@ -1,0 +1,14 @@
+.receipt-export-workspace { display: flex; flex-direction: column; height: 100%; min-height: 0; padding: 20px; color: #20374a; overflow: hidden; }
+.receipt-export-workspace header { display: flex; flex: 0 0 auto; justify-content: space-between; align-items: center; gap: 12px; border-bottom: 1px solid #e1eaee; padding-bottom: 12px; }
+.receipt-export-workspace h2 { font-size: 19px; margin: 0; }
+.receipt-export-options { flex: 1 1 auto; min-height: 0; overflow: auto; padding-right: 4px; }
+.receipt-export-workspace label { display: flex; align-items: center; gap: 8px; margin: 20px 0; }
+.receipt-export-workspace .receipt-export-field { display: grid; grid-template-columns: 80px minmax(0, 1fr); max-width: 640px; }
+.receipt-export-field input, .receipt-export-field select { width: 100%; min-width: 0; box-sizing: border-box; font: inherit; color: inherit; border: 1px solid #c9dbe2; border-radius: 8px; padding: 10px; background: #fff; }
+.receipt-export-workspace .receipt-export-hint { color: #627d8b; font-size: 13px; margin: -10px 0 20px; }
+.receipt-export-success { background: #eef8f5; border-radius: 8px; padding: 4px 16px; overflow-wrap: anywhere; }
+.receipt-export-actions { display: flex; flex: 0 0 auto; justify-content: flex-end; gap: 8px; padding-top: 12px; border-top: 1px solid #e1eaee; background: #fff; }
+.receipt-export-actions button, .receipt-export-workspace header button { font: inherit; border: 1px solid #d0e0e5; border-radius: 8px; background: white; color: #355c74; padding: 9px 14px; }
+.receipt-export-actions .primary { background: #398c7f; color: white; border-color: #398c7f; }
+.receipt-export-workspace button:disabled, .receipt-export-workspace input:disabled, .receipt-export-workspace select:disabled { opacity: .5; }
+@media (max-width: 600px) { .receipt-export-workspace .receipt-export-field { grid-template-columns: 1fr; } }

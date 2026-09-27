@@ -50,6 +50,9 @@ export type ReviewNavigatorProps = {
   onResetFilters?: () => void;
   onRevealSelected?: () => void;
   viewControlsDisabled?: boolean;
+  guidedMode?: boolean;
+  guidedPreparing?: boolean;
+  guidedPreview?: boolean;
 };
 
 const FILTERS: readonly { key: ReviewFilter; label: string }[] = [
@@ -120,6 +123,9 @@ export function ReviewNavigator({
   onResetFilters,
   onRevealSelected,
   viewControlsDisabled = false,
+  guidedMode = false,
+  guidedPreparing = false,
+  guidedPreview = false,
 }: ReviewNavigatorProps) {
   const listRef = useRef<HTMLUListElement | null>(null);
   const emptyStateRef = useRef<HTMLDivElement | null>(null);
@@ -359,12 +365,12 @@ export function ReviewNavigator({
       data-stale={stale ? 'true' : undefined}
       data-filtered={filtersActive ? 'true' : undefined}
     >
-      {showKeyboardHints && (
+      {showKeyboardHints && !guidedPreparing && (
         <p className="review-navigator-keyboard-hint" role="note">
           焦点在命中片段上时，可用 ↑↓←→ 切换，Home/End 跳到首尾
         </p>
       )}
-      <div className="review-navigator-filter-row" role="group" aria-label="审核筛选">
+      {!guidedMode && <><div className="review-navigator-filter-row" role="group" aria-label="审核筛选">
         {FILTERS.map(({ key, label }) => (
           <button
             key={key}
@@ -419,9 +425,12 @@ export function ReviewNavigator({
         </label>
       </div>
 
+      </>}
       <div className="review-navigator-summary" aria-live="polite">
         {stale && <strong>上次结果</strong>}
-        <span>{`当前显示 ${visibleRows.length} / 总计 ${total} 个片段`}</span>
+        <span>{guidedPreparing ? '正在准备微调，将从当前选中片段开始'
+          : guidedPreview ? `本轮预览 ${visibleRows.length} 处，尚未保存；可逐项浏览检查`
+          : guidedMode ? `本轮 ${visibleRows.length} 处` : `当前显示 ${visibleRows.length} / 总计 ${total} 个片段`}</span>
       </div>
 
       {filtersActive && (
@@ -463,7 +472,7 @@ export function ReviewNavigator({
       {visibleRows.length > 0 ? (
         <ul ref={listRef} className="review-navigator-list" role="list" aria-label="审核片段">
           {visibleRows.map((row) => {
-            const statusLabel = STATUS_LABELS[row.reviewStatus] ?? '未知状态';
+            const statusLabel = guidedPreview && row.reviewStatus !== 'blocked' ? '预览待保存' : STATUS_LABELS[row.reviewStatus] ?? '未知状态';
             const confidenceLabel = formatConfidence(row.confidence);
             const manual = row.manualAdjusted || row.mode === 'manual';
             const matchedField = row.matchedField || '命中文本';
@@ -525,7 +534,8 @@ export function ReviewNavigator({
         </ul>
       ) : (
         <div ref={emptyStateRef} className="review-navigator-empty" tabIndex={-1}>
-          <span role="status">{safeRows.length === 0 ? (emptyMessage?.trim() || '暂无命中片段') : '当前筛选下没有命中片段'}</span>
+          <span role="status">{guidedPreparing ? '正在准备微调，请稍候。'
+            : safeRows.length === 0 ? (emptyMessage?.trim() || '暂无命中片段') : '当前筛选下没有命中片段'}</span>
           {safeRows.length === 0 && emptyActionLabel && onEmptyAction && (
             <button type="button" className="ghost-button" onClick={onEmptyAction}>{emptyActionLabel}</button>
           )}

@@ -59,6 +59,7 @@ pub fn validate_request(request: &Value) -> Result<&str, String> {
         .ok_or("任务请求无效")?;
     let fields: &[&str] = match op {
         "batch_create" => &["name", "sources", "criteria", "match_mode"],
+        "batch_create_receipts" => &["name", "sources", "processing_options", "match_mode"],
         "batch_start" => &["job_id", "generation"],
         "batch_snapshot" => &["job_id"],
         "batch_list" => &["offset", "limit"],
@@ -66,13 +67,59 @@ pub fn validate_request(request: &Value) -> Result<&str, String> {
         "batch_results_page" => &["job_id", "result_revision", "offset", "limit"],
         "batch_relocate" => &["job_id", "source_id", "new_path"],
         "batch_prepare_review" => &["job_id", "result_revision"],
+        "batch_receipt_review_page" => &["job_id", "result_revision", "offset", "limit"],
+        "batch_save_receipt_review" => &["job_id", "result_revision", "edits"],
+        "batch_receipt_calibration_prepare" => &["job_id", "result_revision", "sample_id"],
+        "batch_receipt_calibration_preview" => &[
+            "job_id",
+            "result_revision",
+            "sample_id",
+            "preparation_fingerprint",
+            "layout_definition",
+            "include_exception_ids",
+        ],
+        "batch_receipt_template_apply_preview" => &["job_id", "result_revision", "template_id"],
+        "batch_receipt_calibration_save" => &[
+            "job_id",
+            "operation_id",
+            "preview_fingerprint",
+            "acknowledged_risk_ids",
+        ],
+        "batch_receipt_calibration_undo" => &["job_id", "operation_id", "undo_id"],
+        "batch_receipt_calibration_status" | "batch_receipt_calibration_cancel" => {
+            &["job_id", "operation_id"]
+        }
+        "batch_layout_template_save" => &["template"],
+        "batch_layout_template_list" => &["active_only", "offset", "limit"],
+        "batch_layout_template_rename" => &["template_id", "name"],
+        "batch_layout_template_match" => &[
+            "source_scope",
+            "page_geometry",
+            "layout_fingerprint",
+            "slots",
+        ],
+        "batch_layout_template_deactivate" => &["template_id", "operation_id"],
+        "batch_layout_template_withdraw_operation" => &["operation_id", "undo_id"],
         "batch_cleanup_plan" => &["job_id"],
         "batch_cleanup_execute" => &["cleanup_id", "delete_review"],
         "batch_cleanup_list" => &["offset", "limit"],
         "batch_storage_usage" | "batch_storage_maintain" => &[],
         _ => return Err("不支持的任务操作".into()),
     };
-    if object.len() != fields.len() + 1 || fields.iter().any(|key| !object.contains_key(*key)) {
+    let optional: &[&str] = match op {
+        "batch_receipt_calibration_save" => &["remember_reference", "template_name", "template_save_mode", "template_id", "template_bank_name"],
+        "batch_create_receipts" => &["layout_template_id"],
+        _ => &[],
+    };
+    let valid_shape = object.keys().all(|key|
+        key == "op" || fields.contains(&key.as_str()) || optional.contains(&key.as_str()))
+        && object.get("remember_reference").is_none_or(Value::is_boolean)
+        && object.get("template_name").is_none_or(|value| value.is_null() || value.is_string())
+        && object.get("template_save_mode").is_none_or(|value| matches!(value.as_str(), Some("create" | "update")))
+        && object.get("template_id").is_none_or(|value| value.is_null() || value.is_string())
+        && object.get("template_bank_name").is_none_or(|value| value.is_null() || value.is_string())
+        && object.get("layout_template_id").is_none_or(|value| value.is_null() || value.is_string());
+    if !valid_shape || fields.iter().any(|key| !object.contains_key(*key)) {
         return Err("任务请求字段无效".into());
     }
     // Python performs the detailed schema checks. These limits also bound the
@@ -133,9 +180,42 @@ impl BatchService {
     fn call(&self, mut request: Value) -> Result<Value, String> {
         if matches!(
             request["op"].as_str(),
-            Some("batch_prepare_review" | "batch_cleanup_plan" | "batch_cleanup_execute")
+            Some(
+                "batch_prepare_review"
+                    | "batch_receipt_review_page"
+                    | "batch_save_receipt_review"
+                    | "batch_receipt_calibration_prepare"
+                    | "batch_receipt_calibration_preview"
+                    | "batch_receipt_template_apply_preview"
+                    | "batch_receipt_calibration_save"
+                    | "batch_receipt_calibration_undo"
+                    | "batch_cleanup_plan"
+                    | "batch_cleanup_execute",
+            )
         ) {
             request["review_database_path"] =
+                json!(self.database.with_file_name("pdf-search.sqlite3"));
+        }
+        if matches!(
+            request["op"].as_str(),
+            Some(
+                "batch_layout_template_save"
+                    | "batch_layout_template_list"
+                    | "batch_layout_template_rename"
+                    | "batch_create_receipts"
+                    | "batch_layout_template_match"
+                    | "batch_layout_template_deactivate"
+                    | "batch_layout_template_withdraw_operation"
+                    | "batch_receipt_calibration_prepare"
+                    | "batch_receipt_calibration_preview"
+                    | "batch_receipt_template_apply_preview"
+                    | "batch_receipt_calibration_save"
+                    | "batch_receipt_calibration_undo"
+            )
+        ) {
+            // Layout references are application-private and share the review
+            // database's protected path.  The webview cannot choose it.
+            request["template_database_path"] =
                 json!(self.database.with_file_name("pdf-search.sqlite3"));
         }
         request["database_path"] = json!(self.database);
@@ -636,6 +716,76 @@ mod tests {
     use super::*;
 
     #[test]
+    fn template_management_and_selection_allow_only_public_fields() {
+        for request in [
+            json!({"op":"batch_layout_template_list","active_only":true,"offset":0,"limit":50}),
+            json!({"op":"batch_layout_template_rename","template_id":"t","name":"模板"}),
+            json!({"op":"batch_create_receipts","name":"synthetic","sources":[],
+                "processing_options":{},"match_mode":"exact","layout_template_id":null}),
+            json!({"op":"batch_create_receipts","name":"synthetic","sources":[],
+                "processing_options":{},"match_mode":"exact","layout_template_id":"t"}),
+            json!({"op":"batch_receipt_calibration_save","job_id":"j","operation_id":"o",
+                "preview_fingerprint":"h","acknowledged_risk_ids":[],"remember_reference":true,"template_name":"模板"}),
+            json!({"op":"batch_receipt_calibration_save","job_id":"j","operation_id":"o",
+                "preview_fingerprint":"h","acknowledged_risk_ids":[],"remember_reference":false,"template_name":null}),
+            json!({"op":"batch_receipt_calibration_save","job_id":"j","operation_id":"o",
+                "preview_fingerprint":"h","acknowledged_risk_ids":[],"remember_reference":true,
+                "template_save_mode":"update","template_id":"target","template_bank_name":"银行"}),
+        ] {
+            assert!(validate_request(&request).is_ok());
+            for key in ["template_database_path", "database_path", "owner", "historical_reference"] {
+                let mut injected = request.clone();
+                injected[key] = json!("forbidden");
+                assert!(validate_request(&injected).is_err());
+            }
+        }
+        assert!(validate_request(&json!({"op":"batch_create_receipts","name":"x","sources":[],
+            "processing_options":{},"match_mode":"exact","layout_template_id":42})).is_err());
+        assert!(validate_request(&json!({"op":"batch_receipt_calibration_save","job_id":"j","operation_id":"o",
+            "preview_fingerprint":"h","acknowledged_risk_ids":[],"template_name":false})).is_err());
+        for (field, value) in [("template_save_mode", json!("replace-all")), ("template_id", json!(5)), ("template_bank_name", json!(false))] {
+            let mut request = json!({"op":"batch_receipt_calibration_save","job_id":"j","operation_id":"o",
+                "preview_fingerprint":"h","acknowledged_risk_ids":[]});
+            request[field] = value;
+            assert!(validate_request(&request).is_err());
+        }
+    }
+
+    #[test]
+    fn calibration_requests_cannot_inject_targets_or_private_storage() {
+        for request in [
+            json!({"op":"batch_receipt_calibration_prepare","job_id":"j","result_revision":"r","sample_id":"s"}),
+            json!({"op":"batch_receipt_calibration_preview","job_id":"j","result_revision":"r","sample_id":"s",
+                   "preparation_fingerprint":"h","layout_definition":{},"include_exception_ids":[]}),
+            json!({"op":"batch_receipt_template_apply_preview","job_id":"j",
+                   "result_revision":"r","template_id":"saved-template"}),
+            json!({"op":"batch_receipt_calibration_save","job_id":"j","operation_id":"o",
+                   "preview_fingerprint":"h","acknowledged_risk_ids":[]}),
+            json!({"op":"batch_receipt_calibration_undo","job_id":"j","operation_id":"o","undo_id":"u"}),
+            json!({"op":"batch_receipt_calibration_status","job_id":"j","operation_id":"o"}),
+            json!({"op":"batch_receipt_calibration_cancel","job_id":"j","operation_id":"o"}),
+        ] {
+            assert!(validate_request(&request).is_ok());
+            for field in [
+                "review_database_path",
+                "template_database_path",
+                "database_path",
+                "originals",
+                "targets",
+                "records",
+            ] {
+                let mut injected = request.clone();
+                injected[field] = json!([]);
+                assert!(validate_request(&injected).is_err());
+            }
+        }
+        assert!(validate_request(&json!({"op":"batch_receipt_calibration_save","job_id":"j","operation_id":"o",
+            "preview_fingerprint":"h","acknowledged_risk_ids":[],"remember_reference":false})).is_ok());
+        assert!(validate_request(&json!({"op":"batch_receipt_calibration_save","job_id":"j","operation_id":"o",
+            "preview_fingerprint":"h","acknowledged_risk_ids":[],"remember_reference":1})).is_err());
+    }
+
+    #[test]
     fn webview_cannot_inject_private_paths_owner_or_compute_operations() {
         for request in [
             json!({"op":"batch_activate","owner":"other"}),
@@ -644,6 +794,14 @@ mod tests {
             json!({"op":"batch_start","job_id":"j","generation":0,"owner":"other"}),
             json!({"op":"batch_prepare_review","job_id":"j","result_revision":"r","review_database_path":"x"}),
             json!({"op":"batch_prepare_review","job_id":"j","result_revision":"r","originals":[]}),
+            json!({"op":"batch_receipt_review_page","job_id":"j","result_revision":"r","offset":0,"limit":20,"review_database_path":"x"}),
+            json!({"op":"batch_receipt_review_page","job_id":"j","result_revision":"r","offset":0,"limit":20,"originals":[]}),
+            json!({"op":"batch_save_receipt_review","job_id":"j","result_revision":"r","edits":[],"review_database_path":"x"}),
+            json!({"op":"batch_save_receipt_review","job_id":"j","result_revision":"r","edits":[],"context_key":"x"}),
+            json!({"op":"batch_layout_template_save","template":{},"template_database_path":"x"}),
+            json!({"op":"batch_layout_template_match","source_scope":"x","page_geometry":{},"layout_fingerprint":"x","slots":[],"template_database_path":"x"}),
+            json!({"op":"batch_layout_template_deactivate","template_id":"x","operation_id":null,"template_database_path":"x"}),
+            json!({"op":"batch_layout_template_withdraw_operation","operation_id":"x","undo_id":"u","template_database_path":"x"}),
             json!({"op":"batch_register_preview","job_id":"j","token":"preview-owned-000001","preview_root":"x"}),
             json!({"op":"batch_release_preview","token":"preview-owned-000001"}),
             json!({"op":"batch_cleanup_plan","job_id":"j","preview_identities":[]}),
@@ -657,6 +815,34 @@ mod tests {
             &json!({"op":"batch_prepare_review","job_id":"j","result_revision":"r"})
         )
         .is_ok());
+        assert!(validate_request(&json!({
+            "op":"batch_create_receipts", "name":"synthetic", "sources":[],
+            "processing_options": {"processing_mode":"split_all", "criteria":null}, "match_mode":"exact"
+        })).is_ok());
+        assert!(validate_request(&json!({
+            "op":"batch_receipt_review_page", "job_id":"j", "result_revision":"r", "offset":0, "limit":20
+        })).is_ok());
+        assert!(validate_request(&json!({
+            "op":"batch_save_receipt_review", "job_id":"j", "result_revision":"r", "edits":[]
+        }))
+        .is_ok());
+        assert!(validate_request(&json!({
+            "op":"batch_layout_template_save", "template":{}
+        }))
+        .is_ok());
+        assert!(validate_request(&json!({
+            "op":"batch_layout_template_match", "source_scope":"x",
+            "page_geometry":{}, "layout_fingerprint":"x", "slots":null
+        }))
+        .is_ok());
+        assert!(validate_request(&json!({
+            "op":"batch_layout_template_deactivate", "template_id":"x", "operation_id":null
+        }))
+        .is_ok());
+        assert!(validate_request(&json!({
+            "op":"batch_layout_template_withdraw_operation", "operation_id":"x", "undo_id":"u"
+        }))
+        .is_ok());
         for request in [
             json!({"op":"batch_cleanup_plan","job_id":"j"}),
             json!({"op":"batch_cleanup_execute","cleanup_id":"c","delete_review":false}),
@@ -666,6 +852,18 @@ mod tests {
         ] {
             assert!(validate_request(&request).is_ok());
         }
+
+        let oversized = json!({
+            "op":"batch_save_receipt_review", "job_id":"j", "result_revision":"r",
+            "edits":[{
+                "schema_version":1, "context_key":"a", "result_revision":"r", "id":"a",
+                "source_key":"/a.pdf", "instance_id":"i", "analysis_signature":"b",
+                "record_revision":0, "final_rect":null, "crop_mode":"full_page",
+                "review_status":"confirmed", "manual_adjusted":false,
+                "reviewed_at":"x".repeat(4 * 1024 * 1024)
+            }]
+        });
+        assert!(validate_request(&oversized).is_err());
     }
 
     #[cfg(windows)]
@@ -683,8 +881,9 @@ mod tests {
                 path.display()
             );
             assert!(
-                path.extension()
-                    .is_some_and(|extension| extension.to_string_lossy().eq_ignore_ascii_case("exe")),
+                path.extension().is_some_and(|extension| extension
+                    .to_string_lossy()
+                    .eq_ignore_ascii_case("exe")),
                 "PDF_SEARCH_TEST_PYTHON must point to a .exe: {}",
                 path.display()
             );
@@ -712,6 +911,7 @@ mod tests {
             python_executable: synthetic_python_executable(),
             private_temp_root: root,
             supervisor: crate::engine_process::ProcessSupervisor::new(3, 32),
+            read_service: Default::default(),
         }
     }
 

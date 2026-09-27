@@ -11,6 +11,7 @@ describe('display identity and upgrade compatibility', () => {
     expect(native.productName).toBe(APP_NAME);
     expect(native.app.windows[0].title).toBe(APP_NAME);
     expect(native.version).toBe(APP_VERSION);
+    expect(JSON.parse(read('package.json')).version).toBe(APP_VERSION);
     expect(read('index.html')).toContain(`<title>${APP_NAME}</title>`);
     expect(read('src-tauri/Cargo.toml')).toContain(`version = "${APP_VERSION}"`);
     expect(read('src-tauri/Cargo.lock')).toContain(`name = "pdf-search"\nversion = "${APP_VERSION}"`);

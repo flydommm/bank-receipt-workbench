@@ -11,7 +11,14 @@ import re
 import statistics
 from typing import Any, Iterable, Iterator, TypeVar
 
-from .pdf_parser import ParsedPage, TextBlock
+from .pdf_parser import ParsedPage, TextBlock, visible_page
+from .receipt_issuer import canonical_bank_heading, issuer_masthead_bank
+from .receipt_headers import (
+    MAX_PRINT_COUNT_PAIR_COMPARISONS,
+    PrintCountBudgetExceeded,
+    print_count_prefixes,
+)
+from .receipt_document_types import detect_document_type, document_type_for_title
 
 
 MAX_LAYOUT_DRAWINGS = 4_096
@@ -234,7 +241,7 @@ def _layout_page(pdf_path: str | Path, page_number: int, loaded_page: Any = None
     if loaded_page is not None:
         if loaded_page.number != page_number - 1:
             raise ValueError("loaded page number does not match the requested page")
-        yield loaded_page
+        yield visible_page(loaded_page)
         return
     try:
         import pymupdf
@@ -242,7 +249,7 @@ def _layout_page(pdf_path: str | Path, page_number: int, loaded_page: Any = None
         import fitz as pymupdf  # type: ignore[no-redef]
     document = pymupdf.open(str(pdf_path))
     try:
-        yield document.load_page(page_number - 1)
+        yield visible_page(document.load_page(page_number - 1))
     finally:
         document.close()
 
@@ -689,6 +696,7 @@ _RECEIPT_TITLE_PREFIX_MARKERS = (
 _RECEIPT_TITLE_SUFFIXES = (
     "网上支付跨行清算业务",
     "小额支付系统业务",
+    "大额支付系统业务",
     "电子缴税付款业务",
     "存款利息",
     "通用",
@@ -767,7 +775,7 @@ def _is_receipt_title(text: str) -> bool:
             continue
         if any(marker in line for marker in field_markers):
             continue
-        if line in _RECEIPT_EXACT_TITLES:
+        if line in _RECEIPT_EXACT_TITLES or document_type_for_title(line) is not None:
             return True
         if any(marker in line for marker in _RECEIPT_BODY_MARKERS):
             continue
@@ -1163,14 +1171,15 @@ def _frame_segment_blocks(
     titles: tuple[TextBlock, ...],
     index: int,
     margin: float,
+    receipt_text_starts: tuple[float, ...],
 ) -> tuple[TextBlock, ...]:
-    title = titles[index]
-    upper = titles[index + 1].y0 if index + 1 < len(titles) else page.height
+    start = receipt_text_starts[index]
+    upper = receipt_text_starts[index + 1] if index + 1 < len(titles) else page.height
     return tuple(
         block
         for block in page.blocks
         if (
-            title.y0 - margin <= block.y0 < upper
+            start - margin <= block.y0 < upper
             and not _is_page_footer_noise(page, block)
         )
     )
@@ -1182,9 +1191,10 @@ def _receipt_frame_context(
     frame_anchors: tuple[VisualAnchor, ...],
     visual_anchors: tuple[VisualAnchor, ...],
     margin: float,
+    receipt_text_starts: tuple[float, ...],
 ) -> tuple[tuple[tuple[TextBlock, ...], ...], tuple[VisualAnchor | None, ...]]:
     segment_blocks = tuple(
-        _frame_segment_blocks(page, titles, index, margin)
+        _frame_segment_blocks(page, titles, index, margin, receipt_text_starts)
         for index in range(len(titles))
     )
     frames = tuple(
@@ -1623,6 +1633,39 @@ def _receipt_slots(titles: Iterable[TextBlock]) -> tuple[str, ...]:
     return tuple(f"slot-{index + 1}" for index in range(title_count))
 
 
+def _leading_issuer_headers(
+    page: ParsedPage,
+    titles: tuple[TextBlock, ...],
+) -> tuple[tuple[TextBlock, ...], ...]:
+    """Assign proven issuer mastheads to their following receipt title.
+
+    The previous receipt's payer/payee bank is not a masthead. Shared issuer
+    checks reject account labels even when the PDF separates label and value
+    into distinct text blocks. Conflicting nearby banks remain unassigned.
+    """
+    text_lines = [(block.text, (block.x0, block.y0, block.x1, block.y1)) for block in page.blocks]
+    groups = []
+    for index, title in enumerate(titles):
+        lower = max(titles[index - 1].y1 if index else 0.0, title.y0 - 64.0)
+        candidates = []
+        banks = set()
+        bank_end = title.text.find("银行")
+        if bank_end >= 0:
+            title_bank = canonical_bank_heading(title.text[:bank_end + 2])
+            if title_bank is not None:
+                banks.add(title_bank)
+        for block in page.blocks:
+            if (block.is_watermark or block.y0 < lower or block.y0 > title.y1
+                    or block.y1 > title.y1 + 3.0):
+                continue
+            bank = issuer_masthead_bank(block.text, (block.x0, block.y0, block.x1, block.y1), text_lines)
+            if bank is not None:
+                banks.add(bank)
+                candidates.append(block)
+        groups.append(tuple(candidates) if len(banks) == 1 else ())
+    return tuple(groups)
+
+
 def _receipt_detection_context(
     page: ParsedPage,
     titles: Iterable[TextBlock],
@@ -1632,6 +1675,16 @@ def _receipt_detection_context(
 ) -> _ReceiptDetectionContext:
     title_tuple = tuple(titles)
     slots = _receipt_slots(title_tuple)
+    leading_headers = _leading_issuer_headers(page, title_tuple)
+    _, print_count_starts = print_count_prefixes(
+        title_tuple,
+        [(block.text, (block.x0, block.y0, block.x1, block.y1)) for block in page.blocks],
+        pair_budget=MAX_PRINT_COUNT_PAIR_COMPARISONS,
+    )
+    receipt_text_starts = tuple(
+        min([title.y0, *(header.y0 for header in headers), *([prefix] if prefix is not None else [])])
+        for title, headers, prefix in zip(title_tuple, leading_headers, print_count_starts)
+    )
     leading_anchor_groups = tuple(
         _select_leading_anchors(
             anchor_list,
@@ -1642,10 +1695,10 @@ def _receipt_detection_context(
     )
     raw_visual_starts = tuple(
         min(
-            [title.y0]
+            [receipt_text_start]
             + [min(anchor.y0, anchor.y1) for anchor in leading_anchors]
         )
-        for title, leading_anchors in zip(title_tuple, leading_anchor_groups)
+        for receipt_text_start, leading_anchors in zip(receipt_text_starts, leading_anchor_groups)
     )
     frame_segments, associated_frames = _receipt_frame_context(
         page,
@@ -1653,6 +1706,7 @@ def _receipt_detection_context(
         frame_anchors,
         anchor_list,
         margin,
+        receipt_text_starts,
     )
     return _ReceiptDetectionContext(
         title_tuple,
@@ -1837,13 +1891,26 @@ def infer_receipt_candidates(
             else candidates
         )
 
-    context = _receipt_detection_context(
-        page,
-        titles,
-        anchor_list,
-        frame_anchors,
-        margin,
-    )
+    # A loan advice is one document, including print metadata above its title
+    # and the validation footer/stamp below its body. Whitespace is not a
+    # receipt boundary here. Multiple actual headings retain normal detection.
+    if detect_document_type(page) in {"loan_interest_notice", "loan_settlement_notice"} and len(titles) == 1:
+        candidates = [ReceiptCandidate(Rect(0, 0, page.width, page.height), 0.89,
+                                       "single", ("special_document", "page_width"))]
+        return _mark_layout_budget_exceeded(candidates) if layout_budget_exceeded else candidates
+
+    try:
+        context = _receipt_detection_context(
+            page,
+            titles,
+            anchor_list,
+            frame_anchors,
+            margin,
+        )
+    except PrintCountBudgetExceeded:
+        return _mark_layout_budget_exceeded([
+            ReceiptCandidate(Rect(0, 0, page.width, page.height), 0.2, "single", ()),
+        ])
     candidates = [
         _receipt_candidate_for_slot(
             page,

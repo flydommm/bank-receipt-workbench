@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore, type ChangeEvent } from 'react';
-import { listen } from '@tauri-apps/api/event';
 import { EngineProcessScheduler, type EngineTaskPriority } from './services/engineProcessScheduler';
+import { SourcePageInspection } from './services/sourcePageInspection';
 
 import {
   localEngineAdapter,
@@ -11,6 +11,7 @@ import {
   type EngineSearchClause,
   type EnginePageAnalysis,
   type EnginePagePreview,
+  type EngineInspectedPage,
   type EnginePdfExportSelection,
   type EngineRect,
   type EngineReviewSegment,
@@ -29,12 +30,15 @@ import { defaultExportName, normalizeExportName, validateExportName } from './do
 import { ExportBundleClient, ExportBundleError, parseExportBundleReceipt, type ExportBundlePreview,
   type ExportBundleReceipt } from './services/exportBundleClient';
 import ResizableWorkspace from './components/ResizableWorkspace';
-import ReviewActionCard, { type ActionFeedback } from './components/ReviewActionCard';
+import ReviewActionCard, { ReviewExportResultSummary, type ActionFeedback } from './components/ReviewActionCard';
 import { ReviewOperationTools } from './components/ReviewOperationTools';
 import { BatchCropDialog } from './components/BatchCropDialog';
-import { batchSampleError, type BatchCropPlan } from './domain/batchCrop';
+import { batchSampleError, cropPageKey, type BatchCropPlan, type CropTemplatePage } from './domain/batchCrop';
 import { prepareBatchCrop, StaleBatchCropError } from './services/prepareBatchCrop';
 import { ReviewOperationHistory, type ReviewDecisionSnapshot, type ReviewOperationKind } from './domain/reviewOperations';
+import { LinkedCropSession, type LinkedCropTransition } from './domain/linkedCropSession';
+import { useGuidedReview, type GuidedWrite } from './hooks/useGuidedReview';
+import { GuidedReviewPanel } from './components/GuidedReviewPanel';
 import { deriveReviewResultView } from './domain/reviewResultView';
 import ReviewNavigator, { type ReviewNavigatorRow } from './components/ReviewNavigator';
 import type { ReviewResultSort, ReviewResultSource } from './domain/reviewResultView';
@@ -43,10 +47,18 @@ import { HelpCenterDialog, type HelpCenterOcrState } from './components/HelpCent
 import { APP_NAME, APP_SUBTITLE } from './domain/appIdentity';
 import SourceDocumentPreview from './components/SourceDocumentPreview';
 import SourcePanel from './components/SourcePanel';
-import { TaskHistoryPanel } from './components/TaskHistoryPanel';
+import { ReceiptWorkflowSteps } from './components/ReceiptWorkflowSteps';
+import { LayoutTemplateManager } from './components/LayoutTemplateManager';
+import { layoutTemplateName, type LayoutTemplate } from './services/layoutTemplateClient';
 import { TaskCleanupPanel } from './components/TaskCleanupPanel';
 import type { BatchCleanup, BatchStorageUsage } from './domain/batchCleanup';
 import { PersistentBatchController, batchIsActive } from './services/persistentBatchController';
+import { ReceiptBatchController } from './services/receiptBatchController';
+import { ReceiptBatchEntry, type ReceiptBatchProcessingMode } from './components/ReceiptBatchEntry';
+import { ReceiptCalibrationController } from './services/receiptCalibrationController';
+import { ReceiptCalibrationPane, ReceiptCalibrationNavigator } from './components/ReceiptCalibrationWorkspace';
+import type { ReceiptBatchPreparedReview, ReceiptBatchReviewPageItem } from './domain/receiptBatch';
+import { BatchClientError } from './services/batchClient';
 import type { BatchJobSnapshot, BatchResponse } from './domain/batchTask';
 import { mapBatchReview } from './domain/batchReview';
 import {
@@ -272,6 +284,14 @@ function sourcePathForFile(file: SourceFile): string {
   return file.path ?? file.relativePath ?? file.name;
 }
 
+function isTauriDesktopRuntime(): boolean {
+  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+}
+
+function engineHealthFailureMessage(error: unknown): string {
+  return error instanceof LocalEngineError ? error.message : '本地引擎健康检查失败，请重试。';
+}
+
 function sourceSelectionForFile(file: SourceFile): SearchSource {
   return {
     name: file.name,
@@ -396,7 +416,7 @@ export type DocumentPreviewValidation =
   | { ok: false; kind: 'page_mismatch' | 'page_count_mismatch'; message: string };
 
 export function validateDocumentPreview(
-  preview: EnginePagePreview,
+  preview: Pick<EnginePagePreview, 'page' | 'page_count'>,
   document: SourceDocument,
   requestedPage: number,
 ): DocumentPreviewValidation {
@@ -807,8 +827,11 @@ type PendingReviewOperation = {
   segments: ReviewSegment[];
   /** Read-only dependencies checked on every attempt, without writing or undoing them. */
   validationSegments?: ReviewSegment[];
+  linkedTransition?: LinkedCropTransition;
   undoId?: string;
   message: string;
+  guidedCurrent?: () => boolean;
+  onSaved?: () => void;
 };
 
 type PersistenceOutcome =
@@ -939,7 +962,7 @@ function segmentHasValidSourceGeometry(segment: ReviewSegment, sourceGeometry?: 
 }
 
 export function previewValidationError(
-  preview: EnginePagePreview,
+  preview: Pick<EnginePagePreview, 'page' | 'page_count' | 'page_width' | 'page_height'>,
   segment: ReviewSegment,
   geometry?: SourceGeometry,
 ): PreviewInvalidReason | null {
@@ -1266,10 +1289,14 @@ async function analyzeMatches(
         if (!Array.isArray(analysis.selections) || analysis.selections.length !== group.matches.length) {
           throw new Error('页面分析返回的片段数量与命中结果不一致。');
         }
+        const candidateRegions = new Set(analysis.selections.map((selection) => {
+          const rect = selection.candidate_rect ?? selection.rect;
+          return JSON.stringify(rect ? [rect.x0, rect.y0, rect.x1, rect.y1] : [null, null, null, null]);
+        }));
         return {
           group,
           failed: false,
-          pageFullyMatched: analysis.page_fully_matched === true,
+          pageFullyMatched: analysis.page_fully_matched === true && candidateRegions.size === 1,
           dimensions: safeDimensions(analysis.page_width, analysis.page_height),
           selections: analysis.selections,
         };
@@ -1462,14 +1489,14 @@ async function analyzeMatches(
           segmentNo: nextSegmentNo,
           matchRect: sourceRect,
           candidateRect,
-          finalRect: candidateRect,
+          finalRect: result.pageFullyMatched ? null : candidateRect,
           pageWidth,
           pageHeight,
           confidence,
           slot: selection.slot ?? null,
           snapPoints: selection.snap_points ?? [],
           layoutFingerprint: geometryFingerprint(pageWidth, pageHeight, candidateRect),
-          mode: 'candidate',
+          mode: result.pageFullyMatched ? 'full_page' : 'candidate',
           reviewStatus: result.failed || !sourceGeometry.matchValid || !sourceGeometry.pageValid
             ? 'blocked'
             : reviewStatusFor(confidence, legalCandidate),
@@ -1487,7 +1514,7 @@ async function analyzeMatches(
       const match = matchEntry.match;
       const inputIndex = matchEntry.inputIndex;
       const selection = result.selections[selectionIndex];
-      const candidateRect = selection?.rect ?? null;
+      const candidateRect = selection?.candidate_rect ?? selection?.rect ?? null;
       const confidence = asFinite(selection?.confidence, result.failed ? asFinite(match.confidence, 0) : 0);
       const id = buildSegmentId(taskId, match, result.group.page, matchEntry.segmentNo, usedIds);
       const legalCandidate = candidateRect && isLegalRect(candidateRect, pageWidth, pageHeight) ? candidateRect : null;
@@ -1653,8 +1680,36 @@ export default function App() {
     && typeof (window as unknown as { __TAURI_INTERNALS__?: { invoke?: unknown } }).__TAURI_INTERNALS__?.invoke === 'function');
   const [persistentController] = useState(() => new PersistentBatchController());
   const persistent = useSyncExternalStore(persistentController.subscribe, persistentController.getSnapshot);
-  const [taskHistoryOpen, setTaskHistoryOpen] = useState(false);
-  const [taskPanelView, setTaskPanelView] = useState<'current' | 'history'>('current');
+  const [receiptBatchController] = useState(() => new ReceiptBatchController());
+  const receiptBatch = useSyncExternalStore(receiptBatchController.subscribe, receiptBatchController.getSnapshot);
+  // A newly created task starts with the common "split all" workflow.  Keep
+  // this state untouched when sources are replaced or appended so an explicit
+  // user choice (including keyword search) is never silently overwritten.
+  const [receiptProcessingMode, setReceiptProcessingMode] = useState<ReceiptBatchProcessingMode>('split_all');
+  const [receiptReview, setReceiptReview] = useState<{ prepared: ReceiptBatchPreparedReview; items: ReceiptBatchReviewPageItem[] } | null>(null);
+  const [receiptWorkflowStep, setReceiptWorkflowStep] = useState<2 | 3>(2);
+  const [receiptReviewBusy, setReceiptReviewBusy] = useState(false);
+  const receiptReviewRequestRef = useRef(0);
+  const receiptReviewLoadingRef = useRef(false);
+  const autoOpenReceiptRef = useRef(false);
+  const [receiptCalibrationController] = useState(() => new ReceiptCalibrationController(undefined, async (jobId, revision) => {
+    const job = await receiptBatchController.refresh(jobId);
+    if (!job || job.result_revision !== revision) throw new Error('任务结果已变化，请重新载入审核结果。');
+    const prepared = await receiptBatchController.client.prepareReview(job);
+    const items = await receiptBatchController.client.loadAllReviewPages(prepared);
+    const current = receiptBatchController.getSnapshot().job;
+    if (current?.id !== jobId || current.result_revision !== revision) throw new Error('任务已切换，未替换当前工作区。');
+    return { prepared, items };
+  }));
+  const receiptCalibration = useSyncExternalStore(receiptCalibrationController.subscribe, receiptCalibrationController.getSnapshot);
+  useEffect(() => {
+    receiptCalibrationController.bind(receiptReview);
+    return () => receiptCalibrationController.bind(null);
+  }, [receiptCalibrationController, receiptReview]);
+  const [templateManagerOpen, setTemplateManagerOpen] = useState(false);
+  const [templateManagerContext, setTemplateManagerContext] = useState<'analysis' | 'review'>('analysis');
+  const [templateChoiceIds, setTemplateChoiceIds] = useState<string[] | undefined>();
+  const [selectedLayoutTemplate, setSelectedLayoutTemplate] = useState<LayoutTemplate | null>(null);
   const [taskPanelRequest, setTaskPanelRequest] = useState<{ previousId: string | null } | null>(null);
   // While creating a new task, an older selected snapshot must not be shown
   // as the task being created, including when the create request fails.
@@ -1670,26 +1725,19 @@ export default function App() {
   const [cleanupError, setCleanupError] = useState<string | null>(null);
   const autoOpenJobRef = useRef<string | null>(null);
   const persistentLoadAbortRef = useRef<AbortController | null>(null);
-  useEffect(() => {
-    if (!persistentTasksEnabled) return;
-    persistentController.start();
-    let disposed = false;
-    let unlisten: (() => void) | undefined;
-    void listen<unknown>('batch-task-event', (event) => persistentController.onEvent(event.payload))
-      .then((stop) => { if (disposed) stop(); else unlisten = stop; })
-      .catch(() => { /* Snapshot polling still recovers a lost event subscription. */ });
-    return () => {
-      disposed = true;
-      unlisten?.();
-      persistentLoadAbortRef.current?.abort();
-      persistentController.dispose();
-    };
-  }, [persistentController, persistentTasksEnabled]);
+  // Previous task records stay on disk. The application no longer loads or
+  // resumes them from a history entry; new work reuses only layout templates.
+  useEffect(() => () => {
+    persistentLoadAbortRef.current?.abort();
+    persistentController.dispose();
+  }, [persistentController]);
+  useEffect(() => () => receiptBatchController.dispose(), [receiptBatchController]);
   const [initialAppSettings] = useState(() => readAppSettings());
   const [appSettings, setAppSettings] = useState<AppSettingsV1>(initialAppSettings.settings);
   const [settingsWarning, setSettingsWarning] = useState<string | null>(initialAppSettings.warning);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [helpFocusSection, setHelpFocusSection] = useState<'fine-tune' | undefined>();
   const [inputDirectoryDraftResetToken, setInputDirectoryDraftResetToken] = useState(0);
   const [outputDirectoryDraftResetToken, setOutputDirectoryDraftResetToken] = useState(0);
   const [directoryPickerBusy, setDirectoryPickerBusy] = useState(false);
@@ -1707,6 +1755,9 @@ export default function App() {
   const [analysisNotice, setAnalysisNotice] = useState<ActionFeedback>(null);
   const [reviewFeedback, setReviewFeedback] = useState<ActionFeedback>(null);
   const [engineStatus, setEngineStatus] = useState<EngineStatus>('checking');
+  const engineStatusRef = useRef(engineStatus);
+  engineStatusRef.current = engineStatus;
+  const [engineStatusMessage, setEngineStatusMessage] = useState<string | null>(null);
   const [ocrState, setOcrState] = useState<OcrState>(OCR_INITIAL_STATE);
   const [ocrCacheState, setOcrCacheState] = useState<OcrCacheInfo | null>(null);
   const [checkedTaskOcrIssueKey, setCheckedTaskOcrIssueKey] = useState<string | null>(null);
@@ -1717,6 +1768,14 @@ export default function App() {
   const reviewSessionRef = useRef<ReviewSession | null>(null);
   const [reviewHistory] = useState(() => new ReviewOperationHistory());
   const [reviewHistoryCount, setReviewHistoryCount] = useState(0);
+  const [linkedCropSession] = useState(() => new LinkedCropSession());
+  const [linkedCropSampleId, setLinkedCropSampleId] = useState<string | null>(null);
+  const [linkedCropPreparing, setLinkedCropPreparing] = useState(false);
+  const linkedCropRunRef = useRef(0);
+  const [linkedCropStatus, setLinkedCropStatus] = useState('');
+  const [cropDraft, setCropDraft] = useState<{ segmentId: string; rect: PdfRect } | null>(null);
+  const cropDraftRef = useRef(cropDraft);
+  cropDraftRef.current = cropDraft;
   const [reviewSavePending, setReviewSavePending] = useState(false);
   const reviewSavePendingRef = useRef(false);
   const pendingReviewOperationRef = useRef<PendingReviewOperation | null>(null);
@@ -1785,6 +1844,8 @@ export default function App() {
   const searchInFlightRef = useRef(false);
   const ocrCheckRequestRef = useRef(0);
   const ocrCheckInFlightRef = useRef(false);
+  const engineHealthRequestRef = useRef(0);
+  const engineHealthInFlightRef = useRef(false);
   const ocrCacheRequestRef = useRef(0);
   const ocrCacheInFlightRef = useRef(false);
   const batchRunBindingRef = useRef<BatchRunBinding | null>(null);
@@ -1816,7 +1877,12 @@ export default function App() {
   const exportPreviewRef = useRef<ExportPreviewSnapshot | null>(null);
   const reviewViewBeforeExportRef = useRef<ReviewViewSnapshot | null>(null);
   const workspaceLockedRef = useRef(false);
+  const externalChangesLockedRef = useRef(false);
+  const guidedRef = useRef<ReturnType<typeof useGuidedReview> | null>(null);
   const pagePreviewCacheRef = useRef(new Map<string, Promise<EnginePagePreview>>());
+  const [pageInspection] = useState(() => new SourcePageInspection(
+    (...args) => localEngineAdapter.inspectPages(...args), engineProcessSemaphore, () => new StaleRunError(),
+  ));
   const pagePreviewOwnerRef = useRef(new Map<string, () => boolean>());
   const pagePreviewIdentityRef = useRef<{ documentKey: string; page: number } | null>(null);
   const previewLoadingRef = useRef(false);
@@ -1838,7 +1904,7 @@ export default function App() {
   const reviewSourceFilterRef = useRef(reviewSourceFilter);
   reviewSourceFilterRef.current = reviewSourceFilter;
   const revealSegment = useCallback((id: string) => {
-    if (workspaceLockedRef.current) return;
+    if (workspaceLockedRef.current || !guidedRef.current?.canSelect(id)) return;
     const segment = reviewSegments.find((item) => item.id === id);
     if (segment && !filterSegments(reviewSegments, reviewFilterRef.current).some((item) => item.id === id)) {
       setReviewFilter('all');
@@ -1860,6 +1926,11 @@ export default function App() {
   const appliedCriteria = appliedSearch?.criteria ?? null;
   const sourceFilesRef = useRef(sourceFiles);
   sourceFilesRef.current = sourceFiles;
+  const prepareSourcePreviewsRef = useRef<((sources: readonly SearchSource[]) => Promise<void>) | null>(null);
+  const setCurrentSourceFiles = useCallback((files: SourceFile[]) => {
+    sourceFilesRef.current = files;
+    setSourceFiles(files);
+  }, []);
   const reviewSegmentsRef = useRef(reviewSegments);
   reviewSegmentsRef.current = reviewSegments;
   const navigationDocumentsRef = useRef(navigation.documents);
@@ -1869,8 +1940,34 @@ export default function App() {
   const exportSourcesRef = useRef(exportSourcesFor(reviewSegments));
   exportSourcesRef.current = exportSourcesFor(reviewSegments);
   groupSavePendingRef.current = groupSavePending;
-  const workspaceLocked = Boolean(batchCropSession) || exportScopeOpen || previewGenerating || Boolean(exportPreview) || exportInFlight || cleanupBusy;
+  const guided = useGuidedReview({
+    segments: reviewSegments,
+    blocked: () => !reviewSessionRef.current || reviewSavePendingRef.current || Boolean(pendingReviewOperationRef.current)
+      || searchInFlightRef.current || groupSavePendingRef.current,
+    describe: describeCropForSession,
+    prefetch: prefetchCropForSession,
+    validate: async (segment, current) => {
+      if (!segmentHasValidSourceGeometry(segment, reviewGeometryStateRef.current[segment.id]))
+        await validateCropSourcePage(segment, current, reviewSegmentsRef.current);
+      if (!segmentHasValidSourceGeometry(segment, reviewGeometryStateRef.current[segment.id])
+        || (segment.mode !== 'full_page' && !isLegalRect(segment.finalRect, segment.pageWidth, segment.pageHeight)))
+        throw new Error('本轮还有无效边界或未通过校验的页面，请先修正当前片段。');
+    },
+    snapshots: (ids) => reviewCoordinator.decisionSnapshots(reviewSessionRef.current!, ids),
+    persist: persistGuidedRound,
+    select: (segment) => {
+      setReviewFilter('all'); setReviewSourceFilter(null); setReviewSortOrder('original');
+      setSelectedId(segment.id); navigation.showSegment(segment);
+    },
+    clearDraft: () => { cropDraftRef.current = null; setCropDraft(null); },
+  });
+  guidedRef.current = guided;
+  const workspaceBusy = guided.busy || linkedCropPreparing || Boolean(batchCropSession) || exportScopeOpen || previewGenerating || Boolean(exportPreview) || exportInFlight || cleanupBusy;
+  const workspaceLocked = workspaceBusy || Boolean(cropDraft);
   workspaceLockedRef.current = workspaceLocked;
+  const externalChangesLocked = workspaceLocked || guided.active || Boolean(receiptReview)
+    || receiptReviewBusy;
+  externalChangesLockedRef.current = externalChangesLocked;
 
   function feedbackFor(message: string): ActionFeedback {
     const normalized = message.trim();
@@ -1963,6 +2060,20 @@ export default function App() {
     return request;
   }
 
+  function inspectSourcePage(document: SourceDocument, page: number, includeCropTemplate = false,
+    priority: EngineTaskPriority = 'background', currentGuard: () => boolean = () => true): Promise<EngineInspectedPage> {
+    const epoch = previewRequestEpochRef.current;
+    const taskId = reviewTaskIdRef.current;
+    return pageInspection.get({ path: document.sourcePath, sha256: document.sourceSha256, page, pageCount: document.pageCount,
+      scope: JSON.stringify([taskId, epoch]), includeCropTemplate, priority,
+      // Completed descriptors survive a panel exit; cancelled in-flight work
+      // cannot make the next panel wait for the abandoned operation.
+      current: () => mountedRef.current && currentGuard() && epoch === previewRequestEpochRef.current
+        && taskId === reviewTaskIdRef.current && navigationDocumentsRef.current.some((source) =>
+          source.key === document.key && source.integrityStatus === 'valid'),
+    });
+  }
+
   useEffect(() => {
     folderInputRef.current?.setAttribute('webkitdirectory', '');
     folderInputRef.current?.setAttribute('directory', '');
@@ -1976,13 +2087,14 @@ export default function App() {
       previewGenerationRef.current += 1;
       previewRequestEpochRef.current += 1;
       previewRunRef.current += 1;
+      sourcePickerRequestRef.current += 1;
       searchRequestIdRef.current += 1;
       ocrCheckRequestRef.current += 1;
       ocrCheckInFlightRef.current = false;
       ocrCacheRequestRef.current += 1;
       ocrCacheInFlightRef.current = false;
       reviewRevisionRef.current += 1;
-      pagePreviewCacheRef.current.clear();
+      pagePreviewCacheRef.current.clear(); pageInspection.clear();
       pagePreviewOwnerRef.current.clear();
       pagePreviewIdentityRef.current = null;
       const current = exportPreviewRef.current;
@@ -1991,30 +2103,52 @@ export default function App() {
     };
   }, []);
 
-  useEffect(() => {
-    let active = true;
-    const requestId = ++ocrCheckRequestRef.current;
-    void (async () => {
+  const checkLocalEngineHealth = useCallback(async (): Promise<void> => {
+    if (!mountedRef.current || engineHealthInFlightRef.current) return;
+    engineHealthInFlightRef.current = true;
+    const requestId = ++engineHealthRequestRef.current;
+    engineStatusRef.current = 'checking';
+    setEngineStatus('checking');
+    setEngineStatusMessage(null);
+    try {
+      await localEngineAdapter.health();
+      if (!mountedRef.current || requestId !== engineHealthRequestRef.current) return;
+      engineStatusRef.current = 'ready';
+      setEngineStatus('ready');
+      setEngineStatusMessage(null);
+      const readableSources = sourceFilesRef.current
+        .map(sourceSelectionForFile)
+        .filter((source) => source.sourcePath.trim());
+      if (readableSources.length > 0) void prepareSourcePreviewsRef.current?.(readableSources);
+
+      const ocrRequestId = ++ocrCheckRequestRef.current;
       try {
-        await localEngineAdapter.health();
-        if (!active || !mountedRef.current) return;
-        setEngineStatus('ready');
-        try {
-          const result = await localEngineAdapter.ocrHealth(false);
-          if (!active || !mountedRef.current || requestId !== ocrCheckRequestRef.current) return;
+        const result = await localEngineAdapter.ocrHealth(false);
+        if (mountedRef.current && ocrRequestId === ocrCheckRequestRef.current) {
           setOcrState(ocrStateFromHealth(result, false));
-        } catch (error: unknown) {
-          if (!active || !mountedRef.current || requestId !== ocrCheckRequestRef.current) return;
+        }
+      } catch (error: unknown) {
+        if (mountedRef.current && ocrRequestId === ocrCheckRequestRef.current) {
           setOcrState(ocrStateFromHealthError(error));
         }
-      } catch {
-        if (active && mountedRef.current) setEngineStatus('unavailable');
       }
-    })();
-    return () => {
-      active = false;
-    };
+    } catch (error: unknown) {
+      if (!mountedRef.current || requestId !== engineHealthRequestRef.current) return;
+      engineStatusRef.current = 'unavailable';
+      setEngineStatus('unavailable');
+      setEngineStatusMessage(engineHealthFailureMessage(error));
+    } finally {
+      if (requestId === engineHealthRequestRef.current) engineHealthInFlightRef.current = false;
+    }
   }, []);
+
+  useEffect(() => {
+    void checkLocalEngineHealth();
+    return () => {
+      engineHealthRequestRef.current += 1;
+      engineHealthInFlightRef.current = false;
+    };
+  }, [checkLocalEngineHealth]);
 
   const currentTaskOcrIssue = persistentTasksEnabled
     ? ocrStateFromCurrentTask(taskPanelJob)
@@ -2284,8 +2418,10 @@ export default function App() {
       && segmentMatchesSourceDocument(visibleSegment, visibleSourceDocument)
       && segmentHasValidSourceGeometry(visibleSegment, visibleSourceGeometry),
   );
+  const guidedPreviewById = useMemo(() => new Map(guided.previewSegments.map((segment) => [segment.id, segment])), [guided.previewSegments]);
+  const visiblePreviewSegment = visibleSegment ? guidedPreviewById.get(visibleSegment.id) : undefined;
   const visibleEditorRect = visibleSegment && visibleHasSourceGeometry
-    ? safeEditorRect(visibleSegment)
+    ? cropDraft?.segmentId === visibleSegment.id ? cropDraft.rect : safeEditorRect(visiblePreviewSegment ?? visibleSegment)
     : null;
   const previewIdentityMatches = Boolean(
     activeDocument
@@ -2454,13 +2590,23 @@ export default function App() {
     && reviewSegments.every((segment) => segmentHasValidSourceGeometry(segment, sourceGeometryById[segment.id]))
     && !reviewPairingError;
   const isGroupConfirmed = groupConfirmed && groupReady && !groupSavePending && !reviewSavePending && !unsavedReviewMessage;
-  const isRunning = analysisState.phase === 'running' || (persistentTasksEnabled && (persistent.busy || batchIsActive(persistent.current)));
+  const isRunning = analysisState.phase === 'running' || receiptBatch.busy
+    || receiptBatch.phase === 'creating' || receiptBatch.phase === 'running'
+    || (persistentTasksEnabled && (persistent.busy || batchIsActive(persistent.current)));
   const editingAppliedSearch = searchEditorOpen && appliedSearch !== null;
-  const searchModificationDisabled = isRunning || groupSavePending || reviewSavePending || workspaceLocked;
+  const searchModificationDisabled = isRunning || groupSavePending || reviewSavePending || externalChangesLocked;
   // The legacy in-memory runner supports explicitly replacing an in-flight
   // search. Persistent jobs must instead be paused/cancelled before replacing.
-  const newTaskDisabled = workspaceLocked || (persistentTasksEnabled && isRunning);
-  const reviewFrozen = editingAppliedSearch || isRunning || groupSavePending || reviewSavePending || Boolean(unsavedReviewMessage) || workspaceLocked;
+  const newTaskDisabled = externalChangesLocked || (persistentTasksEnabled && isRunning);
+  const templateOperationLocked = workspaceLocked || guided.active || isRunning || receiptReviewBusy || groupSavePending || reviewSavePending
+    || receiptCalibration.reviewConfirming || receiptCalibration.writeAction !== null
+    || ['preparing', 'editing', 'previewing', 'preview', 'saving', 'uncertain'].includes(receiptCalibration.phase);
+  // A live review prevents replacing analysis inputs, but is required when
+  // previewing a template against those same results.
+  const templateChangesLocked = templateOperationLocked || Boolean(receiptReview);
+  const reviewTemplateChangesLocked = templateOperationLocked || !receiptReview
+    || !receiptCalibration.session || receiptCalibration.phase !== 'results';
+  const reviewFrozen = editingAppliedSearch || isRunning || groupSavePending || reviewSavePending || Boolean(unsavedReviewMessage) || workspaceBusy;
   const navigationDisabled = workspaceLocked || (isRunning && appliedSearch === null);
   const reviewViewControlsDisabled = navigationDisabled || isRunning || groupSavePending;
   const searchModificationDisabledReason = groupSavePending
@@ -2504,6 +2650,18 @@ export default function App() {
     const analysisError = 'error' in analysisState ? analysisState.error : undefined;
     return analysisError ? feedbackFor(`本地搜索失败：${analysisError}`) : null;
   }, [analysisNotice, analysisState]);
+  // The receipt workflow owns the active analysis phase.  Keep the legacy
+  // criteria editor available before/after a run, but collapse it while the
+  // receipt task is progressing so two independent progress surfaces do not
+  // compete for attention.
+  const receiptAnalysisInProgress = receiptBatch.busy
+    || receiptReviewBusy
+    || receiptBatch.phase === 'creating'
+    || receiptBatch.phase === 'running';
+  const sourceTaskStateLabel = !persistentTasksEnabled ? undefined
+    : receiptAnalysisInProgress ? '分析中'
+      : receiptBatch.phase === 'failed' ? '分析未完成'
+        : receiptBatch.phase === 'ready' ? '待检查' : '待分析';
   const searchEditorExpanded = searchEditorOpen || searchPanelFeedback?.kind === 'error';
   const sourcePanelFiles = sourceFiles.map((file) => {
     const sourcePath = file.path ?? file.relativePath;
@@ -2593,6 +2751,16 @@ export default function App() {
   }, [reviewTaskId, persistentTasksEnabled, exportBundleClient]);
 
   function resetReviewResults(notice?: string): void {
+    // A source replacement starts a new receipt analysis context.  Clear the
+    // schema-2 receipt job as well as the legacy review state; otherwise the
+    // right rail can keep showing the previous bank's result count while the
+    // newly selected PDF is already displayed in the preview.
+    receiptBatchController.clear();
+    autoOpenReceiptRef.current = false;
+    receiptReviewRequestRef.current += 1;
+    receiptReviewLoadingRef.current = false;
+    setReceiptReview(null);
+    setReceiptReviewBusy(false);
     setTaskPanelRequest(null);
     closeBatchCrop(true);
     setExportScopeOpen(false);
@@ -2609,7 +2777,8 @@ export default function App() {
     reviewRevisionRef.current += 1;
     previewGenerationRef.current += 1;
     previewRequestEpochRef.current += 1;
-    pagePreviewCacheRef.current.clear();
+    setPreviewRequestEpoch(previewRequestEpochRef.current);
+    pagePreviewCacheRef.current.clear(); pageInspection.clear();
     pagePreviewOwnerRef.current.clear();
     pagePreviewIdentityRef.current = null;
     previewRunRef.current += 1;
@@ -2655,6 +2824,8 @@ export default function App() {
   }
 
   function resetForSourceChange(notice: string, sources: readonly SearchSource[] = []): void {
+    // resetReviewResults also clears the schema-2 receipt task, so a new
+    // source set cannot briefly display the previous bank's result count.
     resetReviewResults();
     if (sources.length > 0) navigation.replaceSources(sources);
     else navigation.clearSources();
@@ -2719,7 +2890,7 @@ export default function App() {
   }
 
   async function planTaskCleanup(jobId: string): Promise<void> {
-    if (workspaceLockedRef.current || groupSavePendingRef.current || searchInFlightRef.current
+    if (externalChangesLockedRef.current || groupSavePendingRef.current || searchInFlightRef.current
       || persistentController.getSnapshot().busy || batchIsActive(persistentController.getSnapshot().current)) return;
     setCleanupOpen(true);
     setCleanupPlan(null);
@@ -2734,7 +2905,7 @@ export default function App() {
   }
 
   async function executeTaskCleanup(plan: BatchCleanup, deleteReview: boolean): Promise<void> {
-    if (workspaceLockedRef.current || groupSavePendingRef.current || searchInFlightRef.current
+    if (externalChangesLockedRef.current || groupSavePendingRef.current || searchInFlightRef.current
       || persistentController.getSnapshot().busy || batchIsActive(persistentController.getSnapshot().current)) return;
     await runCleanupOperation(async () => {
       // Finish submitted saves before clearing their view identity. The native
@@ -2745,7 +2916,7 @@ export default function App() {
         sourcePickerRequestRef.current += 1;
         resetReviewResults('任务工作台已关闭；原始 PDF 和已导出文件保持不变。');
         navigation.clearSources();
-        setSourceFiles([]);
+        setCurrentSourceFiles([]);
         dispatchAnalysis({ type: 'sources_replaced' });
       }
       try {
@@ -2763,7 +2934,7 @@ export default function App() {
   }
 
   async function maintainTaskStorage(): Promise<void> {
-    if (workspaceLockedRef.current || groupSavePendingRef.current || searchInFlightRef.current
+    if (externalChangesLockedRef.current || groupSavePendingRef.current || searchInFlightRef.current
       || persistentController.getSnapshot().busy || batchIsActive(persistentController.getSnapshot().current)) return;
     await runCleanupOperation(async () => {
       const result = cleanupData(await persistentController.client.maintainStorage());
@@ -2781,7 +2952,7 @@ export default function App() {
     // extra render request before the explicit analysis flow.
     if (
       readableSources.length === 0
-      || engineStatus !== 'ready'
+      || engineStatusRef.current !== 'ready'
       || typeof window === 'undefined'
       || !('__TAURI_INTERNALS__' in window)
     ) return;
@@ -2789,7 +2960,7 @@ export default function App() {
     for (const source of readableSources) {
       try {
         const metadata = await localEngineAdapter.inspectPdf(source.sourcePath);
-        if (requestId !== sourcePickerRequestRef.current || workspaceLockedRef.current) return;
+        if (!mountedRef.current || requestId !== sourcePickerRequestRef.current || externalChangesLockedRef.current) return;
         documents.push({
           key: sourceDocumentKey(source.sourcePath, metadata.source_sha256),
           name: source.name,
@@ -2799,21 +2970,30 @@ export default function App() {
           integrityStatus: 'valid',
         });
       } catch (error: unknown) {
-        if (requestId !== sourcePickerRequestRef.current) return;
+        if (!mountedRef.current || requestId !== sourcePickerRequestRef.current) return;
         setSourceNoticeMessage(error instanceof Error ? error.message : '读取 PDF 元数据失败，暂时无法预览。');
         return;
       }
     }
-    if (requestId !== sourcePickerRequestRef.current || documents.length === 0) return;
+    if (!mountedRef.current || requestId !== sourcePickerRequestRef.current || documents.length === 0) return;
     commitNavigationDocuments(documents);
   }
+  prepareSourcePreviewsRef.current = prepareSourcePreviews;
 
   const commitSearchResult = useCallback((commit: SearchResultCommit): void => {
+    guidedRef.current?.reset();
     reviewCoordinator.initializeDecisions(commit.reviewSession, commit.reviewSegments, commit.automaticReviewSegments ?? commit.reviewSegments);
     reviewHistory.reset({ taskId: commit.appliedSearch.taskId, contextKey: commit.reviewSession.prepared.context_key,
       resultRevision: commit.reviewSession.original.resultRevision,
       sourceFingerprint: JSON.stringify(commit.reviewSession.original.context.sources.map((source) => [source.source_key, source.source_sha256])) });
     setReviewHistoryCount(0);
+    linkedCropSession.reset();
+    cropDraftRef.current = null;
+    setCropDraft(null);
+    linkedCropRunRef.current += 1;
+    setLinkedCropSampleId(null);
+    setLinkedCropPreparing(false);
+    setLinkedCropStatus('');
     pendingReviewOperationRef.current = null;
     reviewSavePendingRef.current = false;
     setReviewSavePending(false);
@@ -2826,7 +3006,7 @@ export default function App() {
     reviewTaskIdRef.current = commit.appliedSearch.taskId;
     reviewSessionRef.current = commit.reviewSession;
     setLegacySuggestions(commit.legacySuggestions);
-    pagePreviewCacheRef.current.clear();
+    pagePreviewCacheRef.current.clear(); pageInspection.clear();
     pagePreviewOwnerRef.current.clear();
     pagePreviewIdentityRef.current = null;
     clearExportPreview();
@@ -2856,7 +3036,7 @@ export default function App() {
     setAppliedSearch(commit.appliedSearch);
     setSearchDraft(cloneSearchSettings(commit.appliedSearch));
     setSearchEditorOpen(false);
-  }, [clearExportPreview, commitNavigationDocuments, reviewCoordinator, reviewHistory]);
+  }, [clearExportPreview, commitNavigationDocuments, reviewCoordinator, reviewHistory, linkedCropSession]);
 
   const loadLegacySuggestions = useCallback(async (taskId: string, isCurrent: () => boolean): Promise<EngineReviewSegment[]> => {
     const response = await engineProcessSemaphore.run(
@@ -2868,7 +3048,7 @@ export default function App() {
   }, []);
 
   const loadPersistentReview = useCallback(async (job: BatchJobSnapshot): Promise<void> => {
-    if (workspaceLockedRef.current || groupSavePendingRef.current || searchInFlightRef.current
+    if (externalChangesLockedRef.current || groupSavePendingRef.current || searchInFlightRef.current
       || job.deletion_pending || !['ready_for_review', 'archived'].includes(job.state) || !job.result_revision) return;
     persistentLoadAbortRef.current?.abort();
     const abort = new AbortController();
@@ -2900,7 +3080,7 @@ export default function App() {
       }
       assertCurrent(isCurrent);
       const merged = mergeCompatibleReviews(mapped.segments, session.prepared);
-      setSourceFiles(persistentSourceFiles(job));
+      setCurrentSourceFiles(persistentSourceFiles(job));
       commitSearchResult({ appliedSearch: { criteria: job.criteria, matchMode: job.match_mode, taskId: job.id },
         reviewSession: session, legacySuggestions: {}, documents: mapped.documents, engineMatches: mapped.matches,
         evidenceById: mapped.evidenceById, reviewSegments: merged.segments, automaticReviewSegments: mapped.segments, sourceGeometryById: mapped.geometryById,
@@ -2908,16 +3088,17 @@ export default function App() {
       dispatchAnalysis({ type: 'run_succeeded' });
       setAnalysisNoticeMessage(`任务已载入：${merged.segments.length} 个审核片段。${session.prepared.segments.length > 0
         ? `已恢复 ${session.prepared.segments.length} 个审核决定。` : ''}`);
-      setTaskHistoryOpen(false);
+      setTemplateManagerOpen(false);
     } catch (error) {
       if (mountedRef.current && !abort.signal.aborted && requestId === searchRequestIdRef.current) {
         const message = integrityRevision !== sourceIntegrityRevisionRef.current
           ? '原始文件的校验状态已变化，请重新载入任务。'
           : error instanceof Error ? error.message : '审核结果载入失败。';
-        setAnalysisNoticeMessage(`审核结果载入失败：${message} 已完成的任务仍保留，可在历史任务中重新载入。`);
+        const recovery = error instanceof BatchClientError && error.code === 'computation_version_changed'
+          ? '历史任务和审核决定仍保留；请使用原始 PDF 开始新的分析任务。'
+          : '当前结果载入失败，请使用原始 PDF 重新分析。';
+        setAnalysisNoticeMessage(`审核结果载入失败：${message} ${recovery}`);
         dispatchAnalysis({ type: 'run_failed', error: message });
-        setTaskPanelView('current');
-        setTaskHistoryOpen(true);
       }
     } finally {
       if (requestId === searchRequestIdRef.current) {
@@ -2937,8 +3118,17 @@ export default function App() {
     }
   }, [loadPersistentReview, persistent.busy, persistent.current, persistentTasksEnabled]);
 
+  useEffect(() => {
+    const job = receiptBatch.job;
+    if (!autoOpenReceiptRef.current || receiptBatch.busy || !job
+      || !['ready_for_review', 'archived'].includes(job.state) || !job.result_revision
+      || receiptReview || receiptReviewBusy) return;
+    autoOpenReceiptRef.current = false;
+    void openReceiptReview();
+  }, [receiptBatch.busy, receiptBatch.job, receiptReview, receiptReviewBusy]);
+
   async function selectPersistentTask(id: string): Promise<void> {
-    if (workspaceLockedRef.current || groupSavePendingRef.current || searchInFlightRef.current
+    if (externalChangesLockedRef.current || groupSavePendingRef.current || searchInFlightRef.current
       || persistentController.getSnapshot().busy || batchIsActive(persistentController.getSnapshot().current)) return;
     resetReviewResults();
     navigation.clearSources();
@@ -2946,9 +3136,8 @@ export default function App() {
     const job = await persistentController.select(id);
     if (!job || !mountedRef.current) return;
     setTaskPanelRequest(null);
-    setTaskPanelView('current');
     const files = persistentSourceFiles(job);
-    setSourceFiles(files);
+    setCurrentSourceFiles(files);
     setSearchDraft({ criteria: job.criteria, matchMode: job.match_mode });
     navigation.replaceSources(files.map(sourceSelectionForFile));
     if (job.state === 'ready_for_review' || job.state === 'archived') await loadPersistentReview(job);
@@ -2956,14 +3145,14 @@ export default function App() {
   }
 
   async function relocatePersistentSource(sourceId: string): Promise<void> {
-    if (workspaceLockedRef.current || groupSavePendingRef.current || searchInFlightRef.current) return;
+    if (externalChangesLockedRef.current || groupSavePendingRef.current || searchInFlightRef.current) return;
     const before = persistentController.getSnapshot().current;
     if (!before || batchIsActive(before)) return;
     try {
       const picked = await localEngineAdapter.pickPdfFiles(appSettingsRef.current.lastInputDirectory);
       if (picked.files.length === 0) return;
       if (picked.files.length !== 1) throw new Error('请一次选择一份内容相同的原始 PDF。');
-      if (persistentController.getSnapshot().current !== before || workspaceLockedRef.current) return;
+      if (persistentController.getSnapshot().current !== before || externalChangesLockedRef.current) return;
       await persistentController.relocate(sourceId, picked.files[0]!);
       // Reload selection through the same invalidation path as a task switch.
       const relocated = persistentController.getSnapshot().current;
@@ -2973,38 +3162,130 @@ export default function App() {
     } catch (error) { setAnalysisNoticeMessage(error instanceof Error ? error.message : '定位原始文件失败。'); }
   }
 
-  const runPersistentSearch = useCallback(async (files: SourceFile[], draft: SearchSettings): Promise<void> => {
-    if (workspaceLockedRef.current || groupSavePendingRef.current || searchInFlightRef.current
-      || batchIsActive(persistentController.getSnapshot().current) || persistentController.getSnapshot().busy) return;
-    const criteria = normalizeSearchCriteria(draft.criteria);
-    if (!criteria || engineStatus !== 'ready') return;
+  // Every new desktop analysis uses the receipt pipeline and a frozen template choice.
+  const runReceiptBatchAnalysis = async (files = sourceFiles, draft = searchDraft): Promise<void> => {
+    const current = receiptBatchController.getSnapshot();
+    if (!persistentTasksEnabled || externalChangesLockedRef.current || groupSavePendingRef.current
+      || searchInFlightRef.current || current.busy || current.phase === 'running'
+      || batchIsActive(persistentController.getSnapshot().current) || persistentController.getSnapshot().busy
+      || engineStatus !== 'ready') return;
     const sources = files.filter((file) => file.path?.trim()).map((file) => ({ source_path: file.path!.trim(), name: file.name }));
-    if (sources.length === 0) return;
+    if (!sources.length) return;
+    const criteria = normalizeSearchCriteria(draft.criteria);
+    if (receiptProcessingMode === 'search' && !criteria) {
+      setAnalysisNoticeMessage('请输入至少一个关键词后再开始分析。');
+      return;
+    }
+    const processing_options = receiptProcessingMode === 'split_all'
+      ? { processing_mode: 'split_all' as const, criteria: null }
+      : { processing_mode: 'search' as const, criteria: criteria! };
     sourcePickerRequestRef.current += 1;
+    resetReviewResults();
+    setSearchDraft(cloneSearchSettings(draft));
+    setTemplateManagerOpen(false);
+    dispatchAnalysis({ type: 'sources_replaced' });
     searchInFlightRef.current = true;
-    setTaskPanelRequest({ previousId: persistentController.getSnapshot().current?.id ?? null });
-    setTaskPanelView('current');
-    setTaskHistoryOpen(true);
-    setAnalysisNotice(null);
-    dispatchBatchFeedback({ type: 'clear' });
+    autoOpenReceiptRef.current = true;
+    const requestId = searchRequestIdRef.current;
     try {
-      searchCriteriaClauses(criteria);
-      const history = recordSearchKeywordHistory(keywordHistoryRef.current, criteria);
-      keywordHistoryRef.current = history;
-      setKeywordHistory(history);
-      const running = await persistentController.create({ name: `${sources[0]!.name}${sources.length > 1 ? ` 等 ${sources.length} 份 PDF` : ''}`,
-        sources, criteria, match_mode: draft.matchMode });
-      if (running) autoOpenJobRef.current = running.id;
+      if (criteria && receiptProcessingMode === 'search') {
+        const history = recordSearchKeywordHistory(keywordHistoryRef.current, criteria);
+        keywordHistoryRef.current = history;
+        setKeywordHistory(history);
+      }
+      await receiptBatchController.createAndStart({
+        name: `${sources[0]!.name}${sources.length > 1 ? ` 等 ${sources.length} 份 PDF` : ''}`,
+        sources, processing_options, match_mode: draft.matchMode === 'fuzzy' ? 'fuzzy' : 'exact',
+        ...(selectedLayoutTemplate ? { layout_template_id: selectedLayoutTemplate.id } : {}),
+      });
+    } finally {
+      if (requestId === searchRequestIdRef.current) searchInFlightRef.current = false;
+    }
+  };
+
+  function selectLayoutTemplate(template: LayoutTemplate | null): void {
+    if (templateChangesLocked || searchInFlightRef.current || (template && !template.active)) return;
+    if (selectedLayoutTemplate?.id !== template?.id) {
+      const draft = cloneSearchSettings(searchDraft);
+      resetReviewResults();
+      setSearchDraft(draft);
+      dispatchAnalysis({ type: 'sources_replaced' });
+      setSelectedLayoutTemplate(template);
+      setAnalysisNoticeMessage(template
+        ? `已选择“${layoutTemplateName(template)}”，开始分析后校验并应用匹配的栏位。`
+        : '已改为自动匹配版式模板，请开始分析。');
+    }
+    setTemplateManagerOpen(false);
+  }
+
+  function handleReceiptProcessingModeChange(mode: ReceiptBatchProcessingMode): void {
+    if (mode === receiptProcessingMode || externalChangesLockedRef.current
+      || searchInFlightRef.current || receiptBatch.busy
+      || receiptBatch.phase === 'creating' || receiptBatch.phase === 'running') return;
+    const hasExistingWork = Boolean(
+      receiptBatch.job || receiptBatch.busy || appliedSearch || reviewSegments.length > 0,
+    );
+    if (hasExistingWork && typeof window !== 'undefined' && !window.confirm(
+      '切换处理方式后需要重新分析。当前输入的关键词草稿会保留，已有结果不会自动改变。是否继续？',
+    )) return;
+    if (hasExistingWork) {
+      const draft = cloneSearchSettings(searchDraft);
+      // The previous job remains in history, but its ready state must not
+      // replace the new mode's analyse action. Source navigation is separate
+      // from review state and keeps the already verified PDF available.
+      resetReviewResults();
+      setSearchDraft(draft);
+      dispatchAnalysis({ type: 'sources_replaced' });
+    }
+    setReceiptProcessingMode(mode);
+    setAnalysisNoticeMessage(mode === 'search'
+      ? '已切换为按关键词提取；关键词草稿已保留，请重新分析。'
+      : '已切换为分割全部回单；关键词草稿已保留，请重新分析。');
+  }
+
+  const openReceiptReview = useCallback(async (): Promise<void> => {
+    const job = receiptBatchController.getSnapshot().job;
+    if (!job || !['ready_for_review', 'archived'].includes(job.state) || !job.result_revision || receiptReviewBusy) return;
+    const jobId = job.id;
+    const resultRevision = job.result_revision;
+    const requestId = ++receiptReviewRequestRef.current;
+    receiptReviewLoadingRef.current = true;
+    setReceiptReviewBusy(true);
+    setAnalysisNoticeMessage('正在载入回单审核结果并核验来源…');
+    try {
+      const prepared = await receiptBatchController.client.prepareReview(job);
+      const currentAfterPrepare = receiptBatchController.getSnapshot().job;
+      if (requestId !== receiptReviewRequestRef.current || !currentAfterPrepare || currentAfterPrepare.id !== jobId || currentAfterPrepare.result_revision !== resultRevision) return;
+      const items = await receiptBatchController.client.loadAllReviewPages(prepared);
+      const currentAfterLoad = receiptBatchController.getSnapshot().job;
+      if (requestId !== receiptReviewRequestRef.current || !currentAfterLoad || currentAfterLoad.id !== jobId || currentAfterLoad.result_revision !== resultRevision) return;
+      // Starting analysis can supersede the initial metadata inspection.
+      // Rebuild source navigation from this freshly verified binding so
+      // returning to analysis never leaves a selected PDF without a preview.
+      commitNavigationDocuments(prepared.binding.job.sources.flatMap((source): SourceDocument[] => {
+        if (!source.sha256 || source.page_count === null || source.state !== 'verified') return [];
+        return [{ key: sourceDocumentKey(source.access_path, source.sha256), name: source.name,
+          sourcePath: source.access_path, sourceSha256: source.sha256.toLowerCase(),
+          pageCount: source.page_count, integrityStatus: 'valid' }];
+      }));
+      setReceiptWorkflowStep(2);
+      setReceiptReview({ prepared, items });
+      setAnalysisNoticeMessage(`已载入 ${items.length} 个回单候选，可先检查版式再决定是否微调。`);
     } catch (error) {
-      setAnalysisNoticeMessage(error instanceof Error ? error.message : '创建任务失败。');
-    } finally { searchInFlightRef.current = false; }
-  }, [engineStatus, persistentController]);
+      if (requestId === receiptReviewRequestRef.current) setAnalysisNoticeMessage(error instanceof Error ? `回单审核结果载入失败：${error.message}` : '回单审核结果载入失败。');
+    } finally {
+      if (requestId === receiptReviewRequestRef.current) {
+        receiptReviewLoadingRef.current = false;
+        setReceiptReviewBusy(false);
+      }
+    }
+  }, [commitNavigationDocuments, receiptBatchController, receiptReviewBusy]);
 
   const runSearch = useCallback(async (files: SourceFile[], rawDraft: SearchSettings, retryFailed = false) => {
-    if (persistentTasksEnabled) return runPersistentSearch(files, rawDraft);
+    if (persistentTasksEnabled) return runReceiptBatchAnalysis(files, rawDraft);
     const criteria = normalizeSearchCriteria(rawDraft.criteria);
     const mode = rawDraft.matchMode;
-    if (workspaceLockedRef.current || groupSavePendingRef.current || searchInFlightRef.current) return;
+    if (externalChangesLockedRef.current || groupSavePendingRef.current || searchInFlightRef.current) return;
     // An explicit analysis run supersedes any still-pending pre-analysis
     // metadata request. Otherwise a late preview commit could advance the
     // navigation integrity revision while the search transaction is running.
@@ -3293,7 +3574,7 @@ export default function App() {
         setAnalysisLoading(false);
       }
     }
-  }, [appliedSearch, batchRunner, commitNavigationDocuments, commitSearchResult, engineStatus, loadLegacySuggestions, markSourceChanged, reviewCoordinator, persistentTasksEnabled, runPersistentSearch]);
+  }, [appliedSearch, batchRunner, commitNavigationDocuments, commitSearchResult, engineStatus, loadLegacySuggestions, markSourceChanged, reviewCoordinator, persistentTasksEnabled, runReceiptBatchAnalysis]);
 
   useEffect(() => {
     const document = navigation.activeDocument;
@@ -3549,7 +3830,10 @@ export default function App() {
     selectedSourceGeometry?.matchValid,
     selectedSourceGeometry?.pageCountMatch,
     selectedSourceGeometry?.pageValid,
-    selectedSourceGeometry?.previewStatus,
+    // A metadata check completing while the visible image is still rendering
+    // must not cancel/restart that physical-page request. Invalid geometry is
+    // still an effect transition; pending -> valid is only an action gate.
+    selectedSourceGeometry?.previewStatus === 'invalid',
   ]);
 
   useEffect(() => {
@@ -3705,10 +3989,7 @@ export default function App() {
         const geometry = sourceGeometryById[segment.id];
         if (!geometry) return { segment, document, status: 'invalid', reason: 'dimensions' };
         try {
-          const preview = await cachedPagePreview(
-            document, segment.sourcePage, previewGeneration,
-            previewRequestEpochRef.current, 'background',
-          );
+          const preview = await inspectSourcePage(document, segment.sourcePage);
           if (
             typeof preview.source_sha256 === 'string'
             && preview.source_sha256.toLowerCase() !== document.sourceSha256.toLowerCase()
@@ -3752,7 +4033,7 @@ export default function App() {
             segment,
             document,
             status: 'pending',
-            error: error instanceof Error ? error.message : '页面预览生成失败',
+            error: error instanceof Error ? error.message : '页面核验失败',
           };
         }
       })().then(applyResult);
@@ -3763,7 +4044,7 @@ export default function App() {
   }, [engineStatus, isRunning, navigation.documents, reviewSegments, sourceGeometryById]);
 
   function appendSourceFiles(files: SourceFile[]): void {
-    if (workspaceLockedRef.current || files.length === 0) return;
+    if (externalChangesLockedRef.current || files.length === 0) return;
     const currentSources = sourceFiles.map(sourceSelectionForFile);
     const incomingSources = files.map(sourceSelectionForFile);
     const mergedSources = appendUniqueSources(currentSources, incomingSources);
@@ -3774,18 +4055,18 @@ export default function App() {
       setSourceNoticeMessage(`所选 PDF 均已在当前任务中，未添加重复文件。`);
       return;
     }
-    setSourceFiles(mergedFiles);
+    setCurrentSourceFiles(mergedFiles);
     const readableSources = mergedSources.filter((source) => source.sourcePath.trim());
     const firstFile = files[0];
     resetForSourceChange(
-      `已添加 ${addedCount} 个 PDF${duplicateCount > 0 ? `，已去除 ${duplicateCount} 个重复路径` : ''}，任务状态为“待处理”。${firstFile.path ? '' : '当前运行环境未提供文件路径，请在桌面应用中选择文件。'}`,
+      `当前共 ${mergedFiles.length} 份 PDF${duplicateCount > 0 ? `，已跳过 ${duplicateCount} 个重复路径` : ''}。${firstFile.path ? '' : '当前运行环境未提供文件路径，请在桌面应用中选择文件。'}`,
       readableSources,
     );
     void prepareSourcePreviews(readableSources);
   }
 
   function replaceSourceFiles(files: SourceFile[]): void {
-    if (workspaceLockedRef.current || files.length === 0) return;
+    if (externalChangesLockedRef.current || files.length === 0) return;
     const uniqueFiles: SourceFile[] = [];
     const seen = new Set<string>();
     for (const file of files) {
@@ -3796,7 +4077,7 @@ export default function App() {
     }
     if (uniqueFiles.length === 0) return;
     const sources = uniqueFiles.map(sourceSelectionForFile);
-    setSourceFiles(uniqueFiles);
+    setCurrentSourceFiles(uniqueFiles);
     resetForSourceChange(
       `已选择 ${uniqueFiles.length} 个 PDF，任务状态为“待处理”。${uniqueFiles[0]?.path ? '' : '当前运行环境未提供文件路径，请在桌面应用中选择文件。'}`,
       sources.filter((source) => source.sourcePath.trim()),
@@ -3805,10 +4086,11 @@ export default function App() {
   }
 
   async function openPicker(mode: PickerMode, append = false): Promise<void> {
-    if (workspaceLockedRef.current) return;
+    if (externalChangesLockedRef.current) return;
     pickerAppendRef.current = append;
     setSourceNoticeMessage(mode === 'folder' ? '请选择一个文件夹；只会读取其中的 PDF 文件。' : '请选择一个或多个 PDF；原始文件仍保留在原位置。');
-    if (engineStatus === 'ready') {
+    const desktopRuntime = isTauriDesktopRuntime();
+    if (desktopRuntime || engineStatus === 'ready') {
       try {
         const pickerResult = mode === 'folder'
           ? await localEngineAdapter.pickPdfFolder(appSettingsRef.current.lastInputDirectory)
@@ -3816,7 +4098,7 @@ export default function App() {
         // The native picker can resolve after the user has entered final PDF
         // preview. Re-check the synchronous lock before touching any state or
         // falling back to the browser input.
-        if (workspaceLockedRef.current) return;
+        if (externalChangesLockedRef.current) return;
         const paths = pickerResult.files;
         if (paths.length === 0) {
           setSourceNoticeMessage('已取消选择，当前任务保持不变。');
@@ -3841,26 +4123,34 @@ export default function App() {
         if (paths.length > 0 && selectedDirectory) {
           updateAppSettings({ ...appSettingsRef.current, lastInputDirectory: selectedDirectory });
         }
-        if (uniquePaths.length < paths.length) setSourceNoticeMessage(`已去除 ${paths.length - uniquePaths.length} 个重复路径，保留 ${files.length} 个 PDF。`);
+        if (uniquePaths.length < paths.length) setSourceNoticeMessage(`本次已跳过 ${paths.length - uniquePaths.length} 个重复路径。`);
         return;
       } catch {
-        if (workspaceLockedRef.current) return;
+        if (externalChangesLockedRef.current) return;
+        if (desktopRuntime) {
+          setSourceNoticeMessage(mode === 'folder'
+            ? '桌面文件夹选择器暂不可用，请重试或重新启动应用。'
+            : '桌面文件选择器暂不可用，请重试或重新启动应用。');
+          return;
+        }
         setSourceNoticeMessage('原生选择器不可用，已切换到浏览器文件选择。');
       }
     }
-    (mode === 'folder' ? folderInputRef : pdfInputRef).current?.click();
+    if (!desktopRuntime) (mode === 'folder' ? folderInputRef : pdfInputRef).current?.click();
   }
 
   function startNewTask(): void {
-    if (workspaceLockedRef.current || newTaskDisabled) return;
-    setTaskHistoryOpen(false);
-    setSourceFiles([]);
+    if (externalChangesLockedRef.current || newTaskDisabled) return;
+    setTemplateManagerOpen(false);
+    setSelectedLayoutTemplate(null);
+    setReceiptProcessingMode('split_all');
+    setCurrentSourceFiles([]);
     resetForSourceChange('已创建空白审核任务，请选择 PDF 或文件夹。');
     window.setTimeout(() => void openPicker('file'), 0);
   }
 
   function handleFilesSelected(event: ChangeEvent<HTMLInputElement>, mode: PickerMode): void {
-    if (workspaceLockedRef.current) {
+    if (externalChangesLockedRef.current) {
       // Always clear a late picker value so the same file can be selected
       // again after returning from final preview.
       event.target.value = '';
@@ -3883,25 +4173,36 @@ export default function App() {
   }
 
   function clearActiveSources(): void {
-    if (workspaceLockedRef.current) return;
+    if (externalChangesLockedRef.current) return;
     sourcePickerRequestRef.current += 1;
-    setSourceFiles([]);
-    resetForSourceChange('已清除当前任务的来源文件；原始文件未被删除或修改。');
+    setCurrentSourceFiles([]);
+    resetForSourceChange('');
+  }
+
+  function removeReceiptSourcesAfterExport(): void {
+    const calibration = receiptCalibrationController.getSnapshot();
+    // Only the successful export action may leave the receipt review lock.
+    // Keep the ordinary source controls locked during review and publication.
+    if (!receiptReview || workspaceLockedRef.current || isRunning
+      || receiptReviewLoadingRef.current || calibration.reviewConfirming
+      || !['results', 'saved'].includes(calibration.phase)) return;
+    sourcePickerRequestRef.current += 1;
+    setTemplateManagerOpen(false);
+    setSelectedLayoutTemplate(null);
+    setCurrentSourceFiles([]);
+    resetForSourceChange('已移除本次来源；原始 PDF 和已保存模板保留。');
   }
 
   function removeSourcePaths(sourcePaths: string[]): void {
-    if (workspaceLockedRef.current || sourcePaths.length === 0) return;
+    if (externalChangesLockedRef.current || sourcePaths.length === 0) return;
     const result = removeSourceIdentities(
       sourceFiles.map(sourceSelectionForFile),
       new Set(sourcePaths),
     );
     if (result.files.length === sourceFiles.length) return;
     const remainingFiles = materializeSourceFiles(result.files, sourceFiles);
-    setSourceFiles(remainingFiles);
-    resetForSourceChange(
-      `已从当前任务移除 ${sourceFiles.length - remainingFiles.length} 个文件；原始文件未被删除或修改。`,
-      result.files.filter((source) => source.sourcePath.trim()),
-    );
+    setCurrentSourceFiles(remainingFiles);
+    resetForSourceChange('', result.files.filter((source) => source.sourcePath.trim()));
     void prepareSourcePreviews(result.files);
   }
 
@@ -3987,7 +4288,7 @@ export default function App() {
   }
 
   function selectSegment(id: string): void {
-    if (workspaceLockedRef.current) return;
+    if (workspaceLockedRef.current || !guidedRef.current?.canSelect(id)) return;
     const segment = reviewSegments.find((item) => item.id === id);
     if (!segment) return;
     const reselecting = selectedId === id;
@@ -4068,7 +4369,7 @@ export default function App() {
     resetReviewOperationHistory();
     previewGenerationRef.current += 1;
     previewRunRef.current += 1;
-    pagePreviewCacheRef.current.clear();
+    pagePreviewCacheRef.current.clear(); pageInspection.clear();
     pagePreviewOwnerRef.current.clear();
     pagePreviewIdentityRef.current = null;
     setReviewSegments((current) => {
@@ -4087,12 +4388,6 @@ export default function App() {
     invalidateGroupConfirmation();
     setAnalysisNoticeMessage(message);
     return true;
-  }
-
-  function updateSegment(id: string, updater: (segment: ReviewSegment) => ReviewSegment): void {
-    reviewFeedbackRevisionRef.current += 1;
-    setReviewSegments((current) => current.map((segment) => segment.id === id ? updater(segment) : segment));
-    invalidateGroupConfirmation();
   }
 
   function markPagePreviewInvalid(id: string, reason: PreviewInvalidReason): void {
@@ -4169,7 +4464,11 @@ export default function App() {
   }
 
   function batchCropCurrent(snapshot: BatchCropSession): boolean {
-    return mountedRef.current && batchCropRef.current === snapshot
+    return batchCropRef.current === snapshot && cropSessionCurrent(snapshot);
+  }
+
+  function cropSessionCurrent(snapshot: BatchCropSession): boolean {
+    return mountedRef.current
       && reviewSessionRef.current === snapshot.session && reviewTaskIdRef.current === snapshot.taskId
       && reviewRevisionRef.current === snapshot.reviewRevision
       && sourceIntegrityRevisionRef.current === snapshot.sourceRevision && reviewHistory.epoch === snapshot.epoch;
@@ -4197,6 +4496,12 @@ export default function App() {
     const run = batchCropRunRef.current;
     const current = () => Boolean(snapshot && batchCropCurrent(snapshot) && run === batchCropRunRef.current);
     if (!current()) throw new StaleBatchCropError();
+    return loadCropPreview(segment, priority, current, snapshot!.all);
+  }
+
+  async function loadCropPreview(segment: ReviewSegment, priority: EngineTaskPriority,
+    current: () => boolean, all: ReviewSegment[]): Promise<string> {
+    if (!current()) throw new StaleBatchCropError();
     const document = sourceDocumentForSegment(navigationDocumentsRef.current, segment);
     if (!document || !segmentMatchesSourceDocument(segment, document)) throw new StaleBatchCropError();
     let preview: EnginePagePreview;
@@ -4215,7 +4520,7 @@ export default function App() {
     const reason = previewValidationError(preview, segment, reviewGeometryStateRef.current[segment.id]);
     if (reason) throw new Error('页面预览校验失败，不能应用裁剪。');
     const next = { ...reviewGeometryStateRef.current };
-    for (const item of snapshot!.all) {
+    for (const item of all) {
       if (item.sourcePath !== segment.sourcePath || item.sourceSha256 !== segment.sourceSha256 || item.sourcePage !== segment.sourcePage) continue;
       const geometry = next[item.id];
       if (geometry && !previewValidationError(preview, item, geometry)) next[item.id] = {...geometry,previewStatus:'valid',previewError:undefined};
@@ -4244,6 +4549,132 @@ export default function App() {
     void buildBatchCropPlan(snapshot, 'source');
   }
 
+  async function describeCropForSession(segment: ReviewSegment, current: () => boolean) {
+    if (!current()) throw new StaleBatchCropError();
+    const revision = reviewRevisionRef.current;
+    const generation = previewGenerationRef.current;
+    const document = sourceDocumentForSegment(navigationDocumentsRef.current, segment);
+    if (!document || !segmentMatchesSourceDocument(segment, document)) throw new StaleBatchCropError();
+    let result;
+    try {
+      result = await inspectSourcePage(document, segment.sourcePage, true, 'normal', current);
+    } catch (error) {
+      if (isSourceChangedError(error)) markSourceChanged(document.sourcePath, '来源PDF已变化，联动调整已取消。', document.key,
+        revision === reviewRevisionRef.current ? undefined : generation);
+      throw error;
+    }
+    if (result.page_count !== document.pageCount) {
+      markSourceChanged(document.sourcePath, '来源页数已变化，联动调整已取消。', document.key);
+      throw new StaleBatchCropError();
+    }
+    if (!current()) throw new StaleBatchCropError();
+    if (!result.crop_template) throw new Error('页面缺少版式核验结果。');
+    return { ...result, crop_template: result.crop_template };
+  }
+
+  async function prefetchCropForSession(segments: ReviewSegment[], current: () => boolean,
+    onProgress: (done: number, total: number) => void): Promise<Map<string, CropTemplatePage>> {
+    const unique = [...new Map(segments.map((segment) => [cropPageKey(segment), segment])).values()];
+    const pages = new Map<string, CropTemplatePage>();
+    let done = 0;
+    await Promise.allSettled(unique.map(async (segment) => {
+      try {
+        const page = await describeCropForSession(segment, current);
+        if (current()) pages.set(cropPageKey(segment), page);
+      } finally { if (current()) onProgress(++done, unique.length); }
+    }));
+    if (!current()) throw new StaleBatchCropError();
+    return pages;
+  }
+
+  async function validateCropSourcePage(segment: ReviewSegment, current: () => boolean, all: ReviewSegment[]): Promise<void> {
+    if (!current()) throw new StaleBatchCropError();
+    const revision = reviewRevisionRef.current;
+    const generation = previewGenerationRef.current;
+    const document = sourceDocumentForSegment(navigationDocumentsRef.current, segment);
+    if (!document || !segmentMatchesSourceDocument(segment, document)) throw new StaleBatchCropError();
+    let page;
+    try { page = await inspectSourcePage(document, segment.sourcePage, false, 'normal'); }
+    catch (error) {
+      if (isSourceChangedError(error)) markSourceChanged(document.sourcePath, '来源PDF已变化，微调已取消。', document.key,
+        revision === reviewRevisionRef.current ? undefined : generation);
+      throw error;
+    }
+    if (page.page_count !== document.pageCount) {
+      markSourceChanged(document.sourcePath, '来源页数已变化，微调已取消。', document.key);
+      throw new StaleBatchCropError();
+    }
+    if (!current()) throw new StaleBatchCropError();
+    if (previewValidationError(page, segment, reviewGeometryStateRef.current[segment.id]))
+      throw new Error('来源页面校验失败，不能应用裁剪。');
+    const next = { ...reviewGeometryStateRef.current };
+    for (const item of all) {
+      if (cropPageKey(item) !== cropPageKey(segment)) continue;
+      const geometry = next[item.id];
+      if (geometry && !previewValidationError(page, item, geometry))
+        next[item.id] = { ...geometry, previewStatus: 'valid', previewError: undefined };
+    }
+    reviewGeometryStateRef.current = next;
+    setSourceGeometryById(next);
+  }
+
+  async function saveLinkedCrop(sample: ReviewSegment): Promise<void> {
+    const session = reviewSessionRef.current;
+    if (!session || !reviewTaskId || reviewSavePendingRef.current || pendingReviewOperationRef.current) return;
+    if (!reviewHistory.scope) reviewHistory.reset({ taskId: reviewTaskId, contextKey: session.prepared.context_key,
+      resultRevision: session.original.resultRevision,
+      sourceFingerprint: JSON.stringify(session.original.context.sources.map((source) => [source.source_key, source.source_sha256])) });
+    const snapshot: BatchCropSession = { sample: structuredClone(sample), all: structuredClone(reviewSegmentsRef.current),
+      expected: reviewCoordinator.decisionSnapshots(session, reviewSegmentsRef.current.map((item) => item.id)),
+      filteredIds: new Set(), session, taskId: reviewTaskId, reviewRevision: reviewRevisionRef.current,
+      sourceRevision: sourceIntegrityRevisionRef.current, epoch: reviewHistory.epoch };
+    const run = ++linkedCropRunRef.current;
+    const current = () => run === linkedCropRunRef.current && cropSessionCurrent(snapshot);
+    workspaceLockedRef.current = true;
+    reviewFrozenRef.current = true;
+    setLinkedCropPreparing(true);
+    setLinkedCropStatus('正在核对出具银行与单张版式…');
+    try {
+      const plan = await prepareBatchCrop(sample, snapshot.all, {
+        isCurrent: current,
+        linkedSnapshots: linkedCropSession.membersFor(sample.id),
+        unreviewedIds: new Set(snapshot.expected.filter((item) => item.recordRevision === 0).map((item) => item.decision.id)),
+        onProgress: setLinkedCropStatus,
+        describe: (segment) => describeCropForSession(segment, current),
+        validate: async (segment) => {
+          if (!segmentHasValidSourceGeometry(segment, reviewGeometryStateRef.current[segment.id])) {
+            await validateCropSourcePage(segment, current, snapshot.all);
+          }
+        },
+      });
+      if (!current()) return;
+      const segments = [sample, ...plan.applicable.map((item) => item.after)];
+      const skipped = plan.skipped.filter((item) => item.segment.id !== sample.id);
+      const reasons = [...new Set(skipped.map((item) => item.reason))].join('；');
+      const message = `微调已保存，同步 ${plan.applicable.length} 个同银行同版式候选，跳过 ${skipped.length} 个。`
+        + (reasons ? `跳过原因：${reasons}` : '同步候选仍需审核，可整批撤销。');
+      const operation: PendingReviewOperation = { kind: 'batch_crop', session, taskId: snapshot.taskId,
+        epoch: snapshot.epoch, sourceRevision: snapshot.sourceRevision, segments: structuredClone(segments),
+        validationSegments: structuredClone(segments),
+        expected: segments.map((segment) => snapshot.expected.find((item) => item.decision.id === segment.id)!),
+        linkedTransition: linkedCropSession.transition(segments, sample.id), message };
+      const saved = await runReviewOperation(operation);
+      if (mountedRef.current && run === linkedCropRunRef.current) {
+        setLinkedCropStatus(saved ? message : '联动保存未完成，请重试或放弃未保存修改。');
+      }
+    } catch (error) {
+      if (!current()) return;
+      // A failed layout check has not written any decisions. Keep the final
+      // draft available for another attempt or cancellation.
+      const draft = { segmentId: sample.id, rect: { ...sample.finalRect! } };
+      cropDraftRef.current = draft;
+      setCropDraft(draft);
+      setLinkedCropStatus(error instanceof Error ? `联动未保存：${error.message}。可再次完成微调或取消。` : '联动准备失败，可再次完成微调或取消。');
+    } finally {
+      if (mountedRef.current && run === linkedCropRunRef.current) setLinkedCropPreparing(false);
+    }
+  }
+
   async function buildBatchCropPlan(snapshot: BatchCropSession, scope: 'source' | 'filtered'): Promise<void> {
     const run = ++batchCropRunRef.current;
     const current = () => batchCropCurrent(snapshot) && run === batchCropRunRef.current;
@@ -4255,25 +4686,7 @@ export default function App() {
       const plan = await prepareBatchCrop(snapshot.sample, targets, {
         isCurrent:current,
         onProgress:setBatchCropProgress,
-        describe:async (segment) => {
-          let result;
-          try {
-            result = await engineProcessSemaphore.run(() => localEngineAdapter.describeCropPage(segment.sourcePath,segment.sourcePage,segment.sourceSha256),current,'background');
-          } catch (error) {
-            if (current() && isSourceChangedError(error)) {
-              const document = sourceDocumentForSegment(navigationDocumentsRef.current, segment);
-              if (document) markSourceChanged(document.sourcePath, '来源PDF已变化，批量调整已取消。', document.key);
-            }
-            throw error;
-          }
-          if (!current()) throw new StaleBatchCropError();
-          const document = sourceDocumentForSegment(navigationDocumentsRef.current, segment);
-          if (!document || result.page_count !== document.pageCount) {
-            if (document) markSourceChanged(document.sourcePath, '来源页数已变化，批量调整已取消。', document.key);
-            throw new StaleBatchCropError();
-          }
-          return result;
-        },
+        describe: (segment) => describeCropForSession(segment, current),
         validate:async (segment) => {
           if (!segmentHasValidSourceGeometry(segment, reviewGeometryStateRef.current[segment.id])) await loadBatchCropPreview(segment,'background');
         },
@@ -4309,7 +4722,15 @@ export default function App() {
   }
 
   function resetReviewOperationHistory(): void {
+    guidedRef.current?.reset();
     reviewHistory.reset(null);
+    linkedCropSession.reset();
+    cropDraftRef.current = null;
+    setCropDraft(null);
+    linkedCropRunRef.current += 1;
+    setLinkedCropSampleId(null);
+    setLinkedCropPreparing(false);
+    setLinkedCropStatus('');
     setReviewHistoryCount(0);
     pendingReviewOperationRef.current = null;
     reviewSavePendingRef.current = false;
@@ -4331,6 +4752,7 @@ export default function App() {
 
   function operationCurrent(operation: PendingReviewOperation): boolean {
     return mountedRef.current && reviewSessionRef.current === operation.session
+      && (operation.guidedCurrent?.() ?? true)
       && reviewHistory.epoch === operation.epoch && sourceIntegrityRevisionRef.current === operation.sourceRevision
       && segmentsMatchCurrentSourceDocuments(operation.validationSegments ?? operation.segments, navigationDocumentsRef.current);
   }
@@ -4357,23 +4779,27 @@ export default function App() {
 
   async function runReviewOperation(operation: PendingReviewOperation): Promise<boolean> {
     if (reviewSavePendingRef.current || !operationCurrent(operation)) return false;
+    let saved = false;
     reviewSavePendingRef.current = true;
     setReviewSavePending(true);
     const confirmingGroup = operation.kind === 'confirm_group' && !operation.undoId;
     if (confirmingGroup) { groupSavePendingRef.current = true; setGroupSavePending(true); }
     const guard = () => operationCurrent(operation) && operationGeometryValid(operation);
+    operation.linkedTransition ??= linkedCropSession.transition(operation.segments);
     try {
       if (!guard()) throw new Error('相关页面尚未通过校验，请先预览这些片段。');
-      if (operation.undoId || operation.kind === 'batch_crop') await verifyOperationSources(operation);
+      if (operation.undoId || operation.kind === 'batch_crop' || operation.kind === 'confirm_scope') await verifyOperationSources(operation);
       if (!guard()) throw new StaleReviewSessionError();
       await reviewCoordinator.saveStrict(operation.session, operation.taskId, operation.segments, operation.expected, guard, confirmingGroup);
       if (!guard()) return false;
       const after = reviewCoordinator.decisionSnapshots(operation.session, operation.segments.map((segment) => segment.id));
       if (operation.undoId) {
         reviewHistory.completeUndo(operation.undoId, after);
+        linkedCropSession.undo(operation.undoId);
         applyReviewDecisions(operation.segments);
       } else {
-        reviewHistory.record(operation.kind, operation.expected, after);
+        const operationId = reviewHistory.record(operation.kind, operation.expected, after);
+        linkedCropSession.commit(operationId, operation.linkedTransition);
         if (operation.kind === 'batch_crop') applyReviewDecisions(operation.segments);
       }
       setReviewHistoryCount(reviewHistory.size);
@@ -4381,6 +4807,9 @@ export default function App() {
       setUnsavedReviewMessage(undefined);
       if (confirmingGroup) setGroupConfirmed(true);
       setReviewNoticeMessage(operation.message);
+      if (linkedCropSampleId !== null) setLinkedCropStatus(operation.message);
+      saved = true;
+      operation.onSaved?.();
       return true;
     } catch (error) {
       if (!operationCurrent(operation)) return false;
@@ -4393,7 +4822,9 @@ export default function App() {
       setReviewFeedback(null);
       return false;
     } finally {
-      if (operationCurrent(operation)) {
+      // A successful guided callback closes its preview plan. That correctly
+      // invalidates the plan's guard, but must still release this save's lock.
+      if (saved || operationCurrent(operation)) {
         reviewSavePendingRef.current = false;
         setReviewSavePending(false);
         groupSavePendingRef.current = false;
@@ -4402,8 +4833,21 @@ export default function App() {
     }
   }
 
+  async function persistGuidedRound(write: GuidedWrite): Promise<boolean> {
+    const session = reviewSessionRef.current;
+    const taskId = reviewTaskIdRef.current;
+    if (!session || !taskId || !write.current() || reviewSavePendingRef.current || pendingReviewOperationRef.current) return false;
+    if (!reviewHistory.scope) reviewHistory.reset({ taskId, contextKey: session.prepared.context_key,
+      resultRevision: session.original.resultRevision,
+      sourceFingerprint: JSON.stringify(session.original.context.sources.map((source) => [source.source_key, source.source_sha256])) });
+    return runReviewOperation({ kind: 'batch_crop', session, taskId, epoch: reviewHistory.epoch,
+      sourceRevision: sourceIntegrityRevisionRef.current, segments: structuredClone(write.segments),
+      expected: structuredClone(write.expected), message: write.message,
+      guidedCurrent: write.current, onSaved: write.onSaved });
+  }
+
   function submitReviewDecision(kind: ReviewOperationKind, segments: ReviewSegment[], message: string): void {
-    if (reviewFrozenRef.current || reviewSavePendingRef.current || pendingReviewOperationRef.current) return;
+    if (reviewFrozenRef.current || cropDraftRef.current || reviewSavePendingRef.current || pendingReviewOperationRef.current) return;
     const session = reviewSessionRef.current;
     if (!session || !reviewTaskId) return;
     try {
@@ -4423,7 +4867,7 @@ export default function App() {
   }
 
   function undoLastReviewOperation(): void {
-    if (reviewFrozenRef.current || reviewSavePendingRef.current || pendingReviewOperationRef.current) return;
+    if (reviewFrozenRef.current || cropDraftRef.current || reviewSavePendingRef.current || pendingReviewOperationRef.current) return;
     const previous = reviewHistory.peek();
     const session = reviewSessionRef.current;
     if (!previous || !session || !reviewTaskId) return;
@@ -4441,7 +4885,8 @@ export default function App() {
 
   async function discardUnsavedReview(): Promise<void> {
     const operation = pendingReviewOperationRef.current;
-    if (!operation || reviewSavePendingRef.current || !operationCurrent(operation) || editingAppliedSearch || workspaceLocked) return;
+    if (!operation || reviewSavePendingRef.current || !operationCurrent(operation) || editingAppliedSearch
+      || (workspaceLocked && !operation.guidedCurrent)) return;
     reviewSavePendingRef.current = true;
     setReviewSavePending(true);
     try {
@@ -4452,9 +4897,17 @@ export default function App() {
       const byId = new Map(saved.map((item) => [item.decision.id, item.decision]));
       applyReviewDecisions(reviewSegmentsRef.current.map((segment) => ({ ...segment, ...byId.get(segment.id)! })));
       // A read does not prove the failed operation succeeded and cannot rebase history.
+      linkedCropSession.discard(operation.segments.map((segment) => segment.id));
       pendingReviewOperationRef.current = null;
       setUnsavedReviewMessage(undefined);
       setReviewNoticeMessage('已放弃未保存修改，并读取当前保存的审核决定。');
+      setLinkedCropStatus('已放弃未保存修改；涉及的候选已退出联动，请重新核对后调整。');
+      if (operation.guidedCurrent) {
+        cropDraftRef.current = null; setCropDraft(null);
+        // Refresh restores durable decisions but cannot prove completion of a failed round.
+        reviewSavePendingRef.current = false; setReviewSavePending(false);
+        guidedRef.current?.reset();
+      }
     } catch (error) {
       if (operationCurrent(operation)) setUnsavedReviewMessage(error instanceof Error ? error.message : '读取审核记录失败，当前修改仍保留。');
     } finally {
@@ -4486,27 +4939,62 @@ export default function App() {
   }
 
   function handleCropChange(rect: PdfRect): void {
-    if (reviewFrozenRef.current) return;
+    if (reviewFrozenRef.current || guidedRef.current?.phase !== 'editing') return;
     if (!visibleSegment) return;
+    if (!guidedRef.current.canSelect(visibleSegment.id)) return;
     if (groupSavePending) return;
     if (!previewReadyForActionsRef.current || !visibleHasSourceGeometry || !isLegalRect(rect, visibleSegment.pageWidth, visibleSegment.pageHeight)) {
       setPreviewNoticeMessage(sourceGeometryMessage(visibleSegment));
       return;
     }
-    updateSegment(visibleSegment.id, (segment) => ({
-      ...segment,
-      finalRect: rect,
-      mode: 'manual',
-      manualAdjusted: true,
-      reviewStatus: 'confirmed',
-    }));
+    // Pointer/key gestures only change the local preview. Persist one final
+    // rectangle after the user explicitly finishes all adjustments.
+    const draft = sameRect(rect, safeEditorRect(visibleSegment)) ? null
+      : { segmentId: visibleSegment.id, rect: { ...rect } };
+    cropDraftRef.current = draft;
+    setCropDraft(draft);
+    workspaceLockedRef.current = workspaceBusy || Boolean(draft);
   }
 
   function handleCropCommit(rect: PdfRect): void {
+    handleCropChange(rect);
+  }
+
+  function cancelCropDraft(): void {
+    if (reviewSavePendingRef.current || workspaceBusy) return;
+    cropDraftRef.current = null;
+    setCropDraft(null);
+    workspaceLockedRef.current = workspaceBusy;
+  }
+
+  function previewCropDraft(): void {
+    const draft = cropDraftRef.current;
     if (reviewFrozenRef.current || !visibleSegment || !previewReadyForActionsRef.current
-      || !visibleHasSourceGeometry || !isLegalRect(rect, visibleSegment.pageWidth, visibleSegment.pageHeight)) return;
-    submitReviewDecision('crop', [{ ...visibleSegment, finalRect: rect, mode: 'manual',
-      manualAdjusted: true, reviewStatus: 'confirmed' }], '裁剪调整已保存。');
+      || !reviewSessionRef.current || !visibleHasSourceGeometry) return;
+    if (!draft) { void guided.preview(); return; }
+    if (draft.segmentId !== visibleSegment.id || !isLegalRect(draft.rect, visibleSegment.pageWidth, visibleSegment.pageHeight)) return;
+    const sample: ReviewSegment = { ...visibleSegment, finalRect: { ...draft.rect }, mode: 'manual',
+      manualAdjusted: true, reviewStatus: 'needs_review' };
+    void guided.preview(sample);
+  }
+
+  function returnToCropDraft(): void {
+    const sample = guided.backToEdit();
+    if (!sample) return;
+    const original = reviewSegmentsRef.current.find((segment) => segment.id === sample.id);
+    const rect = safeEditorRect(sample);
+    const draft = original && !sameRect(rect, safeEditorRect(original))
+      ? { segmentId: sample.id, rect: { ...rect } } : null;
+    cropDraftRef.current = draft;
+    setCropDraft(draft);
+    workspaceLockedRef.current = workspaceBusy || Boolean(draft);
+  }
+
+  function splitSingleCandidate(): void {
+    if (!visibleSegment || !previewReadyForActionsRef.current || !visibleHasSourceGeometry
+      || !isLegalRect(visibleSegment.candidateRect, visibleSegment.pageWidth, visibleSegment.pageHeight)) return;
+    submitReviewDecision('crop', [{ ...visibleSegment, finalRect: structuredClone(visibleSegment.candidateRect),
+      mode: 'manual', manualAdjusted: true, reviewStatus: 'needs_review' }], '已按单张候选分割，请核对边界后确认。');
   }
 
   function keepFullPage(): void {
@@ -4538,6 +5026,8 @@ export default function App() {
   }
 
   function validateExportTask(): string | null {
+    if (guidedRef.current?.active) return '当前正在微调，请完成或退出微调后再选择导出范围。';
+    if (cropDraftRef.current) return '微调尚未保存，请先完成微调或取消微调。';
     if (reviewSavePendingRef.current || pendingReviewOperationRef.current) return '审核修改尚未保存，请先重试保存或放弃修改。';
     const session = reviewSessionRef.current;
     const job = persistentController.getSnapshot().current;
@@ -4555,7 +5045,7 @@ export default function App() {
   }
 
   function openExportScope(): void {
-    if (reviewFrozenRef.current || exportInFlightRef.current) return;
+    if (reviewFrozenRef.current || cropDraftRef.current || exportInFlightRef.current || guidedRef.current?.active) return;
     setExportScope({ kind: 'all' });
     setExportOutputMode('merged');
     setExportOutputName(defaultExportName(appliedSearch?.criteria.include ?? []));
@@ -4670,7 +5160,7 @@ export default function App() {
 
   async function exportConfirmedPreview(): Promise<void> {
     const snapshot = exportPreviewRef.current;
-    if (!snapshot || !isCurrentExportSnapshot(snapshot)) {
+    if (guidedRef.current?.active || !snapshot || !isCurrentExportSnapshot(snapshot)) {
       if (mountedRef.current) { clearExportPreview(); setExportNotice('导出预览已失效，请重新生成。'); }
       return;
     }
@@ -4769,16 +5259,17 @@ export default function App() {
     visibleSegment
       && visibleHasSourceGeometry
       && previewReadyForActions
-      && !reviewFrozen,
+      && !reviewFrozen && !cropDraft,
   );
   const fragmentDisabledReason = selectedSegment && !visibleSegment
     ? '当前预览页无命中，请选择右侧片段继续审核'
+    : cropDraft ? '微调尚未保存，请先完成微调或取消微调。'
     : reviewFrozenReason
       ? reviewFrozenReason
     : selectedSegment && !fragmentActionsEnabled
       ? sourceGeometryMessage(selectedSegment)
       : undefined;
-  const canGeneratePreview = Boolean(reviewSegments.length && !reviewFrozen);
+  const canGeneratePreview = Boolean(reviewSegments.length && !reviewFrozen && !cropDraft);
   const canExportPreview = Boolean(
     exportPreview
       && isCurrentExportSnapshot(exportPreview)
@@ -4790,17 +5281,39 @@ export default function App() {
   // evidence wins; explicitly rechecking a known failure can clear it.
   const displayOcrState = currentTaskOcrIssue && taskOcrIssueKey !== checkedTaskOcrIssueKey
     ? currentTaskOcrIssue : ocrState;
+  const workflowStep = receiptReview ? receiptWorkflowStep
+    : persistentTasksEnabled
+      ? receiptReviewBusy || ['creating', 'running', 'ready'].includes(receiptBatch.phase) ? 2 : 1
+      : exportPreview ? 3 : appliedSearch ? 2 : 1;
 
   return (
     <main className="app-shell">
-      <input ref={pdfInputRef} type="file" accept=".pdf,application/pdf" multiple onChange={(event) => handleFilesSelected(event, 'file')} style={{ display: 'none' }} disabled={workspaceLocked || isRunning} />
-      <input ref={folderInputRef} type="file" accept=".pdf,application/pdf" multiple onChange={(event) => handleFilesSelected(event, 'folder')} style={{ display: 'none' }} disabled={workspaceLocked || isRunning} />
+      <input ref={pdfInputRef} type="file" accept=".pdf,application/pdf" multiple onChange={(event) => handleFilesSelected(event, 'file')} style={{ display: 'none' }} disabled={externalChangesLocked || isRunning} />
+      <input ref={folderInputRef} type="file" accept=".pdf,application/pdf" multiple onChange={(event) => handleFilesSelected(event, 'folder')} style={{ display: 'none' }} disabled={externalChangesLocked || isRunning} />
 
       <header className="topbar">
         <div className="brand-mark">P</div>
-        <div><div className="brand-subtitle">{APP_SUBTITLE}</div><h1>{APP_NAME}</h1></div>
+        <div className="brand-copy">
+          <div className="brand-subtitle">{APP_SUBTITLE}</div>
+          <div className="brand-title-row">
+            <h1>{APP_NAME}</h1>
+            <div className="topbar-progress"><ReceiptWorkflowSteps step={workflowStep} /></div>
+          </div>
+        </div>
         <div className="topbar-actions">
-          <span className="privacy-badge"><span className="status-dot" />{engineStatus === 'ready' ? `本地引擎已连接 · OCR ${ocrReadinessLabel(displayOcrState)}` : engineStatus === 'checking' ? '本地引擎检查中' : '本地处理不可用'}</span>
+          <span className="privacy-badge" role={engineStatus === 'unavailable' ? 'status' : undefined}>
+            <span className="status-dot" />
+            {engineStatus === 'ready' ? `本地引擎已连接 · OCR ${ocrReadinessLabel(displayOcrState)}`
+              : engineStatus === 'checking' ? '本地引擎检查中'
+                : `本地引擎不可用：${engineStatusMessage ?? '请重试。'}`}
+          </span>
+          {isTauriDesktopRuntime() && engineStatus === 'unavailable' && <button
+            className="ghost-button"
+            type="button"
+            onClick={() => void checkLocalEngineHealth()}
+          >
+            重试本地引擎
+          </button>}
           <button
             ref={settingsEntryRef}
             className="ghost-button"
@@ -4811,71 +5324,79 @@ export default function App() {
           >
             设置
           </button>
-          <button className="primary-button" type="button" aria-haspopup="dialog" aria-expanded={helpOpen} onClick={() => setHelpOpen(true)}>帮助与反馈</button>
+          <button className="ghost-button" type="button" aria-haspopup="dialog" aria-expanded={helpOpen} onClick={() => { setHelpFocusSection(undefined); setHelpOpen(true); }}>帮助与反馈</button>
         </div>
       </header>
 
-      <ResizableWorkspace resetSignal={workspaceResetSignal}>
-        {persistentTasksEnabled && taskHistoryOpen ? <TaskHistoryPanel
-          open={taskHistoryOpen}
-          view={taskPanelView}
-          onViewChange={(view) => {
-            setTaskPanelView(view);
-            if (view === 'history') void persistentController.refreshList();
+      {receiptReview?.prepared.templateChoiceIds && receiptCalibration.phase === 'results' && (
+        <div className="template-choice-notice panel" role="status">
+          <span>当前版式有多套可用模板，尚未自动套用。请选择模板后重新分析，或继续核对当前边界。</span>
+          <button type="button" className="secondary-button" disabled={receiptCalibration.reviewConfirming}
+            onClick={() => {
+              setTemplateChoiceIds(receiptReview.prepared.templateChoiceIds);
+              setReceiptReview(null);
+              setTemplateManagerContext('analysis');
+              setTemplateManagerOpen(true);
+            }}>选择版式模板</button>
+        </div>
+      )}
+      {persistentTasksEnabled && templateManagerOpen ? <LayoutTemplateManager
+          usage={templateManagerContext === 'review' ? 'current_review' : 'new_analysis'}
+          selectedTemplateId={templateManagerContext === 'review' ? null : selectedLayoutTemplate?.id ?? null}
+          candidateTemplateIds={templateManagerContext === 'review' ? undefined : templateChoiceIds}
+          disabled={templateManagerContext === 'review' ? reviewTemplateChangesLocked : templateChangesLocked}
+          onClose={() => setTemplateManagerOpen(false)}
+          onSelect={(template) => {
+            if (templateManagerContext === 'review') {
+              if (reviewTemplateChangesLocked || searchInFlightRef.current || !template.active) return;
+              setTemplateManagerOpen(false);
+              void receiptCalibrationController.applyTemplate(template.id);
+            } else selectLayoutTemplate(template);
           }}
-          pendingSources={sourcePanelFiles.map(({ name, pageCount }) => ({ name, pageCount }))}
-          onClose={() => setTaskHistoryOpen(false)}
-          jobs={persistent.jobs}
-          selectedJob={taskPanelJob}
-          loading={persistent.loading}
-          busy={persistent.busy || searchLoading || analysisLoading}
-          locked={workspaceLocked || groupSavePending}
-          error={persistent.error}
-          hasMore={persistent.nextOffset !== null}
-          onRefresh={() => { void persistentController.refreshList(); void persistentController.refreshCurrent(); }}
-          onLoadMore={() => void persistentController.refreshList(true)}
-          onSelect={(id) => void selectPersistentTask(id)}
-          onResume={() => {
-            autoOpenJobRef.current = persistent.current?.id ?? null;
-            void persistentController.resume();
+          onChanged={(template, action) => {
+            if (!selectedLayoutTemplate || (selectedLayoutTemplate.id !== template.id
+              && (!template.series_id || selectedLayoutTemplate.series_id !== template.series_id))) return;
+            if (action === 'rename') setSelectedLayoutTemplate(template);
+            else selectLayoutTemplate(null);
           }}
-          onPause={() => void persistentController.control('pause')}
-          onCancel={() => void persistentController.control('cancel')}
-          onArchive={() => void persistentController.control('archive')}
-          onLoadReview={() => { if (persistent.current) void loadPersistentReview(persistent.current); }}
-          onRelocate={(id) => void relocatePersistentSource(id)}
-          onDelete={(id) => void planTaskCleanup(id)}
-          onOpenCleanup={openCleanupStatus}
-          onNewTask={startNewTask}
-          newTaskDisabled={newTaskDisabled}
-        /> : <SourcePanel
+      /> : <ResizableWorkspace resetSignal={workspaceResetSignal} layout={receiptReview ? receiptCalibration.phase === 'results' ? 'overview' : 'calibration' : 'columns'}>
+        <SourcePanel
+          workflowStep={workflowStep}
+          taskStateLabel={sourceTaskStateLabel}
           files={sourcePanelFiles}
           activeSourcePath={navigation.activeSourcePath}
           notice={sourcePanelNotice}
           batchFeedback={batchFeedback}
-          onOpenCurrentTask={persistentTasksEnabled && (taskPanelJob || taskPanelRequest) ? () => {
-            setTaskPanelView('current'); setTaskHistoryOpen(true);
-          } : undefined}
-          onOpenHistory={persistentTasksEnabled ? () => {
-            setTaskPanelView('history'); setTaskHistoryOpen(true); void persistentController.refreshList();
-          } : undefined}
           onNewTask={startNewTask}
           newTaskDisabled={newTaskDisabled}
-          disabled={workspaceLocked || isRunning}
+          disabled={externalChangesLocked || isRunning}
           onPickFiles={() => void openPicker('file')}
           onPickFolder={() => void openPicker('folder')}
           onAddFiles={() => void openPicker('file', true)}
           onAddFolder={() => void openPicker('folder', true)}
           onSelectSource={(sourcePath) => {
-            if (workspaceLockedRef.current) return;
+            if (externalChangesLockedRef.current) return;
             navigation.selectSource(sourcePath);
           }}
           onRemoveAll={clearActiveSources}
           onRemoveSelected={removeSourcePaths}
           onRemoveSource={removeSourcePath}
-        />}
+        />
 
-        <section className="preview-column panel">
+        {receiptReview ? <ReceiptCalibrationPane state={receiptCalibration} controller={receiptCalibrationController}
+          onBack={() => setReceiptReview(null)}
+          onOpenTemplates={() => {
+            if (reviewTemplateChangesLocked || searchInFlightRef.current) return;
+            setTemplateChoiceIds(undefined);
+            setTemplateManagerContext('review');
+            setTemplateManagerOpen(true);
+          }}
+          onWorkflowStepChange={setReceiptWorkflowStep}
+          onExport={() => undefined}
+          onRemoveSources={removeReceiptSourcesAfterExport}
+          initialOutputDirectory={appSettings.lastOutputDirectory}
+          onExportSuccess={(directory) => updateAppSettings({ ...appSettingsRef.current, lastOutputDirectory: directory })}
+        /> : <section className="preview-column panel">
           <div className="editor-panel">
             {exportPreview ? <ExportPdfPreview
               files={exportPreview.bundle.files.map((file) => ({ id: file.file_id, name: file.name, pageCount: file.page_count }))}
@@ -4896,6 +5417,7 @@ export default function App() {
               onRetry={() => setExportPreviewRetry((value) => value + 1)}
             /> : <SourceDocumentPreview
                document={activeDocument}
+               onGoToPage={(page) => { if (!workspaceLockedRef.current && !guidedRef.current?.active) navigation.goToPage(page); }}
                location={previewLocation}
                pageDraft={navigation.pageDraft}
                pageInputError={navigation.pageInputError}
@@ -4906,12 +5428,12 @@ export default function App() {
                zoom={zoom}
                loading={previewLoading}
                error={centralPreviewError}
-               navigationDisabled={navigationDisabled}
-               editorDisabled={reviewFrozen || !previewReadyForActions}
-               onPrevious={navigation.previousPage}
-               onNext={navigation.nextPage}
+               navigationDisabled={navigationDisabled || guided.active}
+               editorDisabled={reviewFrozen || !previewReadyForActions || guided.phase !== 'editing'}
+               onPrevious={() => { if (!workspaceLockedRef.current && !guidedRef.current?.active) navigation.previousPage(); }}
+               onNext={() => { if (!workspaceLockedRef.current && !guidedRef.current?.active) navigation.nextPage(); }}
                onPageDraftChange={navigation.setPageDraft}
-               onPageDraftSubmit={navigation.submitPageDraft}
+               onPageDraftSubmit={() => { if (!workspaceLockedRef.current && !guidedRef.current?.active) navigation.submitPageDraft(); }}
                onPageDraftCancel={navigation.cancelPageDraft}
                onZoomOut={() => setZoom((current) => Math.max(50, current - 25))}
                onZoomIn={() => setZoom((current) => Math.min(200, current + 25))}
@@ -4920,7 +5442,7 @@ export default function App() {
               onCropCommit={handleCropCommit}
            />}
           </div>
-          {(appliedSearch || exportPreview) && (
+          {((appliedSearch && reviewSegments.length > 0) || exportPreview) && (
             <div className="preview-action-dock">
               {exportPreview ? <ReviewActionCard
                 mode="export"
@@ -4934,60 +5456,114 @@ export default function App() {
                 canExport={canExportPreview}
                 onReturn={() => void returnFromExportPreview()}
                 onExport={() => void exportConfirmedPreview()}
-              /> : <ReviewActionCard
-                mode="review"
-                // Preview generation errors are owned by the export flow, but the
-                // review card remains mounted until a preview snapshot exists.
-                // Prefer that transient export feedback here so a failed preview
-                // is visible in the same (single) action feedback region.
-                feedback={exportFeedback ?? reviewFeedback}
-                result={exportResult}
-                onOpenResult={() => void openExportDirectory()}
-                currentSegment={reviewActionSegment}
-                fragmentActionsEnabled={fragmentActionsEnabled}
-                fragmentDisabledReason={fragmentDisabledReason}
-                onKeepFullPage={keepFullPage}
-                hasLegacySuggestion={Boolean(visibleSegment && legacySuggestions[visibleSegment.id])}
-                onRestoreLegacySuggestion={restoreLegacySuggestion}
-                onConfirmCurrent={confirmCurrentSegment}
-                canConfirmGroup={groupReady && previewReadyForActions && !reviewFrozen}
-                groupSavePending={groupSavePending}
-                groupConfirmed={isGroupConfirmed}
-                unresolvedCount={unresolvedCount}
+              /> : <GuidedReviewPanel
+                phase={guided.phase}
                 totalCount={reviewSegments.length}
-                reviewFrozenReason={reviewFrozenReason}
-                onConfirmGroup={confirmResolvedGroup}
-                canGeneratePreview={canGeneratePreview}
-                previewGenerating={previewGenerating}
-                scopeSelectionEnabled
-                onGeneratePreview={openExportScope}
-                operationTools={<ReviewOperationTools
-                  onBatchCrop={openBatchCrop}
-                  batchCropDisabledReason={batchSampleError(visibleSegment) ?? (!previewReadyForActions || !visibleHasSourceGeometry ? '请等待当前页面预览完成' : undefined)}
-                  busy={reviewSavePending}
-                  frozenReason={editingAppliedSearch ? '修改完成前暂停审核' : isRunning ? '正在分析' : workspaceLocked ? '请先返回调整' : undefined}
-                  unsavedMessage={unsavedReviewMessage}
-                  historyCount={reviewHistoryCount}
-                  canUndo={reviewHistoryCount > 0}
-                  undoDisabledReason={reviewHistoryCount === 0 ? '本次任务尚无可撤销的已保存操作' : undefined}
-                  onUndo={undoLastReviewOperation}
-                  canRestoreCandidate={Boolean(canRestoreAutomaticCandidate && visibleHasSourceGeometry && previewReadyForActions)}
-                  restoreDisabledReason={canRestoreAutomaticCandidate ? fragmentDisabledReason : '当前片段没有可恢复的有效自动候选'}
-                  onRestoreCandidate={restoreAutomaticCandidate}
-                  visibleUnresolvedCount={visibleUnresolvedCount}
-                  hiddenUnresolvedCount={unresolvedCount - visibleUnresolvedCount}
-                  onNextUnresolved={() => nextUnresolvedReview()}
-                  onRevealUnresolved={() => nextUnresolvedReview(true)}
-                  onRetry={() => { const operation = pendingReviewOperationRef.current; if (operation) void runReviewOperation(operation); }}
-                  onDiscard={() => void discardUnsavedReview()}
-                />}
-              />}
+                pendingCount={unresolvedCount}
+                bankLabel={guided.bank?.label}
+                bankIndex={guided.bank ? guided.bankIndex + 1 : undefined}
+                bankCount={guided.banks.length || undefined}
+                bankConfirmedCount={guided.bankConfirmedCount}
+                bankTotalCount={guided.bank?.segmentIds.length}
+                roundNumber={guided.round?.number}
+                roundSegmentCount={guided.round?.ids.length}
+                sampleLabel={visibleSegment ? `${visibleSegment.sourceName || visibleSegment.sourcePath.split(/[\\/]/).pop()} · ${currentSegmentLabel}` : undefined}
+                dirty={Boolean(cropDraft)}
+                busy={guided.busy || reviewSavePending || isRunning}
+                actionsDisabled={Boolean(unsavedReviewMessage) || editingAppliedSearch}
+                message={editingAppliedSearch ? reviewFrozenReason
+                  : guided.phase === 'entry' || (guided.phase === 'completed' && (exportResult || reviewFeedback?.kind === 'error'))
+                    ? reviewFeedback?.message || guided.message : guided.message}
+                error={unsavedReviewMessage ?? guided.error ?? (exportFeedback?.kind === 'error' ? exportFeedback.message : undefined)}
+                undoAvailable={guided.undoAvailable && !cropDraft && !pendingReviewOperationRef.current}
+                canFinishBank={Boolean(guided.bank && guided.bankConfirmedCount === guided.bank.segmentIds.length)}
+                canExtendBank={guided.canExtendBank}
+                positionChoices={guided.positionChoices.map((choice) => {
+                  const sample = reviewSegments.find((segment) => segment.id === choice.segmentIds[0]);
+                  const bucket = Number(choice.positionKey?.slice(1));
+                  const position = bucket < 7 ? '页面上部' : bucket > 13 ? '页面下部' : '页面中部';
+                  return { key: choice.key, label: `${position}（样本：第 ${sample?.sourcePage ?? '—'} 页）`, count: choice.segmentIds.length };
+                })}
+                skippedItems={guided.previewSkipped.map((item) => {
+                  const segment = reviewSegments.find((value) => value.id === item.id);
+                  return { ...item, label: segment ? `${segment.sourceName || segment.sourcePath.split(/[\\/]/).pop()} · 第 ${segment.sourcePage} 页 / 片段 ${segment.segmentNo}` : item.id };
+                })}
+                selectedPositionKey={guided.selectedPositionKey}
+                onOpenPositions={() => { void guided.openPositions(); }}
+                onSelectPosition={guided.selectPosition}
+                onStartPosition={guided.startPosition}
+                onCancelPositions={guided.cancelPositions}
+                onEnter={() => {
+                  if (!allDocumentsValid || !reviewSetIntegrity.ok || reviewPairingError) {
+                    setReviewNoticeMessage(!allDocumentsValid ? sourceDocumentIntegrity.message
+                      : !reviewSetIntegrity.ok ? reviewSetIntegrity.message : reviewPairingError!);
+                    return;
+                  }
+                  if (selectedSegment) navigation.showSegment(selectedSegment);
+                  void guided.enter(selectedSegment?.id);
+                }}
+                onPreview={previewCropDraft}
+                onSave={() => { void guided.save(); }}
+                onBackToEdit={returnToCropDraft}
+                onCancelDraft={cancelCropDraft}
+                onNextRound={guided.next}
+                onCompleteBank={guided.completeBank}
+                onUndo={() => { if (!cropDraftRef.current) void guided.undo(); }}
+                onExit={guided.exit}
+                onHelp={() => { setHelpFocusSection('fine-tune'); setHelpOpen(true); }}
+                onExport={openExportScope}
+              >
+                {!guided.active && <ReviewExportResultSummary result={exportResult} onOpenResult={() => void openExportDirectory()} />}
+                {unsavedReviewMessage ? <div className="guided-review-recovery">
+                  <button type="button" disabled={reviewSavePending} onClick={() => {
+                    const operation = pendingReviewOperationRef.current;
+                    if (operation) void runReviewOperation(operation);
+                  }}>重试本轮保存</button>
+                  <button type="button" disabled={reviewSavePending} onClick={() => void discardUnsavedReview()}>放弃失败操作并重新核对</button>
+                </div> : guided.phase === 'editing' && !cropDraft && visibleSegment && previewReadyForActions ?
+                  <details className="guided-review-repair"><summary>当前边界不合适</summary>
+                    {isLegalRect(visibleSegment.candidateRect, visibleSegment.pageWidth, visibleSegment.pageHeight) &&
+                      <button type="button" disabled={reviewFrozen} onClick={() => handleCropChange(visibleSegment.candidateRect!)}>按单张候选分割</button>}
+                    <button type="button" disabled={reviewFrozen} onClick={() => handleCropChange({ x0: 0, y0: 0,
+                      x1: visibleSegment.pageWidth, y1: visibleSegment.pageHeight })}>调整为整页范围</button>
+                    {legacySuggestions[visibleSegment.id] && <button type="button" disabled={reviewFrozen} onClick={() => {
+                      try { handleCropChange(safeEditorRect(applyLegacyReviewSuggestion(visibleSegment, legacySuggestions[visibleSegment.id]))); }
+                      catch { setReviewNoticeMessage('历史裁剪建议与当前片段不一致，请手动调整。'); }
+                    }}>恢复历史裁剪建议</button>}
+                  </details> : null}
+              </GuidedReviewPanel>}
+
             </div>
           )}
-        </section>
+        </section>}
 
-        <aside className="results-column panel" aria-label="查找与审核">
-          <div
+        {receiptReview ? <ReceiptCalibrationNavigator state={receiptCalibration} controller={receiptCalibrationController} /> : <aside className="results-column panel" aria-label="查找与审核">
+          {persistentTasksEnabled && (
+              <ReceiptBatchEntry
+                mode={receiptProcessingMode}
+                onModeChange={handleReceiptProcessingModeChange}
+                state={receiptBatch}
+                canAnalyze={hasReadableSources && engineStatus === 'ready'}
+                showAnalyzeAction={receiptProcessingMode === 'split_all'}
+                reviewLoading={receiptReviewBusy}
+                onAnalyze={() => void runReceiptBatchAnalysis()}
+                onEnterReview={() => void openReceiptReview()}
+                onExport={() => void openReceiptReview()}
+                templateControls={<>
+                  <span>{selectedLayoutTemplate ? `已选模板：${layoutTemplateName(selectedLayoutTemplate)} · v${selectedLayoutTemplate.version}` : '版式模板：自动匹配'}</span>
+                  <button type="button" className="text-button" disabled={templateChangesLocked}
+                    onClick={() => {
+                      setTemplateChoiceIds(undefined);
+                      setTemplateManagerContext('analysis');
+                      setTemplateManagerOpen(true);
+                    }}>我的模板</button>
+                  {selectedLayoutTemplate && <button type="button" className="text-button" disabled={templateChangesLocked}
+                    onClick={() => selectLayoutTemplate(null)}>改为自动匹配</button>}
+                  <p>仅复用同银行、同凭证类型、同实际版式的已核对边界。</p>
+                </>}
+              />
+          )}
+          {!receiptAnalysisInProgress && (!persistentTasksEnabled || receiptProcessingMode === 'search') && <div
             className="search-criteria-panel-host"
             onKeyDown={(event) => {
               if (
@@ -5034,14 +5610,21 @@ export default function App() {
               onRemoveKeywordHistory={removeKeywordHistoryItem}
               onClearKeywordHistory={clearKeywordHistoryItems}
             />
-          </div>
-          {appliedSearch ? (
+          </div>}
+          {!receiptAnalysisInProgress && !receiptBatch.job && (appliedSearch ? (
             <ReviewNavigator
-              rows={reviewRows}
+              rows={guided.phase === 'preparing' ? reviewRows.filter((row) => row.id === selectedSegment?.id)
+                : guided.allowedIds ? reviewRows.filter((row) => guided.allowedIds!.has(row.id)).map((row) => ({
+                ...row, reviewStatus: guided.confirmedIds.has(row.id) || row.reviewStatus === 'blocked'
+                  ? row.reviewStatus : 'needs_review' as const,
+              })) : reviewRows}
+              guidedMode={guided.active}
+              guidedPreparing={guided.phase === 'preparing'}
+              guidedPreview={guided.phase === 'review'}
               selectedId={selectedId}
-              activeFilter={reviewFilter}
+              activeFilter={guided.phase === 'preparing' ? 'all' : reviewFilter}
               onFilterChange={changeReviewFilter}
-              sourceFilter={reviewSourceFilter}
+              sourceFilter={guided.phase === 'preparing' ? null : reviewSourceFilter}
               sortOrder={reviewSortOrder}
               sources={reviewResultSources}
               onSourceFilterChange={changeReviewSourceFilter}
@@ -5063,9 +5646,9 @@ export default function App() {
             <div className="review-navigator-empty review-workspace-guidance" role="status">
               {hasReadableSources ? '设置搜索条件并开始分析。' : '请先选择 PDF 或文件夹，再开始分析。'}
             </div>
-          )}
-        </aside>
-      </ResizableWorkspace>
+          ))}
+        </aside>}
+      </ResizableWorkspace>}
       {batchCropSession && <BatchCropDialog sample={batchCropSession.sample} scope={batchCropScope}
         plan={batchCropPlan} progress={batchCropProgress} busy={batchCropBusy} applying={batchCropApplying}
         error={batchCropError} onScopeChange={(scope) => { setBatchCropScope(scope); void buildBatchCropPlan(batchCropSession, scope); }}
@@ -5133,6 +5716,7 @@ export default function App() {
       />
       <HelpCenterDialog
         open={helpOpen}
+        focusSection={helpFocusSection}
         onClose={() => setHelpOpen(false)}
         engineStatus={engineStatus}
         ocrState={displayOcrState}

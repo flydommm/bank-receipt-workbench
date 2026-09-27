@@ -203,10 +203,11 @@ describe('BatchCropDialog', () => {
     renderDialog({ plan });
     const dialog = screen.getByRole('dialog', { name: '应用到同类片段' });
 
-    expect(within(dialog).getByText('没有可应用的同类片段。')).toBeTruthy();
+    expect(within(dialog).getByText('当前没有可应用的同类片段。')).toBeTruthy();
+    expect(within(dialog).getByText('已同步、已确认或独立调整的片段会自动跳过，无需重复应用。')).toBeTruthy();
     expect(within(dialog).getByText('版式标题不一致，无法安全套用。')).toBeTruthy();
     expect((within(dialog).getByRole('checkbox', { name: /已检查预览/ }) as HTMLInputElement).disabled).toBe(true);
-    expect((within(dialog).getByRole('button', { name: '应用到 0 个片段' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((within(dialog).getByRole('button', { name: '无需应用' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it('supports selecting a target and previous/next navigation', async () => {

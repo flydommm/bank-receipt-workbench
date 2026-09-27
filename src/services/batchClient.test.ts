@@ -120,6 +120,25 @@ describe('trusted batch review preparation', () => {
 });
 
 describe('BatchClient request boundary', () => {
+  it('skips schema-2 receipt jobs in the legacy history parser without surfacing an error', async () => {
+    const invoke = vi.fn().mockResolvedValue({ status: 'ok', data: {
+      items: [{ page_result_schema: 2, id: 'receipt-job' }],
+      offset: 0, limit: 50, total: 1, next_offset: null,
+    } });
+
+    await expect(new BatchClient(invoke).list()).resolves.toEqual({ status: 'ok', data: {
+      items: [], offset: 0, limit: 50, total: 0, next_offset: null,
+    } });
+  });
+
+  it('keeps strict validation for malformed non-receipt history pages', async () => {
+    const invoke = vi.fn().mockResolvedValue({ status: 'ok', data: {
+      items: [{ id: 'legacy-job' }], offset: 0, limit: 50, total: 1, next_offset: null,
+    } });
+
+    await expect(new BatchClient(invoke).list()).rejects.toThrow();
+  });
+
   it('injects no owner or database path and uses the Tauri batch command', async () => {
     const invoke = vi.fn().mockResolvedValue({ status: 'error', code: 'batch_conflict', message: '状态已变化' });
     const client = new BatchClient(invoke);

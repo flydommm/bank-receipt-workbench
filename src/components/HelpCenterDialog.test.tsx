@@ -2,10 +2,11 @@
 
 import userEvent from '@testing-library/user-event';
 import { StrictMode } from 'react';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { copyFeedbackReport, saveFeedbackReport } from '../services/localFeedback';
+import { copyFeedbackContact, openFeedbackChannel } from '../services/feedbackChannels';
 import HelpCenterDialog, { type HelpCenterOcrCacheInfo } from './HelpCenterDialog';
 
 vi.mock('../services/localFeedback', () => ({
@@ -13,10 +14,17 @@ vi.mock('../services/localFeedback', () => ({
   saveFeedbackReport: vi.fn(),
 }));
 
+vi.mock('../services/feedbackChannels', () => ({
+  copyFeedbackContact: vi.fn(),
+  openFeedbackChannel: vi.fn(),
+}));
+
 afterEach(() => {
   cleanup();
   vi.mocked(copyFeedbackReport).mockReset();
   vi.mocked(saveFeedbackReport).mockReset();
+  vi.mocked(copyFeedbackContact).mockReset();
+  vi.mocked(openFeedbackChannel).mockReset();
   vi.restoreAllMocks();
 });
 
@@ -31,6 +39,10 @@ function renderDialog(overrides: Partial<React.ComponentProps<typeof HelpCenterD
   };
   const view = render(<HelpCenterDialog {...props} />);
   return { ...props, onClose, view };
+}
+
+function channelStatus() {
+  return within(screen.getByRole('region', { name: '发送反馈与查看回复' })).getByRole('status');
 }
 
 describe('HelpCenterDialog', () => {
@@ -64,6 +76,34 @@ describe('HelpCenterDialog', () => {
     expect(screen.getAllByRole('tab')).toHaveLength(4);
     expect(screen.getByRole('tab', { name: /功能介绍/ }).getAttribute('aria-selected')).toBe('true');
     expect(screen.getByRole('tabpanel')).toBeTruthy();
+  });
+
+  it('opens the guide at the requested fine-tune section without changing modal focus management', async () => {
+    const originalScrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollIntoView');
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: scrollIntoView,
+    });
+
+    try {
+      renderDialog({ focusSection: 'fine-tune' });
+
+      const close = screen.getByRole('button', { name: '关闭' });
+      const title = await screen.findByRole('heading', { name: '微调与确认：预览本轮后再保存' });
+      expect(screen.getByRole('tab', { name: /使用指南/ }).getAttribute('aria-selected')).toBe('true');
+      await waitFor(() => expect(scrollIntoView).toHaveBeenCalledWith({ block: 'start', behavior: 'auto' }));
+      expect(scrollIntoView.mock.instances[0]).toBe(title);
+      expect(document.activeElement).toBe(close);
+    } finally {
+      if (originalScrollIntoViewDescriptor) {
+        Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+          ...originalScrollIntoViewDescriptor,
+        });
+      } else {
+        Reflect.deleteProperty(HTMLElement.prototype, 'scrollIntoView');
+      }
+    }
   });
 
   it('allows another OCR check after StrictMode replays mount effects', async () => {
@@ -220,6 +260,75 @@ describe('HelpCenterDialog', () => {
     await user.click(screen.getByRole('tab', { name: /版本与更新/ }));
     expect(screen.getByText('公开发布准备版')).toBeTruthy();
     expect(screen.getByText(/没有在线更新服务器/)).toBeTruthy();
+    expect(screen.getByText('0.1.40')).toBeTruthy();
+    expect(screen.getByText('0.1.37')).toBeTruthy();
+    expect(screen.getByText('保存版式后更换关键词，已保存的边界继续保留；同银行同版式支持跨文件匹配，并适配双张尾页已有栏位。')).toBeTruthy();
+    expect(screen.getByText('贷款利息到期通知书按完整单张保留，电子缴税付款凭证独立识别；特殊凭证按类型和实际版式分组，并提供查看入口。')).toBeTruthy();
+    expect(screen.getByText('记住的版式参考可用于其他月份文件的首次分析，并在重启后保留；旧记录缺少可靠身份信息时不自动套用，需核对后重新保存。')).toBeTruthy();
+    expect(screen.getByText('导出目录沿用已设置的位置，成功导出后记住所选目录。')).toBeTruthy();
+    expect(screen.getByText('首页分析区排版更紧凑，分析进度仅显示已分析页数和总页数。')).toBeTruthy();
+    expect(screen.getByText('0.1.32')).toBeTruthy();
+    expect(screen.getByText('微调区布局更紧凑，可拖动分隔线调整高度。')).toBeTruthy();
+    expect(screen.getByText('检查本轮支持全选、逐项多选和 Shift 区间选择。')).toBeTruthy();
+    expect(screen.getByText('操作底栏固定显示，面板内容较多时也能直接使用。')).toBeTruthy();
+    expect(screen.getByText('0.1.31')).toBeTruthy();
+  });
+
+  it('explains the three-stage receipt overview workflow and current review actions', async () => {
+    const user = userEvent.setup();
+    renderDialog();
+
+    await user.click(screen.getByRole('tab', { name: /使用指南/ }));
+
+    expect(screen.getByRole('heading', { name: '微调与确认：预览本轮后再保存' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: '阶段一：导入预览' })).toBeTruthy();
+    expect(screen.getAllByText(/原页总览”和“单页/).length).toBeGreaterThan(0);
+    expect(screen.getByRole('heading', { name: '勾选只选择，操作才改变状态' })).toBeTruthy();
+    expect(screen.getByText(/全选当前筛选结果.*暂未渲染/)).toBeTruthy();
+    expect(screen.getAllByText(/标记为“需调整”的片段不能确认/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/贷款利息到期通知书/).length).toBeGreaterThan(0);
+    expect(screen.getByRole('heading', { name: '分析处理阶段的按钮' })).toBeTruthy();
+    expect(screen.getAllByText(/片段总览 \/ 原页总览/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/全选当前筛选结果/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/确认所选 N 处/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/排除所选 N 处/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/恢复所选 N 处为待复核/).length).toBeGreaterThan(0);
+    expect(screen.getByRole('heading', { name: '片段详情中的按钮' })).toBeTruthy();
+    expect(screen.getAllByText(/返回总览/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/上一项 \/ 下一项/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/确认此片段/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/调整所选边界/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/排除此片段/).length).toBeGreaterThan(0);
+    expect(screen.getByRole('heading', { name: '微调阶段的按钮' })).toBeTruthy();
+    expect(screen.getByText(/勾选范围不等于版式同步范围/)).toBeTruthy();
+    expect(screen.getAllByText(/确认并预览本轮/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/风险已勾选且没有阻断问题/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/统一所有栏位高度不会改变各栏位的顶部位置/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/核实并完成保存 \/ 核实并完成撤销/).length).toBeGreaterThan(0);
+    expect(screen.getByRole('heading', { name: '导出结果阶段的按钮' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: '阶段三：导出结果' })).toBeTruthy();
+    expect(screen.getAllByText(/导出回单/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/导出名称/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/导出方式/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/同时导出 XLSX 索引/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/选择目录并导出/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/重试导出/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/移除本次来源/).length).toBeGreaterThan(0);
+    expect(screen.queryByText('预览并导出')).toBeNull();
+    expect(screen.queryByText('生成预览 N 处')).toBeNull();
+    expect(screen.queryByText('返回导出设置')).toBeNull();
+    const stageNote = screen.getByRole('note', { name: '审核区会显示的阶段状态' });
+    expect(stageNote).toBeTruthy();
+    expect(within(stageNote).getByText('确认并预览本轮')).toBeTruthy();
+    expect(within(stageNote).getByText('本轮已保存')).toBeTruthy();
+    expect(within(stageNote).getByText(/微调是分析处理阶段中的可选步骤/)).toBeTruthy();
+    expect(screen.queryByText(/选择导出范围/)).toBeNull();
+    expect(screen.queryByText(/进入微调/)).toBeNull();
+    expect(screen.queryByText(/开始下一位置微调/)).toBeNull();
+
+    expect(screen.getByRole('heading', { name: '审核按钮怎么选' })).toBeTruthy();
+    expect(screen.getByText(/勾选本身不会改变审核状态/)).toBeTruthy();
+    expect(screen.getByText(/导出范围固定为全部未排除项/)).toBeTruthy();
   });
 
   it('requires a description, generates a complete local preview, and copies it', async () => {
@@ -264,6 +373,127 @@ describe('HelpCenterDialog', () => {
     vi.mocked(saveFeedbackReport).mockRejectedValue(new Error('保存反馈失败，请重试。'));
     await user.click(screen.getByRole('button', { name: '保存为 TXT' }));
     expect(screen.getByRole('alert').textContent).toContain('保存反馈失败，请重试。');
+  });
+
+  it('shows recipients and reply routes without opening or copying anything automatically', async () => {
+    const user = userEvent.setup();
+    renderDialog();
+    await user.click(screen.getByRole('tab', { name: /使用反馈/ }));
+    expect(screen.getByText('venz@163.com')).toBeTruthy();
+    expect(screen.getByText('vinz2009')).toBeTruthy();
+    expect(screen.getByText('https://github.com/flydommm/bank-receipt-workbench/issues/new')).toBeTruthy();
+    expect(screen.getByText(/在同一条 Issue 中查看处理进展和回复/)).toBeTruthy();
+    expect(screen.getByText(/我们会回复你的来信/)).toBeTruthy();
+    expect(screen.getByText(/我们会在微信会话中回复/)).toBeTruthy();
+    expect((screen.getByRole('button', { name: '复制反馈并写邮件' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: '复制反馈并打开 GitHub' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(copyFeedbackReport).not.toHaveBeenCalled();
+    expect(copyFeedbackContact).not.toHaveBeenCalled();
+    expect(openFeedbackChannel).not.toHaveBeenCalled();
+  });
+
+  it('copies contact details independently of the feedback draft and explains the next step', async () => {
+    const user = userEvent.setup();
+    vi.mocked(copyFeedbackContact).mockResolvedValue(undefined);
+    renderDialog();
+    await user.click(screen.getByRole('tab', { name: /使用反馈/ }));
+    await user.click(screen.getByRole('button', { name: '复制邮箱' }));
+    expect(copyFeedbackContact).toHaveBeenLastCalledWith('email');
+    expect(channelStatus().textContent).toContain('已复制邮箱地址');
+    await user.click(screen.getByRole('button', { name: '复制微信号' }));
+    expect(copyFeedbackContact).toHaveBeenLastCalledWith('wechat');
+    expect(channelStatus().textContent).toContain('通过好友验证后发送反馈');
+    expect(openFeedbackChannel).not.toHaveBeenCalled();
+  });
+
+  it('keeps contact details available for manual copying if the clipboard is unavailable', async () => {
+    const user = userEvent.setup();
+    vi.mocked(copyFeedbackContact).mockRejectedValue(new Error('private clipboard detail'));
+    renderDialog();
+    await user.click(screen.getByRole('tab', { name: /使用反馈/ }));
+    await user.click(screen.getByRole('button', { name: '复制微信号' }));
+    expect(screen.getByRole('alert').textContent).toContain('手动选择并复制');
+    expect(screen.getByText('vinz2009')).toBeTruthy();
+    expect(screen.queryByText(/private clipboard detail/)).toBeNull();
+    expect((screen.getByRole('button', { name: '复制微信号' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('waits for feedback copying before opening email and prevents duplicate or conflicting actions', async () => {
+    const user = userEvent.setup();
+    let resolveCopy!: () => void;
+    vi.mocked(copyFeedbackReport).mockReturnValue(new Promise<void>((resolve) => { resolveCopy = resolve; }));
+    vi.mocked(openFeedbackChannel).mockResolvedValue(undefined);
+    renderDialog();
+    await user.click(screen.getByRole('tab', { name: /使用反馈/ }));
+    fireEvent.change(screen.getByRole('textbox', { name: /问题描述/ }), { target: { value: '合成反馈正文' } });
+    await user.click(screen.getByRole('button', { name: '生成反馈预览' }));
+    const email = screen.getByRole('button', { name: '复制反馈并写邮件' });
+    await user.click(email);
+    await user.click(email);
+    expect(copyFeedbackReport).toHaveBeenCalledOnce();
+    expect(copyFeedbackReport).toHaveBeenCalledWith(expect.stringContaining('合成反馈正文'));
+    expect(openFeedbackChannel).not.toHaveBeenCalled();
+    for (const name of ['复制文本', '保存为 TXT', '复制邮箱', '复制微信号', '复制反馈并打开 GitHub']) {
+      expect((screen.getByRole('button', { name }) as HTMLButtonElement).disabled).toBe(true);
+    }
+    expect((screen.getByRole('textbox', { name: /问题描述/ }) as HTMLTextAreaElement).disabled).toBe(true);
+    resolveCopy();
+    await waitFor(() => expect(openFeedbackChannel).toHaveBeenCalledExactlyOnceWith('email'));
+    await waitFor(() => expect(channelStatus().textContent).toContain('当前尚未发送'));
+    expect((email as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('uses the latest preview for GitHub and tells the user to submit and follow up there', async () => {
+    const user = userEvent.setup();
+    vi.mocked(copyFeedbackReport).mockResolvedValue(undefined);
+    vi.mocked(openFeedbackChannel).mockResolvedValue(undefined);
+    renderDialog();
+    await user.click(screen.getByRole('tab', { name: /使用反馈/ }));
+    const description = screen.getByRole('textbox', { name: /问题描述/ });
+    fireEvent.change(description, { target: { value: '旧的合成描述' } });
+    await user.click(screen.getByRole('button', { name: '生成反馈预览' }));
+    fireEvent.change(description, { target: { value: '修正后的合成描述' } });
+    await user.click(screen.getByRole('button', { name: '复制反馈并打开 GitHub' }));
+    expect(copyFeedbackReport).toHaveBeenCalledWith(expect.stringContaining('修正后的合成描述'));
+    expect(copyFeedbackReport).not.toHaveBeenCalledWith(expect.stringContaining('旧的合成描述'));
+    expect(openFeedbackChannel).toHaveBeenCalledExactlyOnceWith('github');
+    expect(channelStatus().textContent).toContain('在该 Issue 查看回复');
+    expect(channelStatus().textContent).toContain('当前尚未提交');
+    fireEvent.change(description, { target: { value: '' } });
+    expect((screen.getByRole('button', { name: '复制反馈并打开 GitHub' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('does not open a channel after copy failure and offers a manual path without exposing raw errors', async () => {
+    const user = userEvent.setup();
+    vi.mocked(copyFeedbackReport).mockRejectedValue(new Error('private report or path'));
+    renderDialog();
+    await user.click(screen.getByRole('tab', { name: /使用反馈/ }));
+    fireEvent.change(screen.getByRole('textbox', { name: /问题描述/ }), { target: { value: '合成描述' } });
+    await user.click(screen.getByRole('button', { name: '生成反馈预览' }));
+    await user.click(screen.getByRole('button', { name: '复制反馈并写邮件' }));
+    expect(openFeedbackChannel).not.toHaveBeenCalled();
+    expect(screen.getByRole('alert').textContent).toContain('尚未打开反馈入口');
+    expect(screen.getByRole('alert').textContent).toContain('手动复制');
+    expect(screen.queryByText(/private report or path/)).toBeNull();
+  });
+
+  it.each([
+    ['复制反馈并写邮件', 'venz@163.com'],
+    ['复制反馈并打开 GitHub', 'https://github.com/flydommm/bank-receipt-workbench/issues/new'],
+  ])('retains copied feedback and a usable destination if %s fails', async (buttonName, destination) => {
+    const user = userEvent.setup();
+    vi.mocked(copyFeedbackReport).mockResolvedValue(undefined);
+    vi.mocked(openFeedbackChannel).mockRejectedValue(new Error('private native error'));
+    renderDialog();
+    await user.click(screen.getByRole('tab', { name: /使用反馈/ }));
+    fireEvent.change(screen.getByRole('textbox', { name: /问题描述/ }), { target: { value: '合成描述' } });
+    await user.click(screen.getByRole('button', { name: '生成反馈预览' }));
+    await user.click(screen.getByRole('button', { name: buttonName }));
+    expect(screen.getByRole('alert').textContent).toContain('反馈已复制，但未能打开');
+    expect(screen.getByRole('alert').textContent).toContain(destination);
+    expect(screen.queryByText(/private native error/)).toBeNull();
+    expect((screen.getByRole('button', { name: buttonName }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole('textbox', { name: '反馈预览' }) as HTMLTextAreaElement).value).toContain('合成描述');
   });
 
   it('disables copy and save actions while the local save dialog is pending', async () => {

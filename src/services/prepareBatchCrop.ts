@@ -1,4 +1,4 @@
-import { batchTargetProtection, createBatchCropPlan, cropPageKey, type BatchCropPlan, type CropTemplatePage } from '../domain/batchCrop';
+import { batchTargetProtection, linkedTargetProtection, createBatchCropPlan, createLinkedCropPlan, cropPageKey, type BatchCropPlan, type CropTemplatePage } from '../domain/batchCrop';
 import type { ReviewSegment } from '../domain/cropReview';
 
 export class StaleBatchCropError extends Error {
@@ -6,6 +6,8 @@ export class StaleBatchCropError extends Error {
 }
 
 export type BatchCropPreparation = {
+  linkedSnapshots?: ReadonlyMap<string, ReviewSegment>;
+  unreviewedIds?: ReadonlySet<string>;
   isCurrent: () => boolean;
   describe: (segment: ReviewSegment) => Promise<CropTemplatePage>;
   validate: (segment: ReviewSegment) => Promise<void>;
@@ -18,7 +20,9 @@ export async function prepareBatchCrop(sample: ReviewSegment, targets: ReviewSeg
   const pages = new Map<string, CropTemplatePage>();
   const failures = new Map<string, string>();
   const unique = new Map<string, ReviewSegment>();
-  for (const segment of [sample, ...targets.filter((item) => !batchTargetProtection(item))]) unique.set(cropPageKey(segment), segment);
+  for (const segment of [sample, ...targets.filter((item) => !(options.linkedSnapshots
+    ? linkedTargetProtection(item, options.linkedSnapshots.get(item.id), options.unreviewedIds?.has(item.id))
+    : batchTargetProtection(item)))]) unique.set(cropPageKey(segment), segment);
   async function pool(items: ReviewSegment[], label: string, job: (segment: ReviewSegment) => Promise<void>): Promise<void> {
     let next = 0;
     let done = 0;
@@ -39,7 +43,9 @@ export async function prepareBatchCrop(sample: ReviewSegment, targets: ReviewSeg
     catch { check(); failures.set(cropPageKey(segment), '无法读取或核实页面版式，请单独复核'); }
   });
   if (failures.has(cropPageKey(sample))) throw new Error('样本页面版式无法核实，请先检查原文件。');
-  const plan = createBatchCropPlan(sample, targets, pages);
+  const plan = options.linkedSnapshots
+    ? createLinkedCropPlan(sample, targets, pages, options.linkedSnapshots, options.unreviewedIds)
+    : createBatchCropPlan(sample, targets, pages);
   const validation = new Map<string, ReviewSegment>();
   for (const item of plan.applicable) validation.set(cropPageKey(item.after), item.after);
   await pool([...validation.values()], '核验预览', async (segment) => {

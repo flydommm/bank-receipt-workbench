@@ -60,6 +60,7 @@ if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $manifest.py
 if ($LASTEXITCODE -ne 0) { throw 'Python extraction failed.' }
 $python = Join-Path $pythonRoot 'python.exe'
 if (-not (Test-Path -LiteralPath $python -PathType Leaf)) { throw 'Python executable missing after extraction.' }
+& (Join-Path $PSScriptRoot 'prepare-vc-runtime.ps1') -PythonRoot $pythonRoot
 function Invoke-PrivatePip([string[]]$PipArguments) {
     $previousConfig = [Environment]::GetEnvironmentVariable('PIP_CONFIG_FILE', 'Process')
     try {
@@ -85,6 +86,8 @@ if ($missingHashes.Count -eq 0) {
 }
 Invoke-PrivatePip @('install', '--no-index', '--find-links', $wheelCache, '--require-hashes', '-r', $lockFile, '--disable-pip-version-check', '--no-compile')
 Invoke-PrivatePip @('check')
+& $python -B -I (Join-Path $PSScriptRoot 'audit-runtime-native.py') --runtime $pythonRoot --verify-loaded
+if ($LASTEXITCODE -ne 0) { throw 'Private runtime native dependency audit failed.' }
 & $python -B -I (Join-Path $PSScriptRoot 'runtime-inventory.py') --output (Join-Path $pythonRoot 'runtime-info.json') --edition $Edition --manifest (Join-Path $PSScriptRoot 'runtime-manifest.json') --lock $lockFile
 if ($LASTEXITCODE -ne 0) { throw 'Runtime inventory generation failed.' }
 & $python -B -E -s -X utf8 (Join-Path $projectRoot 'engine/engine.py') --health
@@ -94,4 +97,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Bundled engine health check failed.' }
 $generatedScripts = Join-Path $pythonRoot 'Scripts'
 if (Test-Path -LiteralPath $generatedScripts) { Remove-Item -LiteralPath $generatedScripts -Recurse -Force }
 Get-ChildItem -LiteralPath $pythonRoot -Recurse -File -Filter '*.pyc' | Remove-Item -Force
+& $python -B -I (Join-Path $PSScriptRoot 'prepare-pymupdf-bytecode.py') --python-root $pythonRoot --strict-cache-set
+if ($LASTEXITCODE -ne 0) { throw 'Safe PyMuPDF bytecode preparation failed.' }
+& $python -B -E -s -X utf8 (Join-Path $projectRoot 'engine/engine.py') --health
+if ($LASTEXITCODE -ne 0) { throw 'Bundled engine health check failed after bytecode preparation.' }
 Write-Output "Prepared $Edition runtime: $pythonRoot"

@@ -101,6 +101,22 @@ describe('persistent task UI ownership', () => {
     expect(controller.getSnapshot().current).toMatchObject({ generation: 2, state: 'validating' });
   });
 
+  it('clears a transient snapshot error after the next authoritative refresh succeeds', async () => {
+    const { controller, client } = fixture();
+    const snapshot = vi.spyOn(client, 'snapshot')
+      .mockResolvedValueOnce(response(job('job-1', 'paused', 1)))
+      .mockRejectedValueOnce(new Error('任务快照无效。'))
+      .mockResolvedValueOnce(response(job('job-1', 'running', 1)));
+
+    await controller.select('job-1');
+    await controller.refreshCurrent();
+    expect(controller.getSnapshot()).toMatchObject({ error: '任务快照无效。', current: { state: 'paused' } });
+
+    await controller.refreshCurrent();
+    expect(snapshot).toHaveBeenCalledTimes(3);
+    expect(controller.getSnapshot()).toMatchObject({ error: null, current: { state: 'running' } });
+  });
+
   it('publishes source summaries from the snapshot and keeps them over a stale list response', async () => {
     const { controller, client } = fixture();
     const fresh = job('job-1', 'paused', 2);

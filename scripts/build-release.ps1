@@ -4,6 +4,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $projectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $previousCargoTarget = [Environment]::GetEnvironmentVariable('CARGO_TARGET_DIR', 'Process')
+$previousEncodedRustFlags = [Environment]::GetEnvironmentVariable('CARGO_ENCODED_RUSTFLAGS', 'Process')
 Push-Location $projectRoot
 try {
     $sourceCommit = & git rev-parse HEAD
@@ -31,13 +32,50 @@ try {
         source_commit = $sourceCommit
         source_url = "https://github.com/flydommm/bank-receipt-workbench/tree/$sourceCommit"
     } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $runtime 'project-source.json') -Encoding utf8
-    # No developer-machine filenames in Python bytecode shipped in the package.
-    Get-ChildItem -LiteralPath $runtime -Recurse -File -Filter '*.pyc' | Remove-Item -Force
+    # Require the checked-hash, package-relative caches produced by runtime preparation.
+    & (Join-Path $runtime 'python.exe') -B -I (Join-Path $PSScriptRoot 'prepare-pymupdf-bytecode.py') --python-root $runtime --verify-only --strict-cache-set
+    if ($LASTEXITCODE -ne 0) { throw 'Safe PyMuPDF bytecode verification failed.' }
     # Pin output location and architecture; never pick up an old default-path asset.
     $env:CARGO_TARGET_DIR = Join-Path $projectRoot 'src-tauri/target'
+    # Rust panic/file! locations can expose the build user's profile and checkout.
+    # Encoded flags preserve paths containing spaces without shell quoting.
+    if (-not $previousEncodedRustFlags -and $env:RUSTFLAGS) {
+        throw 'Use CARGO_ENCODED_RUSTFLAGS instead of RUSTFLAGS for release builds.'
+    }
+    $releaseRustFlags = @()
+    if ($previousEncodedRustFlags) { $releaseRustFlags += $previousEncodedRustFlags.Split([char]31) }
+    $pathMappings = @(
+        @($env:USERPROFILE, '/build/user'),
+        @($env:CARGO_HOME, '/build/cargo'),
+        @($env:RUSTUP_HOME, '/build/rustup'),
+        @($projectRoot, '/build/workbench')
+    )
+    foreach ($mapping in $pathMappings) {
+        if ($mapping[0]) {
+            $releaseRustFlags += "--remap-path-prefix=$($mapping[0])=$($mapping[1])"
+            $releaseRustFlags += "--remap-path-prefix=$($mapping[0].Replace('\', '/'))=$($mapping[1])"
+        }
+    }
+    $env:CARGO_ENCODED_RUSTFLAGS = $releaseRustFlags -join [char]31
     $buildStarted = [DateTime]::UtcNow
     & bun run tauri build --bundles nsis --target x86_64-pc-windows-msvc
     if ($LASTEXITCODE -ne 0) { throw 'NSIS build failed.' }
+    # Inspect the uncompressed executable; scanning only setup.exe can miss paths.
+    $mainExecutable = Join-Path $env:CARGO_TARGET_DIR 'x86_64-pc-windows-msvc/release/pdf-search.exe'
+    $pathAudit = @'
+import os, pathlib, re, sys
+data = pathlib.Path(sys.argv[1]).read_bytes()
+lowered = data.lower()
+roots = [sys.argv[2], *(os.environ.get(k, '') for k in ('USERPROFILE', 'CARGO_HOME', 'RUSTUP_HOME'))]
+private = any(root.replace(chr(92), sep).encode(enc).lower() in lowered
+              for root in roots if root for sep in (chr(92), '/') for enc in ('utf-8', 'utf-16le'))
+private |= bool(re.search(rb'[A-Za-z]:[\\/]Users[\\/](?!Public\b|Default\b)', data, re.I))
+if private:
+    raise SystemExit('Release executable contains a build-machine path; package not promoted.')
+print('Release executable build-path audit passed.')
+'@
+    & (Join-Path $runtime 'python.exe') -B -I -c $pathAudit $mainExecutable $projectRoot
+    if ($LASTEXITCODE -ne 0) { throw 'Release executable privacy audit failed.' }
     $afterCommit = & git rev-parse HEAD
     if ($LASTEXITCODE -ne 0) { throw 'Unable to verify source commit after build.' }
     $afterChanges = & git status --porcelain
@@ -59,6 +97,7 @@ try {
     Copy-Item -LiteralPath (Join-Path $runtime 'runtime-info.json') -Destination $outputRoot
     Copy-Item -LiteralPath (Join-Path $runtime 'third-party-inventory.json') -Destination $outputRoot
     Copy-Item -LiteralPath (Join-Path $runtime 'THIRD_PARTY_LICENSES.txt') -Destination $outputRoot
+    Copy-Item -LiteralPath (Join-Path $runtime 'MSVC_RUNTIME_NOTICE.txt') -Destination $outputRoot
     Copy-Item -LiteralPath $projectLicense -Destination $outputRoot
     Copy-Item -LiteralPath (Join-Path $projectRoot 'THIRD_PARTY_NOTICES.md') -Destination $outputRoot
     $bunVersion = & bun --version
@@ -77,6 +116,7 @@ try {
         target = 'x86_64-pc-windows-msvc'
         build_command = "scripts/build-release.ps1 -Edition $Edition"
         bun_version = $bunVersion; rust_version = $rustVersion
+        rust_path_remapping = 'Build-machine paths mapped to generic /build locations; executable verified.'
         runtime_manifest_sha256 = (Get-FileHash -LiteralPath (Join-Path $outputRoot 'runtime-info.json') -Algorithm SHA256).Hash
         third_party_inventory_sha256 = (Get-FileHash -LiteralPath (Join-Path $outputRoot 'third-party-inventory.json') -Algorithm SHA256).Hash
         python_version = '3.12.14'; clean_windows_verified = $false
@@ -87,5 +127,6 @@ try {
     Write-Output "Prepared release: $asset"
 } finally {
     [Environment]::SetEnvironmentVariable('CARGO_TARGET_DIR', $previousCargoTarget, 'Process')
+    [Environment]::SetEnvironmentVariable('CARGO_ENCODED_RUSTFLAGS', $previousEncodedRustFlags, 'Process')
     Pop-Location
 }

@@ -565,6 +565,25 @@ def validate_page_result(value: object) -> dict[str, object]:
     can never be mistaken for an empty, successfully processed page.
     """
 
+    # Receipt-layout checkpoints use a separate schema and validator.  Keep
+    # the import local: receipt_layout_models imports this module's shared JSON
+    # helpers, so a module-level import would create a cycle.  Schema 1 stays
+    # on the legacy path below, including its historical strict schema check.
+    if isinstance(value, dict):
+        schema = value.get("schema")
+        if type(schema) is int and schema == 2:
+            from .receipt_checkpoint import validate_receipt_checkpoint
+            try:
+                return validate_receipt_checkpoint(value)
+            except ValueError as exc:
+                # Durable batch callers historically receive BatchModelError
+                # for malformed payloads.  Keep that protocol while the
+                # direct receipt checkpoint API exposes ReceiptLayoutError's
+                # structured code/path.
+                if isinstance(exc, BatchModelError):
+                    raise
+                raise BatchModelError(str(exc)) from exc
+
     if not isinstance(value, dict):
         raise _bad("page_result", "must be an object")
     expected_fields = {"schema", "page", "page_width", "page_height", "matches", "analysis"}
