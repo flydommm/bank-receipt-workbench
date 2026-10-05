@@ -9,6 +9,6 @@ export default defineConfig({
   },
   test: {
     // The contribution checker uses node:test and has its own CI step.
-    exclude: ['**/node_modules/**', '**/.git/**', '**/.worktrees/**', 'scripts/check-dco.test.cjs'],
+    exclude: ['**/node_modules/**', '**/.git/**', '**/.worktrees/**', '**/.artifacts/**', 'scripts/check-dco.test.cjs'],
   },
 });

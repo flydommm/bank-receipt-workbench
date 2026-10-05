@@ -17,9 +17,11 @@ use tauri::{Emitter, Manager, RunEvent};
 
 mod batch_protocol;
 mod batch_service;
+mod company_account_template;
 mod engine_process;
 mod engine_read_service;
 mod export_bundle;
+mod export_progress;
 mod feedback;
 mod feedback_channel;
 mod review_v2;
@@ -75,10 +77,12 @@ struct EngineRuntime {
 struct BatchServiceState(Result<std::sync::Arc<batch_service::BatchService>, String>);
 
 #[tauri::command]
-async fn export_bundle_command(app: tauri::AppHandle, request: Value) -> Result<Value, String> {
+async fn export_bundle_command(app: tauri::AppHandle, webview: tauri::Webview, request: Value,
+    on_progress: Option<tauri::ipc::JavaScriptChannelId>) -> Result<Value, String> {
+    let on_progress = on_progress.map(|id| id.channel_on(webview));
     export_bundle::validate_request(&request)?;
     run_engine_blocking("export_bundle", move || {
-        export_bundle::execute(&app, request)
+        export_bundle::execute(&app, request, on_progress)
     })
     .await
 }
@@ -514,8 +518,8 @@ fn engine_operation_timeout(request: &Value) -> Duration {
 fn call_engine(runtime: &EngineRuntime, request: Value) -> Result<Value, String> {
     let timeout = engine_operation_timeout(&request);
     if engine_read_service::EngineReadService::supports(&request) {
-        // A single warm reader occupies at most one of the three existing
-        // process permits. Task workers and writes retain the other permits.
+        // Frequent reads and bounded grouping commands share one serialized
+        // warm process. Task workers and other writes retain two permits.
         let spec = engine_process_spec(runtime, vec!["--serve".into()], false)?;
         return runtime.read_service.request(&runtime.supervisor, spec, request, timeout);
     }
@@ -526,6 +530,15 @@ fn call_engine_with_timeout(
     runtime: &EngineRuntime,
     request: Value,
     timeout: Duration,
+) -> Result<Value, String> {
+    call_engine_with_progress(runtime, request, timeout, None)
+}
+
+fn call_engine_with_progress(
+    runtime: &EngineRuntime,
+    request: Value,
+    timeout: Duration,
+    on_progress: Option<tauri::ipc::Channel<Value>>,
 ) -> Result<Value, String> {
     let request_line = serde_json::to_vec(&request)
         .map_err(|error| format!("local engine request could not be encoded: {error}"))?;
@@ -559,7 +572,11 @@ fn call_engine_with_timeout(
     });
     let (reader_sender, reader_receiver) = std::sync::mpsc::channel();
     let reader = std::thread::spawn(move || {
-        let result = read_bounded_engine_response(stdout, ENGINE_IO_LIMIT_BYTES);
+        let result = if let Some(channel) = on_progress {
+            export_progress::read_response(stdout, ENGINE_IO_LIMIT_BYTES, |frame| { let _ = channel.send(frame); })
+        } else {
+            read_bounded_engine_response(stdout, ENGINE_IO_LIMIT_BYTES)
+        };
         let _ = reader_sender.send(result);
     });
     let mut status = None;
@@ -2335,6 +2352,7 @@ fn main() {
             pick_output_folder,
             open_output_folder,
             feedback::save_feedback_report,
+            company_account_template::save_company_account_template,
             feedback_channel::open_feedback_channel
         ])
         .build(tauri::generate_context!());

@@ -5,8 +5,16 @@ import { PdfThumbnailCache } from '../services/pdfThumbnailCache';
 import type { EnginePagePreview } from './localEngineAdapter';
 import './PdfThumbnailGrid.css';
 
-export type PdfThumbnailTone = 'pending' | 'confirmed' | 'excluded';
+export type PdfThumbnailTone = 'automatic' | 'pending' | 'confirmed' | 'excluded';
 export type PdfThumbnailAttention = 'suspected' | 'special';
+
+export type PdfThumbnailOverlay = {
+  rect: PdfRect;
+  tone?: PdfThumbnailTone;
+  attention?: PdfThumbnailAttention;
+  badge?: string;
+  label?: string;
+};
 
 export type PdfThumbnailCard = {
   id: string;
@@ -19,7 +27,7 @@ export type PdfThumbnailCard = {
   width?: number;
   height?: number;
   rect?: PdfRect;
-  overlays?: readonly { rect: PdfRect; tone?: PdfThumbnailTone; attention?: PdfThumbnailAttention }[];
+  overlays?: readonly PdfThumbnailOverlay[];
   description?: string;
   badge?: string;
   tone?: PdfThumbnailTone;
@@ -33,6 +41,7 @@ export type PdfThumbnailGridProps = {
   shape: 'page' | 'receipt';
   selectedIds?: ReadonlySet<string>;
   focusedId?: string | null;
+  followFocus?: boolean;
   onOpen: (card: PdfThumbnailCard) => void;
   onToggle?: (id: string, checked: boolean, extend: boolean) => void;
   active?: boolean;
@@ -92,9 +101,39 @@ type ThumbnailCellProps = Pick<PdfThumbnailGridProps, 'onOpen' | 'onToggle' | 'd
   selected: boolean;
   focused: boolean;
   imageHeight: number;
+  imageWidth: number;
 };
 
-function ThumbnailCell({ card, cache, selected, focused, onOpen, onToggle, disabled, imageHeight }: ThumbnailCellProps) {
+/** Both overview modes draw in PDF coordinates; badges stay readable at thumbnail scale. */
+function FragmentOverlay({ overlay, scale }: { overlay: PdfThumbnailOverlay; scale: number }) {
+  const { rect, tone = 'pending', attention, badge, label } = overlay;
+  const width = rect.x1 - rect.x0, height = rect.y1 - rect.y0;
+  // Keep the stroke inside the crop, without changing the image or its clip.
+  const insetX = Math.min(1 / scale, width / 2), insetY = Math.min(1 / scale, height / 2);
+  const badgeWidth = (badge?.length ?? 0) * 10 + 10;
+  const badgeHeight = 18;
+  const badgeScale = Math.min(1 / scale, width / (badgeWidth + 4), height / (badgeHeight + 4));
+  return (
+    <g className="pdf-thumbnail-fragment">
+      {label && <title>{label}</title>}
+      <rect
+        className={`pdf-thumbnail-overlay tone-${tone}${attention ? ` attention-${attention}` : ''}`}
+        x={rect.x0 + insetX} y={rect.y0 + insetY}
+        width={Math.max(0, width - insetX * 2)} height={Math.max(0, height - insetY * 2)}
+        vectorEffect="non-scaling-stroke"
+      />
+      {badge && <g
+        className={`pdf-thumbnail-overlay-badge tone-${tone}`}
+        transform={`translate(${rect.x1 - (badgeWidth + 2) * badgeScale} ${rect.y0 + 2 * badgeScale}) scale(${badgeScale})`}
+      >
+        <rect width={badgeWidth} height={badgeHeight} rx={3} />
+        <text x={badgeWidth / 2} y={12.5} textAnchor="middle">{badge}</text>
+      </g>}
+    </g>
+  );
+}
+
+function ThumbnailCell({ card, cache, selected, focused, onOpen, onToggle, disabled, imageHeight, imageWidth }: ThumbnailCellProps) {
   const clipId = useId();
   const identity = cardIdentity(card);
   const [result, setResult] = useState<{ identity: string; preview?: EnginePagePreview; error?: string } | null>(null);
@@ -131,6 +170,9 @@ function ThumbnailCell({ card, cache, selected, focused, onOpen, onToggle, disab
   const error = !inputValid ? '页面信息无效'
     : currentResult?.error || (currentResult?.preview && !preview ? '裁剪区域无效' : '');
   const view = preview ? card.rect ?? { x0: 0, y0: 0, x1: preview.page_width, y1: preview.page_height } : null;
+  // The image area has 10px padding; SVG meet fitting leaves any remaining space blank.
+  const imageScale = view ? Math.min(Math.max(1, imageWidth - 20) / (view.x1 - view.x0),
+    Math.max(1, imageHeight - 20) / (view.y1 - view.y0)) : 1;
   const cardDisabled = disabled || !inputValid;
 
   return (
@@ -158,16 +200,8 @@ function ThumbnailCell({ card, cache, selected, focused, onOpen, onToggle, disab
               <defs><clipPath id={clipId}><rect x={view.x0} y={view.y0} width={view.x1 - view.x0} height={view.y1 - view.y0} /></clipPath></defs>
               <g clipPath={`url(#${clipId})`}>
               <image href={preview.image_data} width={preview.page_width} height={preview.page_height} />
-              {card.overlays?.filter(({ rect }) => validRect(rect, preview.page_width, preview.page_height)).map(({ rect, tone, attention }, index) => (
-                <rect
-                  key={index}
-                  className={`pdf-thumbnail-overlay ${attention ? `attention-${attention}` : `tone-${tone ?? 'pending'}`}`}
-                  x={rect.x0}
-                  y={rect.y0}
-                  width={rect.x1 - rect.x0}
-                  height={rect.y1 - rect.y0}
-                  vectorEffect="non-scaling-stroke"
-                />
+              {card.overlays?.filter(({ rect }) => validRect(rect, preview.page_width, preview.page_height)).map((overlay, index) => (
+                <FragmentOverlay key={index} overlay={overlay} scale={imageScale} />
               ))}
               </g>
             </svg>
@@ -178,7 +212,10 @@ function ThumbnailCell({ card, cache, selected, focused, onOpen, onToggle, disab
           )}
         </span>
         <span className="pdf-thumbnail-meta">
-          <strong title={card.label}>{card.label}</strong>
+          <span className="pdf-thumbnail-title">
+            <strong title={card.label}>{card.label}</strong>
+            {!card.rect && card.badge && <span className="pdf-thumbnail-badge">{card.badge}</span>}
+          </span>
           <span title={card.sourceLabel || card.description}>{card.sourceLabel || card.description || `第 ${card.page} / ${card.pageCount} 页`}</span>
           {card.sourceLabel && card.description && <span title={card.description}>{card.description}</span>}
         </span>
@@ -204,7 +241,8 @@ function ThumbnailCell({ card, cache, selected, focused, onOpen, onToggle, disab
           />
         </label>
       )}
-      {card.badge && <span className="pdf-thumbnail-badge">{card.badge}</span>}
+      {card.rect && card.badge && (!preview || !card.overlays?.some((overlay) => overlay.badge))
+        && <span className="pdf-thumbnail-badge">{card.badge}</span>}
       {error && inputValid && (
         <button type="button" className="pdf-thumbnail-retry" disabled={disabled} aria-label={`重试 ${card.label}缩略图`} onClick={() => setAttempt((value) => value + 1)}>重试</button>
       )}
@@ -214,9 +252,10 @@ function ThumbnailCell({ card, cache, selected, focused, onOpen, onToggle, disab
 
 export function PdfThumbnailGrid({
   cards, size, shape, selectedIds, focusedId, onOpen, onToggle,
-  active = true, disabled = false, scrollKey, label = 'PDF 缩略图总览', emptyMessage = '暂无可显示的页面',
+  active = true, disabled = false, followFocus = false, scrollKey, label = 'PDF 缩略图总览', emptyMessage = '暂无可显示的页面',
 }: PdfThumbnailGridProps) {
   const viewportRef = useRef<HTMLDivElement>(null);
+  const pendingButtonFocus = useRef<string | null>(null);
   const scrollPositionRef = useRef(0);
   const [viewport, setViewport] = useState({ width: 800, height: 600 });
   const [scrollTop, setScrollTop] = useState(0);
@@ -282,10 +321,50 @@ export function PdfThumbnailGrid({
     saveAnchor(scrollKey, { id: cards[nextIndex]?.id, index: nextIndex, fraction: (offset % rowHeight) / rowHeight });
   }, [scrollKey, columns, rowHeight, contentHeight, viewport.height, cards, active]);
 
+  const focusedIndex = cards.findIndex((card) => card.id === focusedId);
+  useLayoutEffect(() => {
+    const element = viewportRef.current;
+    if (!element || !active || !followFocus || focusedIndex < 0 || disabled) {
+      pendingButtonFocus.current = null;
+      return;
+    }
+    const currentFocus = document.activeElement;
+    if (currentFocus instanceof HTMLElement && element.contains(currentFocus)
+      && currentFocus.matches('.pdf-thumbnail-open')) {
+      pendingButtonFocus.current = focusedId ?? null;
+    }
+    const top = Math.floor(focusedIndex / columns) * rowHeight + INSET;
+    const bottom = top + rowHeight - GAP;
+    const current = scrollPositionRef.current;
+    const target = top < current ? top : bottom > current + viewport.height ? bottom - viewport.height : current;
+    const next = Math.max(0, Math.min(Math.max(0, contentHeight - viewport.height), target));
+    if (next === current) return;
+    element.scrollTop = next;
+    scrollPositionRef.current = next;
+    setScrollTop(next);
+    const offset = Math.max(0, next - INSET);
+    const index = Math.floor(offset / rowHeight) * columns;
+    saveAnchor(scrollKey, { id: previousLayout.current?.cards[index]?.id, index, fraction: (offset % rowHeight) / rowHeight });
+  }, [focusedId, focusedIndex, followFocus, active, disabled, scrollKey, columns, rowHeight, viewport.height, contentHeight]);
+
   const firstRow = Math.max(0, Math.floor(Math.max(0, scrollTop - INSET) / rowHeight) - OVERSCAN_ROWS);
   const lastRow = Math.min(rowCount, Math.ceil((scrollTop + viewport.height) / rowHeight) + OVERSCAN_ROWS);
   const visibleCards = useMemo(() => cards.slice(firstRow * columns, lastRow * columns), [cards, firstRow, lastRow, columns]);
   const gridStyle = { '--thumbnail-card-width': `${cardWidth}px`, '--thumbnail-row-height': `${rowHeight - GAP}px` } as CSSProperties;
+
+  // A far-away keyboard target is mounted only after the virtual window moves.
+  // Keep actual button focus with the highlighted card, without stealing focus
+  // from the list, toolbar or grid region when they drive the same preview.
+  useLayoutEffect(() => {
+    if (!pendingButtonFocus.current || pendingButtonFocus.current !== focusedId) return;
+    const card = Array.from(viewportRef.current?.querySelectorAll<HTMLElement>('[data-card-id]') ?? [])
+      .find((node) => node.dataset.cardId === pendingButtonFocus.current);
+    const button = card?.querySelector<HTMLButtonElement>('.pdf-thumbnail-open');
+    if (button && !button.disabled) {
+      button.focus({ preventScroll: true });
+      pendingButtonFocus.current = null;
+    }
+  });
 
   return (
     <div
@@ -318,6 +397,7 @@ export function PdfThumbnailGrid({
                 card={card}
                 cache={cache}
                 imageHeight={imageHeight}
+                imageWidth={cardWidth - 2}
                 selected={selectedIds?.has(card.id) ?? false}
                 focused={focusedId === card.id}
                 onOpen={onOpen}

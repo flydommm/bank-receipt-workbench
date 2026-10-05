@@ -18,6 +18,7 @@ export type ReceiptBatchEntryProps = {
   onEnterReview: () => void;
   onExport: () => void;
   templateControls?: ReactNode;
+  accountControls?: ReactNode;
 };
 
 function stateLabel(state: ReceiptBatchState): string {
@@ -49,7 +50,7 @@ export function ReceiptBatchEntry(props: ReceiptBatchEntryProps) {
   const resultCount = props.resultCount ?? 0;
 
   return (
-    <section className="receipt-batch-entry" aria-labelledby="receipt-batch-entry-title">
+    <section className="receipt-batch-entry" data-mode={props.mode} aria-labelledby="receipt-batch-entry-title">
       <div className="receipt-batch-entry__header">
         <div>
           <h2 id="receipt-batch-entry-title">分析与分割</h2>
@@ -82,6 +83,7 @@ export function ReceiptBatchEntry(props: ReceiptBatchEntryProps) {
       </fieldset>
 
       {props.templateControls && <div className="receipt-batch-entry__templates">{props.templateControls}</div>}
+      {props.mode === 'split_all' && props.accountControls}
 
       {props.state.error && (
         <div className="receipt-batch-entry__error" role="alert">{props.state.error}</div>

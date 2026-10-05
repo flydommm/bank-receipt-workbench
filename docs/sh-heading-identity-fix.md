@@ -4,7 +4,7 @@
 
 ## 恢复点与问题
 
-修复前已提交上一轮复检记录：`18aa3ac docs: record 0.1.48 remote targeted acceptance`。原 [0.1.48 远端复检记录](acceptance-0.1.48-remote.md) 保留当时的真实结果。
+修复前已提交上一轮复检记录：`18aa3ac docs: record 0.1.48 remote targeted acceptance`。原 0.1.48 远端复检记录（历史资料已归档） 保留当时的真实结果。
 
 SH-A 普通回单不能保存跨文件模板有两个可复现原因：
 

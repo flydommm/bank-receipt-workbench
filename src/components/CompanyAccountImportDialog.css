@@ -1,0 +1,407 @@
+.company-account-import-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(16, 38, 63, .5);
+}
+
+.company-account-import-dialog {
+  --company-account-import-ink: #20374a;
+  --company-account-import-heading: #172b42;
+  --company-account-import-muted: #6a8194;
+  --company-account-import-soft: #8296a4;
+  --company-account-import-line: #dce6ed;
+  --company-account-import-wash: #f5f8fa;
+  --company-account-import-paper: #fffefa;
+  --company-account-import-moss: #3f8b7b;
+  --company-account-import-moss-dark: #286c60;
+  --company-account-import-danger: #a6534d;
+  display: flex;
+  width: min(1240px, 100%);
+  max-height: min(820px, calc(100vh - 40px));
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--company-account-import-line);
+  border-radius: 16px;
+  background: var(--company-account-import-paper);
+  box-shadow: 0 28px 80px rgba(16, 38, 63, .28);
+  color: var(--company-account-import-ink);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.company-account-import-dialog h2,
+.company-account-import-dialog p,
+.company-account-import-dialog dl {
+  margin: 0;
+}
+
+.company-account-import-dialog button {
+  font: inherit;
+}
+
+.company-account-import-dialog__header,
+.company-account-import-dialog__summary,
+.company-account-import-dialog__filters,
+.company-account-import-dialog__actions {
+  flex: 0 0 auto;
+}
+
+.company-account-import-dialog__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 17px 22px 14px;
+  border-bottom: 1px solid #edf1f5;
+}
+
+.company-account-import-dialog__header h2 {
+  margin-top: 3px;
+  color: var(--company-account-import-heading);
+  font-size: 19px;
+  letter-spacing: -.02em;
+  line-height: 1.25;
+  outline: 0;
+}
+
+.company-account-import-dialog__header h2:focus-visible {
+  outline: 3px solid rgba(63, 139, 123, .3);
+  outline-offset: 4px;
+  border-radius: 3px;
+}
+
+.company-account-import-dialog__file,
+.company-account-import-dialog__saving {
+  margin-top: 5px !important;
+  color: var(--company-account-import-muted);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.company-account-import-dialog__saving {
+  flex: 0 1 260px;
+  padding-top: 3px;
+  color: var(--company-account-import-moss-dark);
+  text-align: right;
+}
+
+.company-account-import-dialog__summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 13px 22px 10px;
+}
+
+.company-account-import-dialog__summary-heading {
+  display: grid;
+  gap: 2px;
+  min-width: 150px;
+}
+
+.company-account-import-dialog__summary-heading strong {
+  color: var(--company-account-import-heading);
+  font-size: 13px;
+}
+
+.company-account-import-dialog__summary-heading span {
+  color: var(--company-account-import-soft);
+  font-size: 12px;
+}
+
+.company-account-import-dialog__summary dl {
+  display: grid;
+  min-width: min(100%, 510px);
+  grid-template-columns: repeat(3, minmax(110px, 1fr));
+  gap: 8px;
+}
+
+.company-account-import-dialog__summary dl > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--company-account-import-line);
+  border-radius: 8px;
+  padding: 7px 10px;
+  background: var(--company-account-import-wash);
+}
+
+.company-account-import-dialog__summary dt {
+  color: var(--company-account-import-muted);
+}
+
+.company-account-import-dialog__summary dd {
+  margin: 0;
+  color: var(--company-account-import-heading);
+  font-size: 15px;
+  font-weight: 750;
+}
+
+.company-account-import-dialog__filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  padding: 0 22px 12px;
+  border-bottom: 1px solid #edf1f5;
+}
+
+.company-account-import-dialog__filters button,
+.company-account-import-dialog__actions button {
+  min-height: 2.2rem;
+  border: 1px solid var(--company-account-import-line);
+  border-radius: 7px;
+  padding: 6px 11px;
+  background: var(--company-account-import-wash);
+  color: var(--company-account-import-muted);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.company-account-import-dialog__filters button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.company-account-import-dialog__filters button strong {
+  color: var(--company-account-import-heading);
+  font-size: 13px;
+}
+
+.company-account-import-dialog__filters button:hover:not(:disabled),
+.company-account-import-dialog__filters button.is-active,
+.company-account-import-dialog__actions button:hover:not(:disabled) {
+  border-color: #b9d3cd;
+  background: #eef8f4;
+  color: var(--company-account-import-moss-dark);
+}
+
+.company-account-import-dialog__error {
+  flex: 0 0 auto;
+  margin: 10px 22px 0 !important;
+  border: 1px solid #e5b4b0;
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #fff5f4;
+  color: var(--company-account-import-danger);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.company-account-import-dialog__table-scroll {
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable both-edges;
+}
+
+.company-account-import-dialog__table {
+  width: 100%;
+  min-width: 1080px;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.company-account-import-dialog__table th,
+.company-account-import-dialog__table td {
+  border-bottom: 1px solid #edf1f5;
+  padding: 9px 10px;
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.company-account-import-dialog__table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #f4f8fa;
+  color: var(--company-account-import-muted);
+  font-size: 12px;
+  font-weight: 750;
+  letter-spacing: .03em;
+}
+
+.company-account-import-dialog__table tbody th {
+  color: var(--company-account-import-muted);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.company-account-import-dialog__table tbody td {
+  color: var(--company-account-import-ink);
+}
+
+.company-account-import-dialog__table .is-account-number {
+  word-break: break-all;
+  font-variant-numeric: tabular-nums;
+}
+
+.company-account-import-dialog__col-row { width: 7%; }
+.company-account-import-dialog__col-company { width: 19%; }
+.company-account-import-dialog__col-bank { width: 12%; }
+.company-account-import-dialog__col-branch { width: 16%; }
+.company-account-import-dialog__col-account { width: 19%; }
+.company-account-import-dialog__col-status { width: 7%; }
+.company-account-import-dialog__col-message { width: 20%; }
+
+.company-account-import-dialog__status {
+  display: inline-flex;
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 12px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.company-account-import-dialog__status--ready {
+  background: #e7f4ef;
+  color: #286c60;
+}
+
+.company-account-import-dialog__status--duplicate {
+  background: #fff4db;
+  color: #8a6a35;
+}
+
+.company-account-import-dialog__status--error {
+  background: #fff0ee;
+  color: var(--company-account-import-danger);
+}
+
+.company-account-import-dialog__empty {
+  padding: 25px 22px;
+  color: var(--company-account-import-muted);
+  text-align: center;
+}
+
+.company-account-import-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 22px 15px;
+  border-top: 1px solid #edf1f5;
+}
+
+.company-account-import-dialog__actions button {
+  min-width: 100px;
+}
+
+.company-account-import-dialog__actions .company-account-import-dialog__confirm {
+  border-color: var(--company-account-import-moss);
+  background: var(--company-account-import-moss);
+  color: #fff;
+}
+
+.company-account-import-dialog__actions .company-account-import-dialog__confirm:hover:not(:disabled) {
+  border-color: var(--company-account-import-moss-dark);
+  background: var(--company-account-import-moss-dark);
+  color: #fff;
+}
+
+.company-account-import-dialog button:focus-visible,
+.company-account-import-dialog [tabindex]:focus-visible {
+  outline: 3px solid rgba(63, 139, 123, .3);
+  outline-offset: 2px;
+}
+
+.company-account-import-dialog button:disabled {
+  cursor: not-allowed;
+  opacity: .52;
+}
+
+@media (max-width: 760px) {
+  .company-account-import-dialog-backdrop {
+    align-items: stretch;
+    padding: 10px;
+  }
+
+  .company-account-import-dialog {
+    width: 100%;
+    max-height: 100%;
+    border-radius: 12px;
+  }
+
+  .company-account-import-dialog__header,
+  .company-account-import-dialog__summary,
+  .company-account-import-dialog__filters,
+  .company-account-import-dialog__actions {
+    padding-inline: 16px;
+  }
+
+  .company-account-import-dialog__summary {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .company-account-import-dialog__summary dl {
+    min-width: 0;
+  }
+
+  .company-account-import-dialog__saving {
+    flex-basis: auto;
+    padding-top: 0;
+    text-align: left;
+  }
+
+  .company-account-import-dialog__error {
+    margin-inline: 16px !important;
+  }
+}
+
+@media (max-width: 520px) {
+  .company-account-import-dialog__header {
+    flex-direction: column;
+  }
+
+  .company-account-import-dialog__summary dl {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .company-account-import-dialog__actions {
+    flex-direction: column-reverse;
+  }
+
+  .company-account-import-dialog__actions button {
+    width: 100%;
+  }
+}
+
+@media (max-height: 720px) {
+  .company-account-import-dialog-backdrop {
+    padding-block: 10px;
+  }
+
+  .company-account-import-dialog {
+    max-height: calc(100vh - 20px);
+  }
+
+  .company-account-import-dialog__header {
+    padding-block: 12px 10px;
+  }
+
+  .company-account-import-dialog__summary {
+    padding-block: 9px 7px;
+  }
+
+  .company-account-import-dialog__filters {
+    padding-bottom: 8px;
+  }
+
+  .company-account-import-dialog__actions {
+    padding-block: 9px 11px;
+  }
+}

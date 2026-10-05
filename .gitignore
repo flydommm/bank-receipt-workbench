@@ -29,3 +29,5 @@ tmp_ocr_test.pdf
 *.pfx
 *.p12
 docs/internal/
+# Local working notes; never ship with source or installers.
+/readme.txt

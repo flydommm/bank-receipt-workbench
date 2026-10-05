@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { SPECIAL_DOCUMENT_LABELS, type ReceiptBatchReviewPageItem } from '../domain/receiptBatch';
 import { isReceiptExcluded, matchesReceiptFilter, needsReceiptReview, type ReceiptCalibrationController, type ReceiptCalibrationState, type ReceiptReviewSession } from '../services/receiptCalibrationController';
-import { PdfThumbnailGrid, type PdfThumbnailCard } from './PdfThumbnailGrid';
+import { PdfThumbnailGrid, type PdfThumbnailAttention, type PdfThumbnailCard, type PdfThumbnailTone } from './PdfThumbnailGrid';
 import ThumbnailSizeControl, { THUMBNAIL_SIZE_DEFAULT } from './ThumbnailSizeControl';
 import { ReceiptDocumentTypePanel } from './ReceiptDocumentTypePanel';
 import './ReceiptOverview.css';
@@ -13,27 +13,41 @@ type Props = {
   state: ReceiptCalibrationState;
   controller: ReceiptCalibrationController;
   canExport: boolean;
+  primaryActionLabel?: string;
   onExport: () => void;
   onBack: () => void;
   onOpenTemplates?: () => void;
   renderPage: (card: ReceiptOverviewCard) => ReactNode;
   active?: boolean;
+  groupingFilterIds?: string[] | null;
+  requestedSegment?: { id: string; sequence: number } | null;
 };
 const pageKey = (source: string, page: number) => JSON.stringify([source, page]);
 const typeMatches = (item: ReceiptBatchReviewPageItem, type: DocumentType) => type === 'all'
   || (type === 'ordinary' ? !item.page_notice : type === 'special' ? Boolean(item.page_notice) : item.page_notice?.document_type === type);
-export const receiptStatusLabel = (item: ReceiptBatchReviewPageItem) => isReceiptExcluded(item) ? '已排除'
-  : item.record?.review_status === 'blocked' ? '需调整'
-    : needsReceiptReview(item) ? '待复核' : item.record ? '已确认' : '自动候选';
-const tone = (item: ReceiptBatchReviewPageItem): 'excluded' | 'pending' | 'confirmed' => isReceiptExcluded(item) ? 'excluded'
-  : needsReceiptReview(item) ? 'pending' : 'confirmed';
 const isSuspectedInvalid = (item: ReceiptBatchReviewPageItem) => Boolean(item.exclusion_notice)
   && !item.page_notice && needsReceiptReview(item);
-const attention = (item: ReceiptBatchReviewPageItem) => isReceiptExcluded(item) ? undefined : item.page_notice ? 'special' as const
+export const receiptStatusLabel = (item: ReceiptBatchReviewPageItem) => isReceiptExcluded(item) ? '已排除'
+  : item.record?.review_status === 'blocked' ? '需调整'
+    : isSuspectedInvalid(item) ? '待核对'
+      : needsReceiptReview(item) ? '待复核' : item.record ? '已确认' : '自动候选';
+const tone = (item: ReceiptBatchReviewPageItem): PdfThumbnailTone => isReceiptExcluded(item) ? 'excluded'
+  : needsReceiptReview(item) ? 'pending' : item.record ? 'confirmed' : 'automatic';
+const attention = (item: ReceiptBatchReviewPageItem): PdfThumbnailAttention | undefined => isReceiptExcluded(item) ? undefined : item.page_notice ? 'special'
   : isSuspectedInvalid(item) ? 'suspected' as const : undefined;
 const effectiveRect = (item: ReceiptBatchReviewPageItem) => item.record ? item.record.final_rect ?? {
   x0: 0, y0: 0, x1: item.original.page_geometry.width_pt, y1: item.original.page_geometry.height_pt,
 } : item.original.candidate_rect;
+const receiptOverlayLabel = (item: ReceiptBatchReviewPageItem, badge: string) => {
+  const position = `第 ${item.original.source_page} 页 · 第 ${item.original.position_index} 栏`;
+  const kind = item.page_notice ? SPECIAL_DOCUMENT_LABELS[item.page_notice.document_type]
+    : isSuspectedInvalid(item) ? '疑似无效' : '普通回单';
+  return `${position} · ${kind} · ${badge}`;
+};
+const receiptProjection = (item: ReceiptBatchReviewPageItem) => {
+  const badge = receiptStatusLabel(item);
+  return { tone: tone(item), attention: attention(item), badge, label: receiptOverlayLabel(item, badge) };
+};
 
 /** Page selection expands only to the matching candidates, never to unseen keyword misses. */
 export function buildReceiptOverviewCards(session: ReceiptReviewSession, items: ReceiptBatchReviewPageItem[], view: View,
@@ -43,11 +57,13 @@ export function buildReceiptOverviewCards(session: ReceiptReviewSession, items: 
   if (view === 'receipts') return items.flatMap((item) => {
     const source = sourcesByKey.get(item.original.source_key);
     if (!source?.sha256 || !source.page_count) return [];
+    const rect = effectiveRect(item), projection = receiptProjection(item);
+    const { label: overlayLabel, ...status } = projection;
     return [{ id: item.original.id, ids: [item.original.id], path: source.access_path, sha: source.sha256,
       page: item.original.source_page, pageCount: source.page_count, sourceLabel: source.name,
       label: `第 ${item.original.source_page} 页 · 第 ${item.original.position_index} 栏`,
       width: item.original.page_geometry.width_pt, height: item.original.page_geometry.height_pt,
-      rect: effectiveRect(item), badge: receiptStatusLabel(item), tone: tone(item), attention: attention(item),
+      rect, ...status, overlays: [{ rect, ...status, label: overlayLabel }],
       description: item.page_notice ? SPECIAL_DOCUMENT_LABELS[item.page_notice.document_type]
         : isSuspectedInvalid(item) ? '疑似无效栏位，请查看原件后决定是否排除' : undefined,
     }];
@@ -74,15 +90,14 @@ export function buildReceiptOverviewCards(session: ReceiptReviewSession, items: 
         width: geometry?.width_pt, height: geometry?.height_pt, selectable: matches.length > 0,
         badge: all.length ? `${matches.length} / ${all.length} 处` : '无候选片段',
         description: all.some((item) => item.page_notice) ? '含特殊单证' : undefined,
-        overlays: all.map((item) => ({ rect: effectiveRect(item), tone: tone(item), attention: attention(item) })),
-        tone: matches.some(needsReceiptReview) ? 'pending' : matches.length && matches.every(isReceiptExcluded) ? 'excluded' : 'confirmed',
+        overlays: all.map((item) => ({ rect: effectiveRect(item), ...receiptProjection(item) })),
       });
     }
   }
   return cards;
 }
 
-export function ReceiptOverview({ state, controller, canExport, onExport, onBack, onOpenTemplates, renderPage, active = true }: Props) {
+export function ReceiptOverview({ state, controller, canExport, primaryActionLabel = '导出回单', onExport, onBack, onOpenTemplates, renderPage, active = true, groupingFilterIds, requestedSegment }: Props) {
   const session = state.session!;
   const [view, setView] = useState<View>('receipts');
   const [sourceFilter, setSourceFilter] = useState('all');
@@ -98,17 +113,20 @@ export function ReceiptOverview({ state, controller, canExport, onExport, onBack
   const dialogRef = useRef<HTMLDivElement>(null), gridRef = useRef<HTMLDivElement>(null);
   const returnFocusCard = useRef<string | null>(null);
   const busy = state.reviewConfirming;
-  const scope = JSON.stringify([view, sourceFilter, typeFilter, state.reviewFilter, suspectedOnly]);
+  const scope = JSON.stringify([view, sourceFilter, typeFilter, state.reviewFilter, suspectedOnly, groupingFilterIds]);
   const sessionKey = (value: ReceiptReviewSession) => JSON.stringify([value.prepared.binding.job.id, value.prepared.binding.contextKey,
     value.prepared.prepared?.context_key, value.prepared.prepared?.result_revision,
     value.prepared.binding.job.sources.map((source) => [source.source_key, source.sha256])]);
   const contextKey = sessionKey(session);
+  const groupingIds = useMemo(() => groupingFilterIds ? new Set(groupingFilterIds) : null, [groupingFilterIds]);
+  const openedRequest = useRef<object | null>(null);
   const filtered = useMemo(() => session.items.filter((item) => (sourceFilter === 'all' || item.original.source_key === sourceFilter)
     && typeMatches(item, typeFilter) && matchesReceiptFilter(item, state.reviewFilter)
+    && (!groupingIds || groupingIds.has(item.original.id))
     && (!suspectedOnly || isSuspectedInvalid(item))),
-    [session, sourceFilter, typeFilter, state.reviewFilter, suspectedOnly]);
+    [session, sourceFilter, typeFilter, state.reviewFilter, suspectedOnly, groupingIds]);
   const cards = useMemo(() => buildReceiptOverviewCards(session, filtered, view, sourceFilter,
-    state.reviewFilter === 'all' && typeFilter === 'all'), [session, filtered, view, sourceFilter, state.reviewFilter, typeFilter]);
+    state.reviewFilter === 'all' && typeFilter === 'all' && !groupingIds), [session, filtered, view, sourceFilter, state.reviewFilter, typeFilter, groupingIds]);
   const checked = selection && sessionKey(selection.session) === contextKey && selection.scope === scope ? selection.ids : new Set<string>();
   const selected = filtered.filter((item) => checked.has(item.original.id));
   const selectedCards = new Set(cards.filter((card) => card.ids.length && card.ids.every((id) => checked.has(id))).map((card) => card.id));
@@ -139,6 +157,17 @@ export function ReceiptOverview({ state, controller, canExport, onExport, onBack
   useEffect(() => { if (!active) { setDetailId(null); setSelection(null); setTypeEditor(null); } }, [active]);
   useEffect(() => { if (suspectedOnly && suspectedCount === 0) setSuspectedOnly(false); }, [suspectedOnly, suspectedCount]);
   useEffect(() => { if (detailId && !detail) setDetailId(null); }, [detailId, detail]);
+  useEffect(() => {
+    if (!requestedSegment || openedRequest.current === requestedSegment || !active
+        || !session.items.some((item) => item.original.id === requestedSegment.id)) return;
+    if (view !== 'receipts' || sourceFilter !== 'all' || typeFilter !== 'all' || suspectedOnly || state.reviewFilter !== 'all') {
+      setView('receipts'); setSourceFilter('all'); setTypeFilter('all'); setSuspectedOnly(false);
+      controller.setReviewFilter('all'); return;
+    }
+    if (!cardById.has(requestedSegment.id)) return;
+    openedRequest.current = requestedSegment;
+    setDetailId(requestedSegment.id); setDetailItemId(requestedSegment.id);
+  }, [requestedSegment, scope, contextKey, active, session, controller]);
   useEffect(() => { if (state.reviewNotice && !state.error) { setSelection(null); setTypeEditor(null); } }, [state.reviewNotice, state.error]);
   useEffect(() => {
     if (!detailId) return;
@@ -190,9 +219,9 @@ export function ReceiptOverview({ state, controller, canExport, onExport, onBack
   return <section className="receipt-overview" aria-label="回单检查总览">
     <header className="receipt-overview__heading">
       <div><h2>检查与处理</h2><p>全部 {session.items.length} 处<span>待复核 {pending} 处</span><span>已排除 {excluded} 处</span></p></div>
-      <p className="receipt-overview__workflow" role="note">建议顺序：核对并排除无效 → 核对特殊单证 → 应用模板或微调 → 逐栏复核（可保存或更新模板） → 检查预览 → 导出</p>
+      <p className="receipt-overview__workflow" role="note">建议顺序：排除无效 → 核对特殊单证 → 必要时调整边界或模板 → 完成复核{primaryActionLabel === '进入交易对手分组' ? ' → 核对交易对手 → 检查并导出' : ' → 检查并导出'}</p>
       <div className="receipt-overview__heading-actions"><button type="button" disabled={busy} onClick={onBack}>返回分析</button>
-        {canExport && <button type="button" className="primary" disabled={busy} onClick={onExport}>导出回单</button>}</div>
+        {canExport && <button type="button" className="primary" disabled={busy} onClick={onExport}>{primaryActionLabel}</button>}</div>
     </header>
     {state.error && <p className="receipt-overview__error" role="alert">{state.error}</p>}
     {state.reviewNotice && <p className="receipt-overview__notice" role="status">{state.reviewNotice}</p>}

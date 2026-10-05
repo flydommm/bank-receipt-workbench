@@ -1,0 +1,18 @@
+{
+  "before": {
+    "rule_id": "field-rule-29571abd1e4b4d55b78dfa8dcebd78c6",
+    "revision": 1,
+    "name": "合成读取规则",
+    "bank_name": "合成银行",
+    "mode": "direct",
+    "active": true
+  },
+  "after": {
+    "rule_id": "field-rule-29571abd1e4b4d55b78dfa8dcebd78c6",
+    "revision": 1,
+    "name": "合成读取规则",
+    "bank_name": "合成银行",
+    "mode": "direct",
+    "active": false
+  }
+}

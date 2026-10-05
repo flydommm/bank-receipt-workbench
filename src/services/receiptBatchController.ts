@@ -86,7 +86,7 @@ export class ReceiptBatchController {
     processing_options: ProcessingOptions;
     match_mode: BatchMatchMode;
     layout_template_id?: string | null;
-  }): Promise<ReceiptBatchJobSnapshot | null> {
+  }, beforeStart?: (job: ReceiptBatchJobSnapshot, signal: AbortSignal) => Promise<void>): Promise<ReceiptBatchJobSnapshot | null> {
     if (this.disposed || this.state.busy) return null;
     const epoch = this.invalidate();
     this.update({ busy: true, error: null, phase: 'creating' });
@@ -94,7 +94,14 @@ export class ReceiptBatchController {
       const created = await this.client.create(input, this.abort.signal);
       if (epoch !== this.epoch || this.disposed) return null;
       if (created.status === 'error') throw new ReceiptBatchClientError(created.code, created.message);
-      this.update({ job: created.data, phase: 'running' });
+      this.update({ job: created.data });
+      // Freeze optional local account/grouping settings before any PDF analysis starts.
+      // A failed or superseded setup must never launch a task with the wrong account.
+      if (beforeStart) {
+        await beforeStart(created.data, this.abort.signal);
+        if (epoch !== this.epoch || this.disposed) return null;
+      }
+      this.update({ phase: 'running' });
       const started = await this.client.start({ job_id: created.data.id, generation: created.data.generation }, this.abort.signal);
       if (epoch !== this.epoch || this.disposed) return null;
       if (started.status === 'error') throw new ReceiptBatchClientError(started.code, started.message);

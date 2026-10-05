@@ -56,6 +56,7 @@ MAX_TEXT_CHARACTER_BUDGET = 1_000_000
 MAX_VISIBLE_OBJECT_BUDGET = 32_768
 MAX_BITMAP_IMAGES = 128
 MAX_BITMAP_PLACEMENTS = 128
+MAX_FILLED_RULES = 128
 
 _TITLE_DEDUP_GAP = 32.0
 _LINE_TOLERANCE = 2.0
@@ -314,6 +315,8 @@ def _issuer_bank_name(
     Conflicting mastheads are ambiguous and do not establish an issuer.
     """
     banks: set[str] = set()
+    # A title prefix is only a candidate. The shared canonicalizer rejects
+    # channel headings such as online banking; they never establish a bank.
     bank_end = title.title_text.find("银行")
     if bank_end >= 0:
         bank = _canonical_bank_heading(title.title_text[:bank_end + 2])
@@ -597,6 +600,57 @@ def _rectangle_lines(rect: Any, width: float, height: float) -> list[_Line]:
     ]
 
 
+def _filled_rule(drawing: dict[str, Any], width: float, height: float) -> tuple[_Line, Any] | None:
+    """A narrow fill can draw a rule, but a cell background cannot."""
+    fill = drawing.get("fill")
+    if (drawing.get("type") != "f" or not isinstance(fill, (tuple, list)) or not fill
+            or any(not _finite(value) or not 0 <= value <= .35 for value in fill)
+            or drawing.get("fill_opacity", 0) < .99):
+        return None
+    items = drawing.get("items", ())
+    if not items or any(not isinstance(item, (tuple, list)) or not item or item[0] not in {"l", "re"} for item in items):
+        return None
+    try:
+        rect = fitz.Rect(drawing["rect"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if (not all(_finite(value) for value in rect) or not 0 <= rect.x0 < rect.x1 <= width
+            or not 0 <= rect.y0 < rect.y1 <= height or min(rect.width, rect.height) > 2):
+        return None
+    if rect.width >= rect.height:
+        candidates = _axis_line(rect.x0, (rect.y0 + rect.y1) / 2, rect.x1, (rect.y0 + rect.y1) / 2, width, height)
+    else:
+        candidates = _axis_line((rect.x0 + rect.x1) / 2, rect.y0, (rect.x0 + rect.x1) / 2, rect.y1, width, height)
+    return (candidates[0], rect) if candidates else None
+
+
+def _visible_filled_rules(page: Any, candidates: list[tuple[_Line, Any]]) -> list[_Line]:
+    """Require continuous visible ink, including clipping and later overlays."""
+    if not candidates:
+        return []
+    if len(candidates) > MAX_FILLED_RULES:
+        raise _BudgetExceeded
+    # Reuse one display list instead of parsing every drawing for every rule.
+    displayed = page.get_displaylist()
+    result = []
+    for line, rect in candidates:
+        if (math.ceil(rect.width * 2) + 1) * (math.ceil(rect.height * 2) + 1) > 32768:
+            continue
+        pixmap = displayed.get_pixmap(matrix=fitz.Matrix(2, 2), clip=rect, colorspace=fitz.csGRAY, alpha=False)
+        width, height, samples = pixmap.width, pixmap.height, pixmap.samples
+        if not width or not height or width * height > 32768:
+            continue
+        if line.orientation == "h":
+            ink = sum(any(samples[y * pixmap.stride + x] < 120 for y in range(height)) for x in range(width))
+            length = width
+        else:
+            ink = sum(any(samples[y * pixmap.stride + x] < 120 for x in range(width)) for y in range(height))
+            length = height
+        if ink >= length * .98:
+            result.append(line)
+    return result
+
+
 def _drawing_lines(page: Any, width: float, height: float) -> list[_Line]:
     try:
         page = visible_page(page)
@@ -605,6 +659,7 @@ def _drawing_lines(page: Any, width: float, height: float) -> list[_Line]:
         raise ValueError("drawing geometry is unavailable") from None
 
     lines: list[_Line] = []
+    filled_rules = []
     drawing_count = 0
     item_count = 0
     for drawing in drawings:
@@ -619,8 +674,10 @@ def _drawing_lines(page: Any, width: float, height: float) -> list[_Line]:
         item_count += len(items)
         if item_count > MAX_DRAWING_ITEM_BUDGET:
             raise _BudgetExceeded
-        # Invisible fills do not provide reliable table-line evidence.  Their
-        # items still count toward the resource budget above.
+        if (filled := _filled_rule(drawing, width, height)) is not None:
+            filled_rules.append(filled)
+        # Filled table rules must pass rendered visibility checks below;
+        # background fills never contribute their bounding rectangle edges.
         if drawing.get("type") == "f" or drawing.get("color") is None:
             continue
         for item in items:
@@ -645,6 +702,7 @@ def _drawing_lines(page: Any, width: float, height: float) -> list[_Line]:
             elif kind == "re" and len(item) >= 2:
                 lines.extend(_rectangle_lines(item[1], width, height))
 
+    lines.extend(_visible_filled_rules(page, filled_rules))
     lines.extend(_bitmap_horizontal_lines(page, width, height))
     unique: dict[tuple[object, ...], _Line] = {}
     for line in lines:
@@ -1315,7 +1373,7 @@ def _ready_template(
             frames = _frame_rectangles(lines, width, height)
         except _BudgetExceeded:
             pass  # Optional visual identity must not invalidate a descriptor.
-    visual_form = describe_visual_form(page, titles, frames=frames)
+    visual_form = describe_visual_form(page, titles, frames=frames, text_lines=text_lines)
     if visual_form is not None:
         result["layout_compatibility"] = visual_form
     return result

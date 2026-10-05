@@ -8,7 +8,7 @@ from pathlib import Path
 import sqlite3
 from typing import Any
 
-from .export_scope import ExportScopeError, _digest
+from .export_scope import ExportScopeError, GROUPED_OUTPUT_MODES, _digest
 from .receipt_review_models import ReceiptReviewError, validate_receipt_context, validate_receipt_originals
 from .receipt_review_read import read_receipt_review_snapshot
 from .receipt_review_store import validate_context_row
@@ -30,6 +30,8 @@ def build_receipt_export_scope(
     request: dict[str, Any],
     geometry_valid: set[str],
     items: list[dict[str, Any]],
+    *,
+    grouping_snapshot: object | None = None,
 ) -> dict[str, Any]:
     descriptor, source_shas, context_key = validate_receipt_context(snapshot["context"], trusted_aliases=True)
     _, expected_manifest, _ = validate_receipt_originals(snapshot["originals"], source_shas)
@@ -152,4 +154,9 @@ def build_receipt_export_scope(
     if "include_manifest" in request:
         result["include_manifest"] = request["include_manifest"]
     result["snapshot_digest"] = _digest(result)
+    if request.get("output_mode") in GROUPED_OUTPUT_MODES:
+        if grouping_snapshot is None:
+            raise ExportScopeError("grouping snapshot is unavailable", "grouping_stale")
+        from .receipt_grouped_export import build_grouped_receipt_export_scope
+        return build_grouped_receipt_export_scope(result, request, grouping_snapshot)
     return result

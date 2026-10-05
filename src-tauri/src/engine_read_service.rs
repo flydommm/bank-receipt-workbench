@@ -1,8 +1,9 @@
-//! One bounded, app-owned JSONL engine for frequent read operations.
+//! One bounded, app-owned JSONL engine for frequent reads and grouping work.
 //!
 //! Audited read data may be retained by content fingerprint; handlers still validate each source and
-//! open/close their own PDF or database. Writes and long inspections keep the
-//! existing one-shot process path. No requests are pipelined on stdout.
+//! open/close their own PDF or database. Grouping operations retain their own
+//! transaction/CAS checks; other writes and long inspections keep the existing
+//! one-shot process path. No requests are pipelined on stdout.
 
 use crate::engine_process::{OwnedProcess, ProcessControl, ProcessSpec, ProcessSupervisor};
 use serde_json::Value;
@@ -61,7 +62,9 @@ impl EngineReadService {
     pub fn supports(request: &Value) -> bool {
         matches!(
             request.get("op").and_then(Value::as_str),
-            Some("render_page" | "inspect_pdf" | "batch_snapshot" | "batch_receipt_review_page")
+            Some("render_page" | "inspect_pdf" | "batch_snapshot" | "batch_receipt_review_page"
+                | "batch_receipt_grouping_prepare" | "batch_receipt_grouping_page"
+                | "batch_receipt_grouping_refresh" | "batch_receipt_grouping_save")
         )
     }
 
@@ -73,7 +76,7 @@ impl EngineReadService {
         timeout: Duration,
     ) -> Result<Value, String> {
         if !Self::supports(&request) {
-            return Err("operation is not allowed on the read engine".into());
+            return Err("operation is not allowed on the reusable engine".into());
         }
         let deadline = Instant::now()
             .checked_add(timeout)
@@ -307,12 +310,16 @@ mod tests {
     use std::thread;
 
     #[test]
-    fn only_short_read_operations_are_admitted() {
+    fn only_explicit_read_and_grouping_operations_are_admitted() {
         for op in [
             "render_page",
             "inspect_pdf",
             "batch_snapshot",
             "batch_receipt_review_page",
+            "batch_receipt_grouping_prepare",
+            "batch_receipt_grouping_page",
+            "batch_receipt_grouping_refresh",
+            "batch_receipt_grouping_save",
         ] {
             assert!(EngineReadService::supports(&json!({"op": op})));
         }
@@ -322,6 +329,8 @@ mod tests {
             "batch_control",
             "batch_receipt_calibration_preview",
             "batch_save_receipt_review",
+            "batch_receipt_grouping_set_account",
+            "batch_counterparty_account_save",
             "export_pdf",
             "health",
             "",
@@ -502,6 +511,10 @@ mod tests {
             "inspect_pdf",
             "batch_snapshot",
             "batch_receipt_review_page",
+            "batch_receipt_grouping_prepare",
+            "batch_receipt_grouping_page",
+            "batch_receipt_grouping_refresh",
+            "batch_receipt_grouping_save",
             "render_page",
         ]
         .iter()
@@ -576,11 +589,11 @@ mod tests {
         let script = "import sys,json,os\nfor line in sys.stdin:\n r=json.loads(line)\n if r.get('crash'): os._exit(1)\n if r.get('invalid'): print('not-json',flush=True)\n else: print(json.dumps(dict(status='ok',pid=os.getpid())),flush=True)\n";
         let fixture = Fixture::new(script, 1);
         for error_field in ["invalid", "crash"] {
-            let before = fixture.request(json!({"op":"inspect_pdf"})).unwrap()["pid"].clone();
-            let mut request = json!({"op":"inspect_pdf"});
+            let before = fixture.request(json!({"op":"batch_receipt_grouping_prepare"})).unwrap()["pid"].clone();
+            let mut request = json!({"op":"batch_receipt_grouping_refresh"});
             request[error_field] = json!(true);
             assert!(fixture.request(request).is_err());
-            let after = fixture.request(json!({"op":"inspect_pdf"})).unwrap()["pid"].clone();
+            let after = fixture.request(json!({"op":"batch_receipt_grouping_page"})).unwrap()["pid"].clone();
             assert_ne!(before, after);
         }
     }

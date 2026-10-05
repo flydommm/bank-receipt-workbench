@@ -92,6 +92,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Private runtime native dependency audit failed
 if ($LASTEXITCODE -ne 0) { throw 'Runtime inventory generation failed.' }
 & $python -B -E -s -X utf8 (Join-Path $projectRoot 'engine/engine.py') --health
 if ($LASTEXITCODE -ne 0) { throw 'Bundled engine health check failed.' }
+& $python -B -I (Join-Path $PSScriptRoot 'verify-account-import-runtime.py')
+if ($LASTEXITCODE -ne 0) { throw 'Bundled XLSX account import check failed.' }
 # Console launchers contain build-machine paths and are unused by the app.
 # Only remove generated files below this verified extraction root.
 $generatedScripts = Join-Path $pythonRoot 'Scripts'

@@ -69,6 +69,24 @@ pub fn validate_request(request: &Value) -> Result<&str, String> {
         "batch_prepare_review" => &["job_id", "result_revision"],
         "batch_receipt_review_page" => &["job_id", "result_revision", "offset", "limit"],
         "batch_save_receipt_review" => &["job_id", "result_revision", "edits"],
+        "batch_counterparty_account_list" => &["active_only", "offset", "limit"],
+        "batch_counterparty_account_import_preview" => &["workbook_base64"],
+        "batch_counterparty_account_import" => &["accounts"],
+        "batch_counterparty_account_save" => &["account_id", "expected_account_revision", "account", "active"],
+        "batch_receipt_grouping_set_account" => &["job_id", "expected_grouping_revision", "account_selection"],
+        "batch_receipt_grouping_prepare" => &["job_id", "result_revision", "expected_grouping_revision"],
+        "batch_receipt_grouping_refresh" => &["job_id", "result_revision", "expected_grouping_revision", "expected_review_fingerprint", "segment_ids"],
+        "batch_receipt_grouping_page" => &["job_id", "result_revision", "expected_grouping_revision", "expected_review_fingerprint", "offset", "limit"],
+        "batch_receipt_grouping_save" => &["job_id", "result_revision", "expected_grouping_revision", "expected_review_fingerprint", "edits", "group_edits"],
+        "batch_receipt_field_rule_prepare" => &["job_id", "result_revision", "expected_grouping_revision", "expected_review_fingerprint", "prototype_segment_id", "mode", "fields", "include_resolved"],
+        "batch_receipt_field_rule_step" | "batch_receipt_field_rule_page" => &["job_id", "operation_id", "offset", "limit"],
+        "batch_receipt_field_rule_apply" => &["job_id", "result_revision", "expected_grouping_revision", "expected_review_fingerprint", "operation_id", "save_rule", "rule_name"],
+        "batch_receipt_field_rule_cancel" => &["job_id", "operation_id"],
+        "batch_receipt_field_rule_undo" => &["job_id", "result_revision", "expected_grouping_revision", "expected_review_fingerprint", "operation_id"],
+        "batch_receipt_field_rule_list" => &["active_only"],
+        "batch_receipt_field_rule_deactivate" => &["rule_id", "expected_revision"],
+        "batch_receipt_grouping_diagnostics" => &["job_id", "result_revision", "expected_grouping_revision", "expected_review_fingerprint"],
+        "batch_receipt_grouping_diagnostics_export" => &["job_id", "result_revision", "expected_grouping_revision", "expected_review_fingerprint", "report_id", "directory"],
         "batch_receipt_calibration_prepare" => &["job_id", "result_revision", "sample_id"],
         "batch_receipt_calibration_preview" => &[
             "job_id",
@@ -178,6 +196,21 @@ impl BatchService {
     }
 
     fn call(&self, mut request: Value) -> Result<Value, String> {
+        if matches!(request["op"].as_str(), Some(
+            "batch_counterparty_account_list" | "batch_counterparty_account_save"
+            | "batch_counterparty_account_import_preview" | "batch_counterparty_account_import"
+            | "batch_receipt_grouping_set_account" | "batch_receipt_grouping_prepare"
+            | "batch_receipt_grouping_refresh" | "batch_receipt_grouping_page"
+            | "batch_receipt_grouping_save"
+            | "batch_receipt_field_rule_prepare" | "batch_receipt_field_rule_step"
+            | "batch_receipt_field_rule_page" | "batch_receipt_field_rule_apply"
+            | "batch_receipt_field_rule_cancel" | "batch_receipt_field_rule_undo"
+            | "batch_receipt_field_rule_list" | "batch_receipt_field_rule_deactivate"
+            | "batch_receipt_grouping_diagnostics" | "batch_receipt_grouping_diagnostics_export"
+        )) {
+            request["grouping_database_path"] =
+                json!(self.database.with_file_name("pdf-search.sqlite3"));
+        }
         if matches!(
             request["op"].as_str(),
             Some(
@@ -714,6 +747,51 @@ fn supervise(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn grouping_requests_cannot_supply_private_storage_or_extracted_evidence() {
+        for request in [
+            json!({"op":"batch_counterparty_account_list","active_only":true,"offset":0,"limit":50}),
+            json!({"op":"batch_counterparty_account_save","account_id":null,"expected_account_revision":0,"account":{},"active":true}),
+            json!({"op":"batch_counterparty_account_import_preview","workbook_base64":"eA=="}),
+            json!({"op":"batch_counterparty_account_import","accounts":[]}),
+            json!({"op":"batch_receipt_grouping_set_account","job_id":"j","expected_grouping_revision":0,"account_selection":{}}),
+            json!({"op":"batch_receipt_grouping_prepare","job_id":"j","result_revision":"r","expected_grouping_revision":-1}),
+            json!({"op":"batch_receipt_grouping_refresh","job_id":"j","result_revision":"r","expected_grouping_revision":1,"expected_review_fingerprint":"h","segment_ids":["s"]}),
+            json!({"op":"batch_receipt_grouping_page","job_id":"j","result_revision":"r","expected_grouping_revision":1,"expected_review_fingerprint":"h","offset":0,"limit":200}),
+            json!({"op":"batch_receipt_grouping_save","job_id":"j","result_revision":"r","expected_grouping_revision":1,"expected_review_fingerprint":"h","edits":[],"group_edits":[]}),
+        ] {
+            assert!(validate_request(&request).is_ok());
+            for key in ["database_path", "review_database_path", "grouping_database_path", "source_path", "extracted", "originals", "owner"] {
+                let mut injected = request.clone();
+                injected[key] = json!("forbidden");
+                assert!(validate_request(&injected).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn field_rule_requests_allow_only_public_controls() {
+        for request in [
+            json!({"op":"batch_receipt_field_rule_prepare","job_id":"j","result_revision":"r","expected_grouping_revision":1,"expected_review_fingerprint":"h","prototype_segment_id":"s","mode":"direct","fields":[],"include_resolved":false}),
+            json!({"op":"batch_receipt_field_rule_step","job_id":"j","operation_id":"o","offset":0,"limit":50}),
+            json!({"op":"batch_receipt_field_rule_page","job_id":"j","operation_id":"o","offset":0,"limit":200}),
+            json!({"op":"batch_receipt_field_rule_apply","job_id":"j","result_revision":"r","expected_grouping_revision":1,"expected_review_fingerprint":"h","operation_id":"o","save_rule":true,"rule_name":"合成规则"}),
+            json!({"op":"batch_receipt_field_rule_cancel","job_id":"j","operation_id":"o"}),
+            json!({"op":"batch_receipt_field_rule_undo","job_id":"j","result_revision":"r","expected_grouping_revision":1,"expected_review_fingerprint":"h","operation_id":"o"}),
+            json!({"op":"batch_receipt_field_rule_list","active_only":true}),
+            json!({"op":"batch_receipt_field_rule_deactivate","rule_id":"o","expected_revision":1}),
+            json!({"op":"batch_receipt_grouping_diagnostics","job_id":"j","result_revision":"r","expected_grouping_revision":1,"expected_review_fingerprint":"h"}),
+            json!({"op":"batch_receipt_grouping_diagnostics_export","job_id":"j","result_revision":"r","expected_grouping_revision":1,"expected_review_fingerprint":"h","report_id":"o","directory":"C:\\output"}),
+        ] {
+            assert!(validate_request(&request).is_ok());
+            for key in ["database_path", "grouping_database_path", "review_database_path", "source_path", "definition", "parties", "raw", "extracted", "originals"] {
+                let mut injected = request.clone();
+                injected[key] = json!("forbidden");
+                assert!(validate_request(&injected).is_err());
+            }
+        }
+    }
 
     #[test]
     fn template_management_and_selection_allow_only_public_fields() {

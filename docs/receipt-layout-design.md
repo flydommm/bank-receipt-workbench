@@ -2,7 +2,7 @@
 
 状态：已进入目标模式实施；各阶段实际进度见 TODO，尚未交付完整新功能。日期：2026-09-14。
 
-配套：[实施 TODO](receipt-layout-todo.md) · [验收矩阵](receipt-layout-acceptance.md) · [当前微调流程](guided-review-workflow.md)。
+配套：实施 TODO（历史资料已归档） · [验收矩阵](receipt-layout-acceptance.md) · [当前微调流程](guided-review-workflow.md)。
 
 本方案整理已讨论的产品方向，包含为落地补齐的具体规则。准备文档在提交 `0c6b9fe` 完成，随后用户开启目标模式进入实施。现有安装包和当前功能行为以使用指南为准；不能将计划项视为已交付能力。
 

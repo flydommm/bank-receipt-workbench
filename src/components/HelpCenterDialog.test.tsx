@@ -249,7 +249,7 @@ describe('HelpCenterDialog', () => {
     renderDialog({ engineStatus: 'unavailable', ocrReady: null });
 
     await user.click(screen.getByRole('tab', { name: /使用指南/ }));
-    expect(screen.getByRole('heading', { name: '六步完成一次回单查找。' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: '完成一次回单处理。' })).toBeTruthy();
     expect(screen.getAllByText(/默认每份 PDF 最多 5,000 页/).length).toBe(1);
 
     const guideTab = screen.getByRole('tab', { name: /使用指南/ });
@@ -281,7 +281,8 @@ describe('HelpCenterDialog', () => {
     await user.click(screen.getByRole('tab', { name: /使用指南/ }));
 
     expect(screen.getByRole('heading', { name: '微调与确认：预览本轮后再保存' })).toBeTruthy();
-    expect(screen.getByRole('heading', { name: '阶段一：导入预览' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: '阶段一：选择文件与本方账户' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: '阶段二：分析并检查分割' })).toBeTruthy();
     expect(screen.getAllByText(/原页总览”和“单页/).length).toBeGreaterThan(0);
     expect(screen.getByRole('heading', { name: '勾选只选择，操作才改变状态' })).toBeTruthy();
     expect(screen.getByText(/全选当前筛选结果.*暂未渲染/)).toBeTruthy();
@@ -306,12 +307,21 @@ describe('HelpCenterDialog', () => {
     expect(screen.getAllByText(/统一所有栏位高度不会改变各栏位的顶部位置/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/核实并完成保存 \/ 核实并完成撤销/).length).toBeGreaterThan(0);
     expect(screen.getByRole('heading', { name: '导出结果阶段的按钮' })).toBeTruthy();
-    expect(screen.getByRole('heading', { name: '阶段三：导出结果' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: '阶段三：检查并导出' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: '选择文件与本批账户的按钮' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: '交易对手核对与分组的按钮' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: '查找提取回单的导出步骤' })).toBeTruthy();
+    expect(screen.getAllByText(/选择本机档案/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Excel 导入会完整预览/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/导出核对草稿 Excel/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/批量修改交易对手/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/同版式批量识别/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/导出回单/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/导出名称/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/导出方式/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/同时导出 XLSX 索引/).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/选择目录并导出/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/当前阶段和已用时间/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/普通和分组流程分别记住上次选择/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/重试导出/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/移除本次来源/).length).toBeGreaterThan(0);
     expect(screen.queryByText('预览并导出')).toBeNull();
@@ -322,13 +332,18 @@ describe('HelpCenterDialog', () => {
     expect(within(stageNote).getByText('确认并预览本轮')).toBeTruthy();
     expect(within(stageNote).getByText('本轮已保存')).toBeTruthy();
     expect(within(stageNote).getByText(/微调是分析处理阶段中的可选步骤/)).toBeTruthy();
-    expect(screen.queryByText(/选择导出范围/)).toBeNull();
+    expect(screen.getAllByText(/选择导出范围/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/确认范围并生成预览/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/最终 PDF 导出预览/).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/通用审核组件|可能进入/)).toBeNull();
     expect(screen.queryByText(/进入微调/)).toBeNull();
     expect(screen.queryByText(/开始下一位置微调/)).toBeNull();
 
     expect(screen.getByRole('heading', { name: '审核按钮怎么选' })).toBeTruthy();
     expect(screen.getByText(/勾选本身不会改变审核状态/)).toBeTruthy();
-    expect(screen.getByText(/导出范围固定为全部未排除项/)).toBeTruthy();
+    expect(screen.getByText(/排除无效 → 核对特殊单证 → 必要时调整所选边界或模板/)).toBeTruthy();
+    expect(screen.queryByText(/先选择导出范围，再检查生成的临时 PDF 预览/)).toBeNull();
+    expect(screen.queryByText(/选择目录并导出 PDF/)).toBeNull();
   });
 
   it('requires a description, generates a complete local preview, and copies it', async () => {
@@ -381,12 +396,12 @@ describe('HelpCenterDialog', () => {
     await user.click(screen.getByRole('tab', { name: /使用反馈/ }));
     expect(screen.getByText('venz@163.com')).toBeTruthy();
     expect(screen.getByText('vinz2009')).toBeTruthy();
-    expect(screen.getByText('https://github.com/flydommm/bank-receipt-workbench/issues/new')).toBeTruthy();
-    expect(screen.getByText(/在同一条 Issue 中查看处理进展和回复/)).toBeTruthy();
     expect(screen.getByText(/我们会回复你的来信/)).toBeTruthy();
     expect(screen.getByText(/我们会在微信会话中回复/)).toBeTruthy();
+    expect(screen.queryByText(/GitHub/i)).toBeNull();
+    expect(screen.queryByText(/Issue/i)).toBeNull();
     expect((screen.getByRole('button', { name: '复制反馈并写邮件' }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole('button', { name: '复制反馈并打开 GitHub' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole('button', { name: /打开 GitHub/i })).toBeNull();
     expect(copyFeedbackReport).not.toHaveBeenCalled();
     expect(copyFeedbackContact).not.toHaveBeenCalled();
     expect(openFeedbackChannel).not.toHaveBeenCalled();
@@ -433,7 +448,7 @@ describe('HelpCenterDialog', () => {
     expect(copyFeedbackReport).toHaveBeenCalledOnce();
     expect(copyFeedbackReport).toHaveBeenCalledWith(expect.stringContaining('合成反馈正文'));
     expect(openFeedbackChannel).not.toHaveBeenCalled();
-    for (const name of ['复制文本', '保存为 TXT', '复制邮箱', '复制微信号', '复制反馈并打开 GitHub']) {
+    for (const name of ['复制文本', '保存为 TXT', '复制邮箱', '复制微信号']) {
       expect((screen.getByRole('button', { name }) as HTMLButtonElement).disabled).toBe(true);
     }
     expect((screen.getByRole('textbox', { name: /问题描述/ }) as HTMLTextAreaElement).disabled).toBe(true);
@@ -443,7 +458,7 @@ describe('HelpCenterDialog', () => {
     expect((email as HTMLButtonElement).disabled).toBe(false);
   });
 
-  it('uses the latest preview for GitHub and tells the user to submit and follow up there', async () => {
+  it('uses the latest preview for email and tells the user to send it manually', async () => {
     const user = userEvent.setup();
     vi.mocked(copyFeedbackReport).mockResolvedValue(undefined);
     vi.mocked(openFeedbackChannel).mockResolvedValue(undefined);
@@ -453,14 +468,14 @@ describe('HelpCenterDialog', () => {
     fireEvent.change(description, { target: { value: '旧的合成描述' } });
     await user.click(screen.getByRole('button', { name: '生成反馈预览' }));
     fireEvent.change(description, { target: { value: '修正后的合成描述' } });
-    await user.click(screen.getByRole('button', { name: '复制反馈并打开 GitHub' }));
+    await user.click(screen.getByRole('button', { name: '复制反馈并写邮件' }));
     expect(copyFeedbackReport).toHaveBeenCalledWith(expect.stringContaining('修正后的合成描述'));
     expect(copyFeedbackReport).not.toHaveBeenCalledWith(expect.stringContaining('旧的合成描述'));
-    expect(openFeedbackChannel).toHaveBeenCalledExactlyOnceWith('github');
-    expect(channelStatus().textContent).toContain('在该 Issue 查看回复');
-    expect(channelStatus().textContent).toContain('当前尚未提交');
+    expect(openFeedbackChannel).toHaveBeenCalledExactlyOnceWith('email');
+    expect(channelStatus().textContent).toContain('venz@163.com');
+    expect(channelStatus().textContent).toContain('当前尚未发送');
     fireEvent.change(description, { target: { value: '' } });
-    expect((screen.getByRole('button', { name: '复制反馈并打开 GitHub' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: '复制反馈并写邮件' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it('does not open a channel after copy failure and offers a manual path without exposing raw errors', async () => {
@@ -479,7 +494,6 @@ describe('HelpCenterDialog', () => {
 
   it.each([
     ['复制反馈并写邮件', 'venz@163.com'],
-    ['复制反馈并打开 GitHub', 'https://github.com/flydommm/bank-receipt-workbench/issues/new'],
   ])('retains copied feedback and a usable destination if %s fails', async (buttonName, destination) => {
     const user = userEvent.setup();
     vi.mocked(copyFeedbackReport).mockResolvedValue(undefined);

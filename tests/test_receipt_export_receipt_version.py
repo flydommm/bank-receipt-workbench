@@ -56,9 +56,30 @@ def test_receipt_schema_is_immutable_on_save_and_reopen(journal, mutation):
     # immutable anchor must catch it again after constructing a new service.
     payload = json.loads(generation_path.read_text(encoding="utf-8"))
     payload["data"] = tampered
+    if mutation == "remove":
+        payload["removed"] = sorted({*payload["removed"], "receipt_schema"})
     generation_path.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(ExportJournalIntegrityError):
         ExportJournal(journal.root).load(entry["intent_id"])
+
+
+def test_legacy_compact_receipt_schema_is_inherited_from_anchor(journal):
+    entry = _record()
+    entry["scope"]["schema"] = 2
+    entry["receipt_schema"] = 2
+    journal.create(entry)
+    with journal.locked(entry["intent_id"]) as record:
+        record.data["state"] = "published"
+        record.data.pop("scope")
+        record.save(record.data)
+        generation_path = record._path
+
+    # 0.1.59 compact generations omitted unchanged immutable fields and
+    # recovered them from the anchor on reopen.
+    payload = json.loads(generation_path.read_text(encoding="utf-8"))
+    payload["data"].pop("receipt_schema", None)
+    generation_path.write_text(json.dumps(payload), encoding="utf-8")
+    assert ExportJournal(journal.root).load(entry["intent_id"])["receipt_schema"] == 2
 
 
 def test_legacy_journal_without_receipt_schema_still_loads_and_saves(journal):

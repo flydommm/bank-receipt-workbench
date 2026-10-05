@@ -30,6 +30,8 @@ from .batch_store import (
 from .computation import current_computation_version
 from .review_store_v2 import ReviewRevisionConflict
 from .receipt_layout_history import TemplateUnavailableError
+from .receipt_layout_review import TemplateNoTargetsError
+from .receipt_grouping_models import GroupingError
 
 
 _FIELDS = {
@@ -46,6 +48,15 @@ _FIELDS = {
     "batch_prepare_review": {"job_id", "result_revision", "review_database_path"},
     "batch_receipt_review_page": {"job_id", "result_revision", "offset", "limit", "review_database_path"},
     "batch_save_receipt_review": {"job_id", "result_revision", "edits", "review_database_path"},
+    "batch_counterparty_account_list": {"active_only", "offset", "limit", "grouping_database_path"},
+    "batch_counterparty_account_save": {"account_id", "expected_account_revision", "account", "active", "grouping_database_path"},
+    "batch_counterparty_account_import_preview": {"workbook_base64", "grouping_database_path"},
+    "batch_counterparty_account_import": {"accounts", "grouping_database_path"},
+    "batch_receipt_grouping_set_account": {"job_id", "expected_grouping_revision", "account_selection", "grouping_database_path"},
+    "batch_receipt_grouping_prepare": {"job_id", "result_revision", "expected_grouping_revision", "grouping_database_path"},
+    "batch_receipt_grouping_refresh": {"job_id", "result_revision", "expected_grouping_revision", "expected_review_fingerprint", "segment_ids", "grouping_database_path"},
+    "batch_receipt_grouping_page": {"job_id", "result_revision", "expected_grouping_revision", "expected_review_fingerprint", "offset", "limit", "grouping_database_path"},
+    "batch_receipt_grouping_save": {"job_id", "result_revision", "expected_grouping_revision", "expected_review_fingerprint", "edits", "group_edits", "grouping_database_path"},
     "batch_receipt_calibration_prepare": {"job_id", "result_revision", "sample_id", "review_database_path"},
     "batch_receipt_calibration_preview": {"job_id", "result_revision", "sample_id", "preparation_fingerprint",
                                           "layout_definition", "include_exception_ids", "review_database_path"},
@@ -87,6 +98,9 @@ _OPTIONAL_FIELDS = {
     "batch_receipt_calibration_undo": {"template_database_path"},
 }
 
+from .receipt_field_rule_api import FIELDS as _FIELD_RULE_FIELDS
+_FIELDS.update({op: fields | {"grouping_database_path"} for op, fields in _FIELD_RULE_FIELDS.items()})
+
 
 def _private_review_database(store: BatchStore, value: object) -> Path:
     if not isinstance(value, str) or len(value) > 32768 or "\0" in value:
@@ -119,6 +133,24 @@ def _request_identifier(value: object, field: str) -> str:
 
 
 def _dispatch(store: BatchStore, op: str, data: dict[str, Any]) -> Any:
+    if op in {"batch_counterparty_account_import_preview", "batch_counterparty_account_import"}:
+        from .company_account_import import dispatch_account_import
+        return dispatch_account_import(op, data, _private_review_database(store, data["grouping_database_path"]))
+    if op in _FIELD_RULE_FIELDS:
+        from .receipt_field_rule_api import dispatch_field_rules
+        from .receipt_field_rule_models import FieldRuleError, FieldRuleConflict
+        from .receipt_grouping_models import GroupingValidationError, GroupingConflict
+        database = _private_review_database(store, data["grouping_database_path"])
+        try:
+            return dispatch_field_rules(store, op, data, database)
+        except FieldRuleConflict as exc:
+            raise GroupingConflict("字段规则已变化，请重新试读") from exc
+        except FieldRuleError as exc:
+            raise GroupingValidationError("字段读取位置或规则无效，请检查设置") from exc
+    if op.startswith("batch_counterparty_account_") or op.startswith("batch_receipt_grouping_"):
+        from .receipt_grouping_api import dispatch_grouping
+        database = _private_review_database(store, data["grouping_database_path"])
+        return dispatch_grouping(store, op, data, database)
     if op == "batch_receipt_template_apply_preview":
         from .receipt_layout_review import prepare_receipt_template_apply, preview_receipt_calibration
         from .receipt_calibration_journal import retain_calibration_preview
@@ -384,6 +416,22 @@ def handle_batch_request(request: dict[str, Any]) -> dict[str, Any]:
         with BatchStore(path) as store:
             result = _dispatch(store, op, request)
         return {"status": "ok", "data": result}
+    except GroupingError as error:
+        code = getattr(error, "code", "grouping_invalid")
+        messages = {
+            "account_import_invalid": "导入模板内容无效，请使用四列文本模板，最多500行、512KB。",
+            "account_import_conflict": "同银行、同账号的档案资料存在冲突，请重新预览并核对。",
+            "account_invalid": "本方账户资料不完整，请检查公司、来源银行和完整账号。",
+            "account_conflict": "账户档案已变化，请刷新后重新选择。",
+            "grouping_not_enabled": "本任务未启用交易对手整理。",
+            "grouping_conflict": "归组结果已变化，请重新载入后核对。",
+            "grouping_stale": "回单边界、来源或识别依据已变化，请重新载入分组。",
+            "grouping_identity_pending": "仍有本方身份或交易对手需要确认，请先核对。",
+            "source_changed": "原始 PDF 已变化，请重新分析。",
+        }
+        message = messages.get(code, "账户或归组资料无效，请检查后重试。")
+    except TemplateNoTargetsError as error:
+        code, message = "template_no_compatible_pages", error.user_message()
     except TemplateUnavailableError:
         code, message = "template_unavailable", "所选版式模板已停用、撤销或不可用，请刷新模板列表后重新选择"
     except BatchCapacityExceeded:

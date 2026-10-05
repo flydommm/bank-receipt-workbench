@@ -1,6 +1,6 @@
 # 回单版式领域合同 v1
 
-这是 [P1–P3 实施](receipt-layout-todo.md) 的领域与持久化合同。领域对象使用相同的 snake_case JSON，前端和 Python 共同读取 `tests/fixtures/receipt_layout_v1.json`。本合同落地不等于旧分析、审核、宿主已支持新模式；入口贯通与能力启用在 P3 完成。
+这是 P1–P3 实施（历史资料已归档） 的领域与持久化合同。领域对象使用相同的 snake_case JSON，前端和 Python 共同读取 `tests/fixtures/receipt_layout_v1.json`。本合同落地不等于旧分析、审核、宿主已支持新模式；入口贯通与能力启用在 P3 完成。
 
 ## 数值、版本和坐标
 

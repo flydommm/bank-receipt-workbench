@@ -1,10 +1,16 @@
 .receipt-calibration-pane,.receipt-calibration-navigator{min-width:0;overflow:hidden;color:#20374a;font-size:clamp(13px,0.2vw + 12px,15px)}
-.receipt-calibration-pane h2,.receipt-calibration-navigator h2{font-size:18px;line-height:1.4;margin:0 0 10px}
-.receipt-calibration-pane p,.receipt-calibration-navigator p{line-height:1.6;margin:8px 0}
-.receipt-calibration-pane button{font:inherit;min-height:40px;border:1px solid #d5e1e9;border-radius:8px;background:white;color:#355c74;padding:9px 13px;cursor:pointer}
-.receipt-calibration-pane button.primary{background:#398c7f;color:white;border-color:#398c7f;font-weight:600}
-.receipt-calibration-pane button:disabled{opacity:.5;cursor:default}
+.receipt-calibration-pane h2:not(:where(.receipt-grouping-panel *)),.receipt-calibration-navigator h2{font-size:18px;line-height:1.4;margin:0 0 10px}
+.receipt-calibration-pane p:not(:where(.receipt-grouping-panel *)),.receipt-calibration-navigator p{line-height:1.6;margin:8px 0}
+.receipt-calibration-pane button:not(:where(.receipt-grouping-panel *)){font:inherit;min-height:40px;border:1px solid #d5e1e9;border-radius:8px;background:white;color:#355c74;padding:9px 13px;cursor:pointer}
+.receipt-calibration-pane button.primary:not(:where(.receipt-grouping-panel *)){background:#398c7f;color:white;border-color:#398c7f;font-weight:600}
+.receipt-calibration-pane button:disabled:not(:where(.receipt-grouping-panel *)){opacity:.5;cursor:default}
 .receipt-calibration-pane{display:flex;flex-direction:column;min-height:0}
+.receipt-calibration-grouping{display:flex;flex-direction:column;flex:1;min-height:0;min-width:0;overflow:hidden}
+.receipt-calibration-grouping[hidden]{display:none}
+.receipt-calibration-clear-sources{display:flex;align-items:center;flex-wrap:wrap;gap:8px;flex:none;padding:8px 12px;background:#fff8ed;border:1px solid #eed5ac;border-radius:6px;font-size:12px}
+.receipt-calibration-clear-sources span{flex:1;min-width:200px}
+.receipt-calibration-clear-sources button{min-height:30px;padding:4px 9px;font-size:12px}
+.receipt-calibration-grouping>p[role=status]{flex:none;font-size:12px;padding:4px 12px;margin:0;overflow-wrap:anywhere}
 .receipt-calibration-pane__controls{min-height:0;padding:12px 16px;border-top:1px solid #e2eaf0;box-sizing:border-box}
 .receipt-calibration-pane:is([data-phase=editing],[data-phase=previewing],[data-phase=preview],[data-phase=saving],[data-phase=uncertain]) .receipt-calibration-pane__controls{display:flex;flex-direction:column;height:100%;overflow:hidden;border-top:0;padding:8px 14px 10px}
 .receipt-calibration-pane:is([data-phase=editing],[data-phase=previewing]) .receipt-layout-editor{flex:1;min-height:0}
@@ -61,4 +67,5 @@
 .receipt-review-filters{display:flex;gap:8px}.receipt-review-filters button{font:inherit;border:1px solid #d8e6e2;border-radius:8px;padding:7px 12px;background:white;color:#355970;cursor:pointer}.receipt-review-filters button[aria-pressed=true]{background:#ecf8f4;border-color:#398c7f}
 .receipt-review-confirm{margin-top:10px;border-top:1px solid #e2eaf0;padding-top:10px}.receipt-review-confirm button+button{margin-left:8px}
 @media(max-width:900px){.receipt-calibration-pane{height:85vh!important}.receipt-calibration-navigator{max-height:60vh}}
+@media(max-width:900px){.receipt-calibration-pane[data-grouping=true]{height:100%!important}}
 @media (prefers-reduced-motion: reduce){.receipt-calibration-pane *, .receipt-calibration-navigator *{scroll-behavior:auto;transition-duration:0.01ms!important;animation-duration:0.01ms!important}}

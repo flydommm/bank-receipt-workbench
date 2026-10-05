@@ -1,7 +1,7 @@
 //! Native-only allocation and lifecycle for frozen multi-file export intents.
 
 use crate::{
-    call_engine_with_timeout, engine_runtime, ensure_managed_preview_directory,
+    call_engine_with_timeout, call_engine_with_progress, engine_runtime, ensure_managed_preview_directory,
     managed_preview_path, metadata_is_reparse_point, BatchServiceState, EngineRuntime,
     PreviewLifecycle,
 };
@@ -13,6 +13,21 @@ use tauri::Manager;
 const MAX_FILES: usize = 501;
 const MAX_ITEMS: usize = 50_000;
 const MAX_OUTPUT_NAME_UTF16: usize = 120;
+const GROUPING_FIELDS: [&str; 4] = ["expected_grouping_revision", "expected_review_fingerprint", "own_account_fingerprint", "include_counterparty_pending"];
+
+fn validate_grouping_binding(value: &Value) -> Result<(), String> {
+    if value["expected_grouping_revision"].as_u64().is_none_or(|revision| revision >= (1 << 53))
+        || !value["include_counterparty_pending"].is_boolean() {
+        return Err("归组版本或待确认选项无效".into());
+    }
+    for field in ["expected_review_fingerprint", "own_account_fingerprint"] {
+        let hash = text(&value[field], 64)?;
+        if hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)) {
+            return Err("归组依据无效".into());
+        }
+    }
+    Ok(())
+}
 
 fn exact_fields(value: &Value, fields: &[&str]) -> Result<(), String> {
     let object = value.as_object().ok_or("导出请求无效")?;
@@ -119,7 +134,7 @@ pub fn validate_request(request: &Value) -> Result<&str, String> {
             ];
             let scope_object = scope.as_object().ok_or("导出请求无效")?;
             if base_fields.iter().any(|field| !scope_object.contains_key(*field))
-                || scope_object.keys().any(|field| !matches!(field.as_str(), "output_name" | "include_manifest")
+                || scope_object.keys().any(|field| !matches!(field.as_str(), "output_name" | "include_manifest") && !GROUPING_FIELDS.contains(&field.as_str())
                     && !base_fields.contains(&field.as_str()))
             {
                 return Err("导出请求字段无效".into());
@@ -130,6 +145,12 @@ pub fn validate_request(request: &Value) -> Result<&str, String> {
             if scope_object.contains_key("include_manifest") && !scope["include_manifest"].is_boolean() {
                 return Err("导出清单选项无效".into());
             }
+            if matches!(scope["output_mode"].as_str(), Some("by_counterparty" | "by_counterparty_merged")) {
+                validate_grouping_binding(scope)?;
+                if scope["include_xlsx"] != true { return Err("按交易对手导出必须包含核对表".into()); }
+            } else if GROUPING_FIELDS.iter().any(|field| scope_object.contains_key(*field)) {
+                return Err("当前导出方式不接受归组字段".into());
+            }
             text(&scope["job_id"], 1024)?;
             text(&scope["result_revision"], 1024)?;
             if !matches!(
@@ -137,7 +158,7 @@ pub fn validate_request(request: &Value) -> Result<&str, String> {
                 Some("all" | "sources" | "list")
             ) || !matches!(
                 scope["output_mode"].as_str(),
-                Some("merged" | "by_source" | "both")
+                Some("merged" | "by_source" | "both" | "by_counterparty" | "by_counterparty_merged")
             ) || !scope["include_xlsx"].is_boolean()
             {
                 return Err("导出范围或输出方式无效".into());
@@ -178,6 +199,17 @@ pub fn validate_request(request: &Value) -> Result<&str, String> {
         "publish" => {
             exact_fields(request, &["op", "intent_id", "directory"])?;
             uuid(&request["intent_id"])?;
+            if !Path::new(text(&request["directory"], 32768)?).is_absolute() {
+                return Err("输出目录必须是绝对路径".into());
+            }
+        }
+        "grouping_draft" => {
+            exact_fields(request, &["op", "job_id", "result_revision", "expected_grouping_revision", "expected_review_fingerprint", "own_account_fingerprint", "directory"])?;
+            text(&request["job_id"], 1024)?;
+            text(&request["result_revision"], 1024)?;
+            let mut binding = request.clone();
+            binding["include_counterparty_pending"] = json!(true);
+            validate_grouping_binding(&binding)?;
             if !Path::new(text(&request["directory"], 32768)?).is_absolute() {
                 return Err("输出目录必须是绝对路径".into());
             }
@@ -235,6 +267,11 @@ fn validate_rendered(created: &Value, rendered: &Value, root: &Path) -> Result<(
             "summary",
             "merged_pages",
             "source_pages",
+            "grouped_pages",
+            "expected_grouping_revision",
+            "expected_review_fingerprint",
+            "own_account_fingerprint",
+            "include_counterparty_pending",
             "total_pages",
         ]
         .iter()
@@ -260,7 +297,7 @@ fn validate_rendered(created: &Value, rendered: &Value, root: &Path) -> Result<(
             || file["size_bytes"]
                 .as_u64()
                 .is_none_or(|size| size == 0 || size >= (1 << 53))
-            || ["file_id", "name", "source_key", "page_count"]
+            || ["file_id", "name", "source_key", "page_count", "group_id", "group_kind", "group_name", "grouped_pages"]
                 .iter()
                 .any(|key| original[*key] != file[*key])
         {
@@ -297,7 +334,7 @@ impl HostPaths {
         // longer than a single PDF call. Shutdown still kills the owned tree.
         let seconds = if matches!(
             request["op"].as_str(),
-            Some("export_intent_create" | "export_intent_render" | "export_intent_publish")
+            Some("export_intent_create" | "export_intent_render" | "export_intent_publish" | "export_intent_grouping_draft")
         ) {
             900
         } else {
@@ -309,9 +346,14 @@ impl HostPaths {
             std::time::Duration::from_secs(seconds),
         )
     }
+    fn call_progress(&self, runtime: &EngineRuntime, mut request: Value, progress: &Option<tauri::ipc::Channel<Value>>) -> Result<Value, String> {
+        let Some(channel) = progress else { return self.call(runtime, request) };
+        request["progress"] = json!(true);
+        call_engine_with_progress(runtime, self.request(request), std::time::Duration::from_secs(900), Some(channel.clone()))
+    }
 }
 
-pub fn execute(app: &tauri::AppHandle, request: Value) -> Result<Value, String> {
+pub fn execute(app: &tauri::AppHandle, request: Value, progress: Option<tauri::ipc::Channel<Value>>) -> Result<Value, String> {
     let op = validate_request(&request)?;
     let lifecycle = app
         .try_state::<PreviewLifecycle>()
@@ -373,7 +415,7 @@ pub fn execute(app: &tauri::AppHandle, request: Value) -> Result<Value, String> 
     };
     match op {
         "create" => {
-            let created = paths.call(&runtime, json!({"op":"export_intent_create", "scope":request["scope"]}))?;
+            let created = paths.call_progress(&runtime, json!({"op":"export_intent_create", "scope":request["scope"]}), &progress)?;
             if created["status"] != "ok" { return Ok(created); }
             let data = &created["data"];
             let intent = uuid(&data["intent_id"])?;
@@ -389,7 +431,7 @@ pub fn execute(app: &tauri::AppHandle, request: Value) -> Result<Value, String> 
                     lifecycle.task_tokens.lock().map_err(|_| "预览生命周期不可用")?.insert(token.clone(), job.to_string());
                     if !lifecycle.register_token(token) { return Err("导出预览令牌已被占用".into()); }
                 }
-                let result = paths.call(&runtime, json!({"op":"export_intent_render", "intent_id":intent}))?;
+                let result = paths.call_progress(&runtime, json!({"op":"export_intent_render", "intent_id":intent}), &progress)?;
                 validate_rendered(data, &result, &lifecycle.root)?;
                 Ok(result)
             })();
@@ -424,7 +466,12 @@ pub fn execute(app: &tauri::AppHandle, request: Value) -> Result<Value, String> 
             }
             Ok(result)
         }
-        "publish" => paths.call(&runtime, json!({"op":"export_intent_publish", "intent_id":request["intent_id"], "directory":request["directory"]})),
+        "publish" => paths.call_progress(&runtime, json!({"op":"export_intent_publish", "intent_id":request["intent_id"], "directory":request["directory"]}), &progress),
+        "grouping_draft" => {
+            let mut internal = request.clone();
+            internal["op"] = json!("export_intent_grouping_draft");
+            paths.call(&runtime, internal)
+        }
         "status" => {
             let mut response = paths.call(&runtime, json!({"op":"export_intent_status", "job_id":request["job_id"]}))?;
             if response["status"] == "ok" {
@@ -441,6 +488,50 @@ mod tests {
     use super::*;
     fn create() -> Value {
         json!({"op":"create", "scope":{"job_id":"job", "result_revision":"result", "scope_kind":"all", "selected_segment_ids":["one"], "expected_records":[{"id":"one", "record_revision":1}], "output_mode":"both", "include_xlsx":false}})
+    }
+    #[test]
+    fn grouped_exports_require_complete_binding_and_check_sheet() {
+        let mut request = create();
+        request["scope"]["output_mode"] = json!("by_counterparty");
+        assert!(validate_request(&request).is_err());
+        request["scope"]["expected_grouping_revision"] = json!(4);
+        request["scope"]["expected_review_fingerprint"] = json!("a".repeat(64));
+        request["scope"]["own_account_fingerprint"] = json!("b".repeat(64));
+        request["scope"]["include_counterparty_pending"] = json!(false);
+        assert!(validate_request(&request).is_err());
+        request["scope"]["include_xlsx"] = json!(true);
+        assert!(validate_request(&request).is_ok());
+        request["scope"]["output_mode"] = json!("both");
+        assert!(validate_request(&request).is_err());
+    }
+
+    #[test]
+    fn grouped_merged_exports_require_complete_binding_and_check_sheet() {
+        let mut request = create();
+        request["scope"]["output_mode"] = json!("by_counterparty_merged");
+        assert!(validate_request(&request).is_err());
+        request["scope"]["expected_grouping_revision"] = json!(4);
+        request["scope"]["expected_review_fingerprint"] = json!("a".repeat(64));
+        request["scope"]["own_account_fingerprint"] = json!("b".repeat(64));
+        request["scope"]["include_counterparty_pending"] = json!(false);
+        assert!(validate_request(&request).is_err());
+        request["scope"]["include_xlsx"] = json!(true);
+        assert!(validate_request(&request).is_ok());
+        request["scope"]["include_counterparty_pending"] = json!("false");
+        assert!(validate_request(&request).is_err());
+    }
+
+    #[test]
+    fn draft_accepts_versions_without_pdf_scope_but_not_private_rows() {
+        let request = json!({"op":"grouping_draft", "job_id":"job", "result_revision":"result",
+            "expected_grouping_revision":2, "expected_review_fingerprint":"a".repeat(64),
+            "own_account_fingerprint":"b".repeat(64), "directory":std::env::temp_dir()});
+        assert!(validate_request(&request).is_ok());
+        for field in ["review_database_path", "grouping_database_path", "items", "extracted"] {
+            let mut forged = request.clone();
+            forged[field] = json!([]);
+            assert!(validate_request(&forged).is_err());
+        }
     }
     #[test]
     fn failed_creation_releases_activity_but_retains_cleanup_ownership() {
