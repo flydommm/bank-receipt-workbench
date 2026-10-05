@@ -401,6 +401,21 @@
   line-height: 1.7;
 }
 
+.help-center-product-credit {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  margin-top: 12px;
+  color: var(--help-muted);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.help-center-product-credit > span:first-child {
+  color: var(--help-ink);
+  font-weight: 600;
+}
+
 .help-center-feature-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

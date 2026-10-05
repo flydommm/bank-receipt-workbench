@@ -893,6 +893,10 @@ export function HelpCenterDialog({
           <span className="help-center-section-kicker">RELEASE NOTES</span>
           <h3>{PRODUCT_IDENTITY.name} · {PRODUCT_IDENTITY.version}</h3>
           <p>{PRODUCT_IDENTITY.subtitle}。版本说明随安装包提供，可以离线查看。</p>
+          <div className="help-center-product-credit">
+            <span>开发者：{PRODUCT_IDENTITY.developer}</span>
+            <span>{PRODUCT_IDENTITY.copyright}</span>
+          </div>
         </div>
         <div className="help-center-release-list">
           {RELEASE_NOTES.map((release, index) => (

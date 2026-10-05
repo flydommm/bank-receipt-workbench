@@ -1,4 +1,4 @@
-import { APP_NAME, APP_SUBTITLE, APP_VERSION } from './appIdentity';
+import { APP_COPYRIGHT, APP_DEVELOPER, APP_NAME, APP_SUBTITLE, APP_VERSION } from './appIdentity';
 
 export type HelpTabId = 'overview' | 'guide' | 'feedback' | 'updates';
 
@@ -40,6 +40,8 @@ export const PRODUCT_IDENTITY = {
   name: APP_NAME,
   subtitle: APP_SUBTITLE,
   version: APP_VERSION,
+  developer: APP_DEVELOPER,
+  copyright: APP_COPYRIGHT,
 } as const;
 
 export const OVERVIEW_FEATURES = [
@@ -228,6 +230,15 @@ export const GUIDE_REVIEW_CHECKS = [
 ] as const;
 
 export const RELEASE_NOTES = [
+  {
+    version: '0.1.61',
+    status: '本地验收版',
+    summary: '同步发布署名与版权信息：开发者蚊子，Copyright © 2026 蚊子。',
+    details: [
+      '帮助版本页新增开发者“蚊子”和 Copyright © 2026 蚊子；作者及安装包版权信息保持同步。',
+      '本版未改变安装身份或业务导出逻辑，安装包未做数字签名。',
+    ],
+  },
   {
     version: '0.1.60',
     status: '本地验收版',

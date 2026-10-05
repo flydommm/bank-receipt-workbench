@@ -1,7 +1,8 @@
 {
   "name": "pdf-search",
   "private": true,
-  "version": "0.1.60",
+  "version": "0.1.61",
+  "author": "蚊子",
   "license": "AGPL-3.0-only",
   "homepage": "https://github.com/flydommm/bank-receipt-workbench",
   "repository": {

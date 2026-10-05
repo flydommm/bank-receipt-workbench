@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "银行回单工作台",
-  "version": "0.1.60",
+  "version": "0.1.61",
   "identifier": "com.local.pdfsearch",
   "build": {
     "beforeDevCommand": "bun run dev",
@@ -25,6 +25,7 @@
   },
   "bundle": {
     "active": true,
+    "copyright": "Copyright © 2026 蚊子",
     "license": "AGPL-3.0-only",
     "licenseFile": "../LICENSE",
     "homepage": "https://github.com/flydommm/bank-receipt-workbench",
