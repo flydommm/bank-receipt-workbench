@@ -19,6 +19,7 @@ import pymupdf as fitz
 
 
 _PREFIX = "receipt-visual-v1"
+_ENVELOPE_PREFIX = "receipt-envelope-v1"
 _HASH = re.compile(r"^[0-9a-f]{64}$")
 _MAX_IMAGES = 128
 _MAX_ROWS = 12
@@ -67,13 +68,21 @@ def _reference_logo(data: bytes, width: float, height: float, color_mask: str, s
 
 def visual_positions(layout: Mapping[str, Any]) -> tuple[float, ...] | None:
     version = layout.get("evidence_version", "")
-    if not isinstance(version, str) or not version.startswith(_PREFIX + "."):
+    if not isinstance(version, str):
         return None
-    parts = version[len(_PREFIX) + 1:].split(".")
+    prefix = next((value for value in (_PREFIX, _ENVELOPE_PREFIX) if version.startswith(value + ".")), None)
+    if prefix is None:
+        return None
+    parts = version[len(prefix) + 1:].split(".")
     if not 1 <= len(parts) <= _MAX_ROWS or any(not re.fullmatch(r"[pn][0-9]{1,6}", part) for part in parts):
         return None
     positions = tuple(int(part[1:]) * (-0.1 if part[0] == "n" else 0.1) for part in parts)
     return positions if all(a < b for a, b in zip(positions, positions[1:])) else None
+
+
+def requires_verified_crop_envelopes(layout: Mapping[str, Any]) -> bool:
+    version = layout.get("evidence_version", "")
+    return isinstance(version, str) and version.startswith(_ENVELOPE_PREFIX + ".")
 
 
 def consume_visual_identity(descriptor: Mapping[str, Any]) -> tuple[str, str, str] | None:
@@ -86,6 +95,20 @@ def consume_visual_identity(descriptor: Mapping[str, Any]) -> tuple[str, str, st
             or not _HASH.fullmatch(family) or visual_positions(value) is None):
         return None
     return issuer, family, value["evidence_version"]
+
+
+def verified_crop_envelopes(descriptor: Mapping[str, Any]) -> tuple[tuple[float, ...], ...]:
+    """Read required crop bounds only from a fully verified anonymous form."""
+    if consume_visual_identity(descriptor) is None:
+        return ()
+    raw = descriptor["layout_compatibility"].get("crop_envelopes")
+    if not isinstance(raw, list) or not 1 <= len(raw) <= _MAX_ROWS:
+        return ()
+    if any(not isinstance(box, list) or len(box) != 4
+           or any(type(value) not in (int, float) or not math.isfinite(value) for value in box)
+           or not (0 <= box[0] < box[2] and 0 <= box[1] < box[3]) for box in raw):
+        return ()
+    return tuple(tuple(float(value) for value in box) for box in raw)
 
 
 def compatible_visual_positions(sample: Mapping[str, Any], target: Mapping[str, Any]) -> bool:
@@ -219,7 +242,7 @@ def _describe_framed_customer(page: Any, titles: list[Any], frames: list[Any]) -
             "family_id": family, "evidence_version": version}
 
 
-def _electronic_table_lines(page: Any) -> list[tuple[str, float, float, float, float, float]]:
+def _electronic_table_lines(page: Any, *, max_gray: float = .35) -> list[tuple[str, float, float, float, float, float]]:
     """Keep short native cell edges for this bounded form, not candidate slicing.
 
     General crop detection deliberately discards short lines. These receipts
@@ -237,7 +260,7 @@ def _electronic_table_lines(page: Any) -> list[tuple[str, float, float, float, f
         if item_count > 16384:
             raise ValueError("table item budget exceeded")
         color, width = drawing.get("color"), drawing.get("width")
-        if (drawing.get("type") not in {"s", "fs"} or not color or max(color) > 0.35
+        if (drawing.get("type") not in {"s", "fs"} or not color or max(color) > max_gray + .0001
                 or drawing.get("stroke_opacity", 0) < 0.99
                 or not isinstance(width, (float, int)) or not 0 < width <= 2):
             continue
@@ -299,26 +322,70 @@ def _visible_electronic_table(page: Any, table: fitz.Rect,
 
 
 @lru_cache(maxsize=64)
-def _reference_positioned_logo(data: bytes, placement: tuple[float, ...]) -> tuple[bytes, int, int]:
+def _reference_positioned_logo(data: bytes, placement: tuple[float, ...], soft_mask: bytes = b"") -> tuple[bytes, int, int]:
     # Preserve the subpixel placement phase. Rendering at (0, 0) changes edge
     # interpolation for small logos at fractional PDF coordinates.
     x0, y0, x1, y1 = placement
     rect = fitz.Rect(x0 % 1, y0 % 1, x0 % 1 + x1 - x0, y0 % 1 + y1 - y0)
     with fitz.open() as document:
         page = document.new_page(width=rect.x1 + 2, height=rect.y1 + 2)
-        page.insert_image(rect, stream=data, keep_proportion=False)
+        page.insert_image(rect, stream=data, mask=soft_mask or None, keep_proportion=False)
         pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=rect, colorspace=fitz.csRGB, alpha=False)
         return pixmap.samples, pixmap.width, pixmap.height
 
 
-def _describe_electronic_customer(page: Any, titles: list[Any]) -> dict[str, str] | None:
+def _visible_separator(page: Any, line: tuple[Any, ...]) -> bool:
+    clip = fitz.Rect(line[1], line[2] - 1, line[3], line[4] + 1)
+    pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=clip, colorspace=fitz.csGRAY, alpha=False)
+    samples, width, height = pixmap.samples, pixmap.width, pixmap.height
+    if not width or not height:
+        return False
+    ink = [any(samples[y * width + x] < 220 for y in range(height)) for x in range(width)]
+    # A real row separator may be dashed. Require repeated visible ink across
+    # the full declared path, not merely an unused/overpainted native stroke.
+    return sum(ink) >= width * .3 and all(any(ink[start:start + 24]) for start in range(0, width, 24))
+
+
+def _table_fields(table: fitz.Rect, text_lines: list[Any]) -> list[Any] | None:
+    """Prove two ordered account/name/bank columns, without retaining values.
+
+    Internal column widths and wrapped body rows are not outer crop evidence.
+    A missing, duplicated or rearranged field cannot use this alternate form.
+    """
+    sides = [[], []]
+    trailing = []
+    for text, raw in text_lines:
+        box = fitz.Rect(raw)
+        if not table.contains(box):
+            continue
+        label = "".join(text.split()).rstrip(":：")
+        if label in {"账号", "户名", "开户行"}:
+            side = 0 if box.x0 < (table.x0 + table.x1) / 2 else 1
+            sides[side].append((box.y0, label))
+        elif label in {"币种", "摘要"}:
+            trailing.append((box.y0, label))
+    expected = ["账号", "户名", "开户行"]
+    sides = [sorted(side) for side in sides]
+    if any([label for _, label in sorted(side)] != expected for side in sides):
+        return None
+    if ([label for _, label in sorted(trailing)] != ["币种", "摘要"]
+            or min(y for y, _ in trailing) <= max(y for side in sides for y, _ in side)
+            or abs(sides[0][0][0] - sides[1][0][0]) > .5):
+        return None
+    # Bind the first body row to the outer table. Later field rows can expand
+    # vertically when text wraps, but their order/containment must still hold.
+    return [expected, expected, ["币种", "摘要"], round(sides[0][0][0] - table.y0)]
+
+
+def _describe_electronic_customer(page: Any, titles: list[Any], *, envelope: bool = False,
+                                  text_lines: list[Any] | None = None) -> dict[str, Any] | None:
     """An anonymous small masthead above a complete native customer-receipt table.
 
     This is positive visual form evidence, not a bank-name guess. Bind the
     actual logo pixels, native title, all visible table strokes and their
     relative geometry; never account text, transaction values or crop edits.
     """
-    lines = _electronic_table_lines(page)
+    lines = _electronic_table_lines(page, max_gray=.6 if envelope else .35)
     images = page.get_images(full=True)
     if len(images) > _MAX_IMAGES:
         return None
@@ -328,7 +395,9 @@ def _describe_electronic_customer(page: Any, titles: list[Any]) -> dict[str, str
     for xref, item in {image[0]: image for image in images}.items():
         if not (100 <= item[2] <= 1024 and 20 <= item[3] <= 256 and 2 <= item[2] / item[3] <= 12):
             continue
-        if any(page.parent.xref_get_key(xref, key)[0] != "null" for key in ("Mask", "SMask")):
+        soft_type, _soft_ref = page.parent.xref_get_key(xref, "SMask")
+        if (page.parent.xref_get_key(xref, "Mask")[0] != "null"
+                or soft_type not in ({"null", "xref"} if envelope else {"null"})):
             continue
         positioned = page.get_image_rects(xref, transform=True)
         placement_count += len(positioned)
@@ -341,7 +410,7 @@ def _describe_electronic_customer(page: Any, titles: list[Any]) -> dict[str, str
                     or not 14 <= rect.height <= 40):
                 continue
             placements[(xref, tuple(rect))] = (xref, rect)
-    forms, logos, positions = [], [], []
+    forms, logos, positions, tables, crop_envelopes = [], [], [], [], []
     # Quantize geometric evidence after removing row origin; the small epsilon
     # absorbs float32 arithmetic at exact decimal rounding boundaries.
     def rounded(values):
@@ -350,20 +419,34 @@ def _describe_electronic_customer(page: Any, titles: list[Any]) -> dict[str, str
         next_top = titles[index + 1].y0 if index + 1 < len(titles) else page.rect.height
         table_lines = [line for line in lines if title.y1 < line[2] <= line[4] < next_top]
         if (len(table_lines) > 256 or sum(line[0] == "h" for line in table_lines) < 6
-                or sum(line[0] == "v" for line in table_lines) < 6):
+                or sum(line[0] == "v" for line in table_lines) < (4 if envelope else 6)):
             return None
-        table = fitz.Rect(min(line[1] for line in table_lines), min(line[2] for line in table_lines),
-                          max(line[3] for line in table_lines), max(line[4] for line in table_lines))
+        if envelope:
+            # The body is a closed table below the masthead. A page separator
+            # outside its vertical edges is not part of the receipt form.
+            vertical = [line for line in table_lines if line[0] == "v"]
+            left, right = min(vertical, key=lambda line: line[1]), max(vertical, key=lambda line: line[1])
+            if abs(left[2] - right[2]) > .5 or abs(left[4] - right[4]) > .5:
+                return None
+            table = fitz.Rect(left[1], left[2], right[1], right[4])
+            table_lines = [line for line in table_lines if table.x0 - .5 <= line[1] <= line[3] <= table.x1 + .5
+                           and table.y0 - .5 <= line[2] <= line[4] <= table.y1 + .5]
+        else:
+            table = fitz.Rect(min(line[1] for line in table_lines), min(line[2] for line in table_lines),
+                              max(line[3] for line in table_lines), max(line[4] for line in table_lines))
+        structure = _table_fields(table, text_lines or []) if envelope else None
         if (not page.rect.width * .7 <= table.width <= page.rect.width * .95
-                or not page.rect.height * .15 <= table.height <= page.rect.height * .35
-                or not 2 <= table.y0 - title.y1 <= 20
+                or not page.rect.height * (.1 if envelope else .15) <= table.height <= page.rect.height * .35
+                or not 2 <= table.y0 - title.y1 <= (45 if envelope else 20)
                 or not table.x0 < title.x0 < title.x1 < table.x1
+                or (envelope and structure is None)
                 or not _visible_electronic_table(page, table, table_lines)):
             return None
         matches = [(xref, rect) for xref, rect in placements.values()
-                   if table.x0 < rect.x0 < rect.x1 + 8 < title.x0
-                   and abs(rect.y1 - title.y1) <= 8 and abs(rect.y0 - title.y0) <= 12
-                   and rect.y1 < table.y0 and 2 <= table.y0 - rect.y1 <= 20]
+                   if (table.x0 - .5 <= rect.x0 if envelope else table.x0 < rect.x0)
+                   and rect.x0 < rect.x1 + 8 < title.x0
+                   and abs(rect.y1 - title.y1) <= (24 if envelope else 8) and abs(rect.y0 - title.y0) <= 12
+                   and rect.y1 < table.y0 and 2 <= table.y0 - rect.y1 <= (35 if envelope else 20)]
         if len(matches) != 1:
             return None
         xref, logo = matches[0]
@@ -372,15 +455,32 @@ def _describe_electronic_customer(page: Any, titles: list[Any]) -> dict[str, str
             data = page.parent.extract_image(xref).get("image", b"")
             if pixmap.n != 3 or pixmap.alpha or not data or len(data) > 2 * 1024 * 1024:
                 return None
-            graphics[xref] = _digest([pixmap.width, pixmap.height, sha256(pixmap.samples).hexdigest()]), data
-        identity, data = graphics[xref]
+            soft_type, soft_ref = page.parent.xref_get_key(xref, "SMask")
+            soft_mask = page.parent.extract_image(int(soft_ref.split()[0])).get("image", b"") if soft_type == "xref" else b""
+            if len(soft_mask) > 2 * 1024 * 1024 or (soft_type == "xref" and not soft_mask):
+                return None
+            identity_parts = [pixmap.width, pixmap.height, sha256(pixmap.samples).hexdigest()]
+            if soft_mask:
+                identity_parts.append(sha256(soft_mask).hexdigest())
+            graphics[xref] = _digest(identity_parts), data, soft_mask
+        identity, data, soft_mask = graphics[xref]
         shown = page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=logo, colorspace=fitz.csRGB, alpha=False)
-        expected, width, height = _reference_positioned_logo(data, tuple(logo))
+        expected, width, height = _reference_positioned_logo(data, tuple(logo), soft_mask)
         if ((shown.width, shown.height) != (width, height)
                 or _colored_pixel_count(shown.samples) < width * height * .015
                 or _pixels_differ(shown.samples, expected)):
             return None
-        forms.append(_digest(["electronic-customer-table-v1", title.title_key,
+        if envelope:
+            # This is an alternate *crop* identity, only for the proven native
+            # two-party table. Every target is still recomputed with content
+            # coverage checks; changed internal widths never authorize cutting
+            # text, moving row anchors, or copying an existing review decision.
+            forms.append(_digest(["native-account-table-envelope-v1", title.title_key,
+                [round(value) for value in (page.rect.width, page.rect.height, table.x0, table.x1,
+                    title.x0, title.x1, table.y0 - title.y0,
+                    logo.x0, logo.width, logo.height, logo.y0 - title.y0)], structure]))
+        else:
+            forms.append(_digest(["electronic-customer-table-v1", title.title_key,
             rounded((page.rect.width, page.rect.height, table.x0, table.width, table.height,
                      title.x0, title.x1, title.y0 - table.y0, title.y1 - table.y0,
                      logo.x0, logo.width, logo.height, logo.y0 - table.y0)),
@@ -388,16 +488,41 @@ def _describe_electronic_customer(page: Any, titles: list[Any]) -> dict[str, str
              for line in table_lines]]))
         logos.append(identity)
         positions.append(round(logo.y0 * 10))
+        tables.append(table)
+        crop_envelopes.append([min(table.x0, logo.x0, title.x0), min(title.y0, logo.y0),
+                               max(table.x1, logo.x1, title.x1), table.y1])
+    if envelope:
+        # These native tables vertically centre variable-height bodies within
+        # printed page bands. Prove those bands from actual separators instead
+        # of weakening the normal absolute masthead-position check.
+        if len(tables) < 2:
+            return None
+        seams = []
+        for index, table in enumerate(tables[:-1]):
+            candidates = {round(line[2], 1) for line in lines if line[0] == "h"
+                          and line[3] - line[1] >= page.rect.width * .85
+                          and table.y1 + 2 < line[2] < titles[index + 1].y0 - 2
+                          and _visible_separator(page, line)}
+            if len(candidates) != 1:
+                return None
+            seams.append(next(iter(candidates)))
+        starts, ends = [0., *seams], [*seams, page.rect.height]
+        if any(not (start <= title.y0 < table.y0 < table.y1 < end)
+               for start, end, title, table in zip(starts, ends, titles, tables, strict=True)):
+            return None
+        positions = [round(start * 10) for start in starts]
     if len(set(forms)) != 1 or len(set(logos)) != 1 or any(a >= b for a, b in zip(positions, positions[1:])):
         return None
-    version = _PREFIX + "." + ".".join("p" + str(position) for position in positions)
+    version = (_ENVELOPE_PREFIX if envelope else _PREFIX) + "." + ".".join("p" + str(position) for position in positions)
     if len(version) > 128:
         return None
     return {"kind": "visible_form_v1", "issuer_id": "visual-" + logos[0],
-            "family_id": forms[0], "evidence_version": version}
+            "family_id": forms[0], "evidence_version": version,
+            **({"crop_envelopes": crop_envelopes} if envelope else {})}
 
 
-def describe_visual_form(page: Any, titles: list[Any], *, frames: list[Any] | None = None) -> dict[str, str] | None:
+def describe_visual_form(page: Any, titles: list[Any], *, frames: list[Any] | None = None,
+                         text_lines: list[Any] | None = None) -> dict[str, Any] | None:
     """Describe repeated native receipts with visible bitmap mastheads/rules.
 
     This intentionally narrow Core fallback accepts a fully evidenced form,
@@ -405,6 +530,12 @@ def describe_visual_form(page: Any, titles: list[Any], *, frames: list[Any] | No
     """
     if not 1 <= len(titles) <= _MAX_ROWS or any("回单" not in title.title_text for title in titles):
         return None
+    if len({title.title_text for title in titles}) == 1 and titles[0].title_text in {
+            "网上银行电子回单", "企业网上银行电子回单"}:
+        try:
+            return _describe_electronic_customer(page, titles, envelope=True, text_lines=text_lines)
+        except (RuntimeError, ValueError, TypeError, AttributeError, KeyError, OSError):
+            return None
     if all(title.title_text == "客户电子回单" for title in titles):
         try:
             return _describe_electronic_customer(page, titles)

@@ -554,18 +554,14 @@ export function HelpCenterDialog({
       await openFeedbackChannel(channel);
       setFeedbackActionMessage({
         kind: 'status',
-        text: channel === 'email'
-          ? `反馈已复制，已请求打开邮件客户端。请粘贴正文并发送至 ${feedbackChannels.email}，我们会回复你的来信。当前尚未发送。`
-          : '反馈已复制，已请求打开 GitHub。请登录后填写标题、粘贴正文并提交，在该 Issue 查看回复。当前尚未提交。',
+        text: `反馈已复制，已请求打开邮件客户端。请粘贴正文并发送至 ${feedbackChannels.email}，我们会回复你的来信。当前尚未发送。`,
       });
     } catch {
       setFeedbackActionMessage({
         kind: 'error',
         text: copied
-          ? (channel === 'email'
-            ? `反馈已复制，但未能打开邮件客户端。请在常用邮箱中新建邮件，收件人填写 ${feedbackChannels.email}，粘贴正文后发送。`
-            : `反馈已复制，但未能打开 GitHub。请在浏览器中访问 ${feedbackChannels.githubUrl}，粘贴正文后提交。`)
-          : '未能复制反馈，尚未打开反馈入口。请手动复制上方预览文本，或保存为 TXT，再通过下方邮箱、微信或 GitHub 联系我们。',
+          ? `反馈已复制，但未能打开邮件客户端。请在常用邮箱中新建邮件，收件人填写 ${feedbackChannels.email}，粘贴正文后发送。`
+          : '未能复制反馈，尚未打开反馈入口。请手动复制上方预览文本，或保存为 TXT，再通过下方邮箱或微信联系维护者。',
       });
     } finally {
       feedbackBusyRef.current = false;
@@ -638,8 +634,8 @@ export function HelpCenterDialog({
       <div className="help-center-content-section">
         <div className="help-center-intro compact">
           <span className="help-center-section-kicker">FROM SOURCE TO RESULT</span>
-          <h3>六步完成一次回单查找。</h3>
-          <p>建议先在少量脱敏样本上熟悉流程，再处理较大的批量任务。当前流程是“导入预览 → 分析处理 → 导出结果”：导入后可在分析前查看原页总览；分析完成后在片段/原页总览中筛选并处理；所有未排除的待复核清零后，进入导出设置并选择目录直接导出。</p>
+          <h3>完成一次回单处理。</h3>
+          <p>建议先在少量脱敏样本上熟悉流程，再处理较大的批量任务。当前顺序是“选择文件与本方账户 → 分析并检查分割 →（启用整理时）核对交易对手 → 检查并导出”：导入后可在分析前查看原页总览；分割审核内按“排除无效 → 核对特殊单证 → 必要时调整边界或模板 → 完成复核”操作，读取规则是可选工具；未启用分组时跳过交易对手核对。</p>
         </div>
         <ol className="help-center-guide-list">
           {GUIDE_STEPS.map((step) => (
@@ -686,7 +682,7 @@ export function HelpCenterDialog({
           <div className="help-center-guide-detail-heading">
             <span className="help-center-section-kicker">REVIEW ACTIONS</span>
             <h4 id="help-guide-actions-title">审核按钮怎么选</h4>
-            <p>按“片段/原页总览 → 筛选与选择 → 单项处理或批量处理 → 必要时调整所选边界 → 确认并预览本轮 → 风险勾选 → 保存本轮 → 完成微调，返回结果”的顺序操作。待复核清零后使用“导出回单”，在“导出设置”填写名称、选择导出方式和可选索引，再选择目录直接导出；失败时可重试同次导出。</p>
+            <p>按“片段/原页总览 → 排除无效 → 核对特殊单证 → 必要时调整所选边界或模板 → 逐栏复核并完成审核”的顺序操作；同版式批量识别和本机读取规则是可选工具。未启用分组时跳过交易对手核对，待复核清零后使用“导出回单”；启用分组时先“进入交易对手分组”，再“检查并导出”。在“导出设置”填写名称、选择导出方式和可选索引，先选择目录再直接导出；失败时可用“重试导出”复用同次导出。</p>
           </div>
           <div className="help-center-action-group-grid">
             {GUIDE_REVIEW_ACTION_GROUPS.map((group) => (
@@ -738,7 +734,7 @@ export function HelpCenterDialog({
         <div className="help-center-intro compact">
           <span className="help-center-section-kicker">FEEDBACK & CONTACT</span>
           <h3>把遇到的问题整理成一段可复制的反馈。</h3>
-          <p>先生成并检查反馈预览，再选择下方渠道联系维护者。复制或打开入口不代表已发送，请在邮箱、微信或 GitHub 中完成发送，并在原渠道查看回复。</p>
+          <p>先生成并检查反馈预览，再由你选择邮箱或微信联系维护者。应用只生成、复制或保存反馈，不会自动上传或发送；请在选定渠道中完成发送，并在原渠道查看回复。</p>
           <p>草稿只在本次运行中保留，退出前请复制或保存。</p>
         </div>
 
@@ -854,13 +850,13 @@ export function HelpCenterDialog({
         <section className="help-center-feedback-channels" aria-labelledby="help-feedback-channels-title" aria-busy={feedbackAction !== 'idle'}>
           <div className="help-center-feedback-channels-heading">
             <h4 id="help-feedback-channels-title">发送反馈与查看回复</h4>
-            <p>下面是维护者的接收渠道。分享前请删除真实账号、客户信息和业务内容；GitHub Issue 会公开展示。</p>
+            <p>下面是可由你主动选择的联系渠道。应用不会自动上传或发送；分享前请删除真实账号、客户信息和业务内容。</p>
           </div>
           <div className="help-center-feedback-channel-grid">
             <article className="help-center-feedback-channel">
               <h5>邮箱反馈</h5>
               <p className="help-center-feedback-contact">{feedbackChannels.email}</p>
-              <p>无需 GitHub 账号。发送后，我们会回复你的来信，请留意收件箱和垃圾邮件。</p>
+              <p>可使用桌面邮件客户端或常用网页邮箱手动发送；我们会回复你的来信，请留意收件箱和垃圾邮件。</p>
               <div className="help-center-feedback-channel-actions">
                 <button type="button" className="help-center-primary-button" disabled={!previewRequested || Boolean(feedbackError) || !feedbackPreview || feedbackAction !== 'idle'} onClick={() => void contactMaintainer('email')}>
                   复制反馈并写邮件
@@ -882,19 +878,8 @@ export function HelpCenterDialog({
               </div>
               <p>添加完成后，可返回上方复制反馈文本或保存为 TXT。</p>
             </article>
-            <article className="help-center-feedback-channel is-public">
-              <h5>GitHub 公开反馈</h5>
-              <p className="help-center-feedback-contact">{feedbackChannels.githubUrl}</p>
-              <p>适合脱敏的问题和功能建议。需要登录 GitHub；提交后，在同一条 Issue 中查看处理进展和回复。</p>
-              <div className="help-center-feedback-channel-actions">
-                <button type="button" className="help-center-ghost-button" disabled={!previewRequested || Boolean(feedbackError) || !feedbackPreview || feedbackAction !== 'idle'} onClick={() => void contactMaintainer('github')}>
-                  复制反馈并打开 GitHub
-                </button>
-              </div>
-              <p>请勿公开提交原始 PDF、真实回单、账号或含业务正文的截图。</p>
-            </article>
           </div>
-          {!previewRequested && <p className="help-center-feedback-privacy">填写问题描述并生成反馈预览后，即可使用“复制反馈并写邮件”或“复制反馈并打开 GitHub”。</p>}
+          {!previewRequested && <p className="help-center-feedback-privacy">填写问题描述并生成反馈预览后，即可使用“复制反馈并写邮件”；也可以先复制邮箱或微信号，再手动联系维护者。</p>}
           {feedbackActionArea === 'channels' && actionMessage}
         </section>
       </div>

@@ -18,12 +18,12 @@ from typing import Any, Callable
 from .batch_models import MAX_PAGE_RESULT_BYTES, BatchModelError, canonical_json
 from .batch_pdf import BatchSourceError, open_batch_source
 from .batch_review import _binding, _validated_review_binding
-from .batch_store import BatchCapacityExceeded, BatchComputationChanged, BatchConflict, BatchStore
+from .batch_store import BatchCapacityExceeded, BatchComputationChanged, BatchConflict, BatchStore, BatchStoreError
 from .computation import current_computation_version
 from .receipt_checkpoint import encode_receipt_checkpoint, validate_receipt_checkpoint
 from .receipt_layout_calibration import affected_slot_ids, validate_complete_layout
-from .receipt_layout_models import near
-from .receipt_visual_identity import compatible_visual_positions, visual_positions
+from .receipt_layout_models import near, slot_rect
+from .receipt_visual_identity import compatible_visual_positions, requires_verified_crop_envelopes, visual_positions
 from .receipt_snapshot import assemble_receipt_results
 from .search import SearchBudget
 
@@ -32,6 +32,24 @@ _DRAFT_FIELDS = frozenset(("revision", "uniform_height", "left_pt", "right_pt", 
 _MEMBERSHIP_ERRORS = frozenset(("unassigned_block", "ambiguous_block", "cross_boundary_block", "low_confidence_exclude"))
 _MAX_PREVIEW_BYTES = 64 * 1024 * 1024
 _LOCAL_LAYOUT_EDGE_TOLERANCE_PT = 1.0
+
+
+class TemplateNoTargetsError(BatchStoreError):
+    """An active template has no eligible target; the template is not invalid."""
+
+    def __init__(self, reasons: dict[str, int], *, legacy_identity: bool = False):
+        self.reasons = reasons
+        self.legacy_identity = legacy_identity
+        super().__init__("no eligible ordinary receipt matches the selected layout template")
+
+    def user_message(self) -> str:
+        labels = {"prior_review_scope": "已人工确认或分类", "special_document_scope": "特殊凭证",
+                  "template_incompatible": "版式不匹配", "no_confirmed_slot": "没有可应用栏位"}
+        detail = "，".join(f"{labels[key]} {count} 页" for key, count in self.reasons.items() if count and key in labels)
+        message = f"当前没有可应用的回单页面{f'（{detail}）' if detail else ''}。模板仍保留，已审核结果未改变。"
+        if self.legacy_identity and self.reasons.get("template_incompatible"):
+            message += "旧版模板缺少当前版式依据，请重新分析、微调并另存新模板；原模板仍保留。"
+        return message
 
 
 def _digest(value: object) -> str:
@@ -515,7 +533,7 @@ def prepare_receipt_template_apply(store: BatchStore, job_id: str, result_revisi
     shared margins and protected geometry remain unchanged. Every other human
     decision still isolates the page from this automatic template operation.
     """
-    from .receipt_layout_history import selected_reference, TemplateUnavailableError
+    from .receipt_layout_history import selected_reference
     reference = selected_reference(store, template_database, template_id)
     snapshot = store.review_snapshot(job_id, result_revision)
     _, restored = _validated_review_binding(store, snapshot, review_database)
@@ -528,22 +546,30 @@ def prepare_receipt_template_apply(store: BatchStore, job_id: str, result_revisi
     rows = {(row["source_id"], row["page"]): row for row in store.read_page_results(job_id)}
     confirmed = set(reference["confirmed_slot_ids"])
     sample_id = None
+    rejected_pages = {}
     for original in snapshot["originals"]:
         key = (original["source_key"], original["source_page"])
         records = records_by_page.get(key, ())
         protected = {record["original"]["slot_id"] for record in records}
-        if (any(record["review_status"] != "excluded" or "document_type" in record for record in records)
-                or original["slot_id"] in protected or original["slot_id"] not in confirmed):
+        if any(record["review_status"] != "excluded" or "document_type" in record for record in records):
+            rejected_pages[key] = "prior_review_scope"
+            continue
+        if original["slot_id"] in protected or original["slot_id"] not in confirmed:
+            rejected_pages.setdefault(key, "no_confirmed_slot")
             continue
         row = rows.get((source_by_key[original["source_key"]], original["source_page"]))
         if row is None or _document_types(row):
+            rejected_pages[key] = "special_document_scope"
             continue
         layout = row["payload"]["receipt_page"]["layout_definition"]
         if _template_target_layout(layout, reference, protected)[0] is not None:
             sample_id = original["id"]
             break
+        rejected_pages[key] = "template_incompatible"
     if sample_id is None:
-        raise TemplateUnavailableError("no eligible ordinary receipt matches the selected layout template")
+        raise TemplateNoTargetsError(dict(Counter(rejected_pages.values())), legacy_identity=(
+            reference["layout_definition"]["evidence_version"] == "receipt-layout-evidence-v1"
+            and any(visual_positions(row["payload"]["receipt_page"]["layout_definition"]) is not None for row in rows.values())))
 
     prepared = prepare_receipt_calibration(store, job_id, result_revision, sample_id, review_database)
     eligible, excluded = [], Counter(prepared.excluded_page_counts)
@@ -571,7 +597,7 @@ def prepare_receipt_template_apply(store: BatchStore, job_id: str, result_revisi
     sample_protected = {record["original"]["slot_id"] for record in records_by_page.get(sample_key, ())}
     draft, _ = _template_target_layout(prepared.layout, reference, sample_protected)
     if not eligible or draft is None:
-        raise TemplateUnavailableError("selected layout template is incompatible with the current result")
+        raise TemplateNoTargetsError(dict(excluded))
     prepared = replace(prepared, eligible_page_keys=tuple(eligible), excluded_page_counts=dict(excluded),
                        mode="template_apply", template_id=template_id,
                        template_reference_digest=_digest(reference),
@@ -817,6 +843,21 @@ def preview_receipt_calibration(store: BatchStore, prepared: CalibrationPreparat
                 else:
                     target = _target_layout(base, checked, old_layout, changed, new_revision)
                     row_changed = changed
+                if prepared.mode == "template_apply" and requires_verified_crop_envelopes(old_layout):
+                    # This alternate identity tolerates wrapped body rows. It
+                    # never permits the saved crop to truncate the current
+                    # page's independently verified title, logo or outer table.
+                    bounds = opened.verified_template_crop_envelopes(row["page"])
+                    if len(bounds) != len(target["slots"]):
+                        blockers.append({"source_key": source["source_key"], "page": row["page"],
+                                         "code": "template_content_outside_crop"})
+                    for slot, box in zip(target["slots"], bounds):
+                        if slot["slot_id"] not in row_changed:
+                            continue
+                        body = dict(zip(("x0", "y0", "x1", "y1"), box, strict=True))
+                        if not _rect_contains(slot_rect(target, slot), body):
+                            blockers.append({"source_key": source["source_key"], "page": row["page"],
+                                             "slot_id": slot["slot_id"], "code": "template_content_outside_crop"})
                 computed = opened.compute_receipt_page(row["page"], job["processing_options"], job["match_mode"], budget,
                                                        layout_definition=target)
                 payload = _preserve_unedited_candidate_review(

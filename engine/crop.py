@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import math
 from pathlib import Path
 from collections.abc import Iterable
-from typing import Any
+from typing import Any, Callable
 
 from .layout import LayoutCandidate, Rect, clamp_rect
 from .pdf_geometry import append_visible_pdf_crop, read_page_geometry
@@ -121,6 +121,9 @@ def export_segments(source_path: str | Path, output_path: str | Path, segments: 
 def export_merged_segments(
     output_path: str | Path,
     selections: Iterable[tuple[str | Path, list[PdfSegment]]],
+    *,
+    progress: Callable[[int], None] | None = None,
+    before_save: Callable[[], None] | None = None,
 ) -> Path:
     """Merge reviewed segments from multiple source PDFs into one new PDF."""
 
@@ -129,6 +132,7 @@ def export_merged_segments(
         raise ValueError("at least one reviewed segment is required")
     output = pymupdf.open()
     opened: list[Any] = []
+    completed = 0
     try:
         for source_path, segments in materialized:
             _ensure_distinct_output(source_path, output_path)
@@ -142,8 +146,13 @@ def export_merged_segments(
                 source_page = source.load_page(segment.page_number - 1)
                 clip = _validated_clip(segment, source_page)
                 append_visible_pdf_crop(output, source, segment.page_number - 1, clip)
+                completed += 1
+                if progress is not None:
+                    progress(completed)
         destination = Path(output_path)
         destination.parent.mkdir(parents=True, exist_ok=True)
+        if before_save is not None:
+            before_save()
         output.save(str(destination))
         return destination
     finally:

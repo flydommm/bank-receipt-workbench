@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import base64
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
@@ -20,7 +21,7 @@ import stat as stat_module
 import sqlite3
 import sys
 import tempfile
-from typing import Iterator, TextIO
+from typing import Callable, Iterator, TextIO
 import unicodedata
 
 try:
@@ -47,6 +48,7 @@ if __package__:
         search_pages_multi,
     )
     from .exporter import export_index
+    from .export_progress import ExportProgressReporter, bind_export_progress_reporter
     from .crop import MIN_EXPORT_RECT_SIZE, PdfSegment, export_merged_segments, region_from_points
     from .crop_templates import describe_crop_page
     from .source_layout import SourceLayoutIndex, SourceLayoutPolicy, without_vacant_markers
@@ -104,6 +106,7 @@ else:  # Running as ``python engine/engine.py`` from the project root.
         search_pages_multi,
     )
     from engine.exporter import export_index  # type: ignore[no-redef]
+    from engine.export_progress import ExportProgressReporter, bind_export_progress_reporter  # type: ignore[no-redef]
     from engine.crop import (  # type: ignore[no-redef]
         MIN_EXPORT_RECT_SIZE,
         PdfSegment,
@@ -145,7 +148,7 @@ class _V2InvalidStoreResponse(RuntimeError):
     """Raised when the real v2 store returns an invalid response shape."""
 
 
-ENGINE_VERSION = "0.1.57"
+ENGINE_VERSION = "0.1.60"
 EXPORT_TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{15,127}$")
 SOURCE_SHA256_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
 RENDER_DPI = 144
@@ -195,6 +198,33 @@ class _CopiedPdfSource:
     path: Path
     sha256: str
     size: int
+
+
+@dataclass
+class _PdfExportSourceCache:
+    directory: Path
+    sources: dict[tuple[str, str], _CopiedPdfSource]
+
+
+_PDF_EXPORT_SOURCE_CACHE: ContextVar[_PdfExportSourceCache | None] = ContextVar(
+    "pdf_export_source_cache", default=None,
+)
+
+
+@contextmanager
+def _reuse_pdf_export_sources() -> Iterator[None]:
+    """Share verified immutable source copies only within one bundle render.
+
+    This context is internal: JSON requests cannot supply a cached source or
+    bypass the SHA check. The bundle still verifies the original scope before
+    and after rendering, and this private directory is removed on every exit.
+    """
+    with private_temporary_directory("source") as directory:
+        token = _PDF_EXPORT_SOURCE_CACHE.set(_PdfExportSourceCache(directory, {}))
+        try:
+            yield
+        finally:
+            _PDF_EXPORT_SOURCE_CACHE.reset(token)
 
 
 def _safe_error(code: ErrorCode | str, message: str | None = None) -> dict[str, str]:
@@ -1935,16 +1965,22 @@ def _parse_pdf_selection(
     if not isinstance(raw_segments, list) or not raw_segments:
         raise ValueError("each source needs at least one reviewed segment")
 
-    copied = _snapshot_pdf_source(
-        source,
-        expected_sha256,
-        snapshot_directory,
-    )
-    if isinstance(copied, dict):
-        return copied
-    limit_error, _total_pages = _source_limit_error(copied.path)
-    if limit_error is not None:
-        return limit_error
+    cache = _PDF_EXPORT_SOURCE_CACHE.get()
+    cache_key = (str(source_resolved), expected_sha256)
+    copied = cache.sources.get(cache_key) if cache is not None else None
+    if copied is None:
+        copied = _snapshot_pdf_source(
+            source,
+            expected_sha256,
+            cache.directory if cache is not None else snapshot_directory,
+        )
+        if isinstance(copied, dict):
+            return copied
+        limit_error, _total_pages = _source_limit_error(copied.path)
+        if limit_error is not None:
+            return limit_error
+        if cache is not None:
+            cache.sources[cache_key] = copied
 
     source_document = pymupdf.open(str(copied.path))
     try:
@@ -1984,6 +2020,9 @@ def _publish_exported_pdf(
     token: str,
     destination: Path,
     parsed: list[_ParsedPdfSelection],
+    *,
+    progress: Callable[[int], None] | None = None,
+    before_save: Callable[[], None] | None = None,
 ) -> dict[str, object]:
     _reserve_output(token, destination, "pdf")
     # Build beside the final destination from immutable source snapshots.
@@ -1992,13 +2031,21 @@ def _publish_exported_pdf(
         dir=str(destination.parent),
     ) as temporary_dir:
         temporary_output = Path(temporary_dir) / destination.name
-        export_merged_segments(
-            temporary_output,
-            [
-                (selection.snapshot_path, selection.segments)
-                for selection in parsed
-            ],
-        )
+        selections = [
+            (selection.snapshot_path, selection.segments)
+            for selection in parsed
+        ]
+        if progress is None and before_save is None:
+            # Preserve the historical two-argument call shape for ordinary
+            # exports and test/integration wrappers around the PDF writer.
+            export_merged_segments(temporary_output, selections)
+        else:
+            export_merged_segments(
+                temporary_output,
+                selections,
+                progress=progress,
+                before_save=before_save,
+            )
         expected_identity = _file_identity(temporary_output)
         _publish_new_file(temporary_output, destination)
     return _mark_output_created(token, destination, "pdf", expected_identity)
@@ -2027,7 +2074,15 @@ def _export_pdf_response(request: dict[str, object]) -> dict[str, object]:
             )
             if isinstance(parsed, dict):
                 return parsed
-            published_identity = _publish_exported_pdf(token, destination, parsed)
+            progress = request.get("_progress")
+            before_save = request.get("_before_save")
+            published_identity = _publish_exported_pdf(
+                token,
+                destination,
+                parsed,
+                progress=progress if callable(progress) else None,
+                before_save=before_save if callable(before_save) else None,
+            )
         return {
             "status": "ok",
             "output_path": str(destination),
@@ -2855,12 +2910,18 @@ def serve(input_stream: TextIO, output_stream: TextIO) -> int:
         if not line:
             continue
 
+        reporter = None
         try:
             request = json.loads(line)
         except json.JSONDecodeError:
             response = _error_response(ErrorCode.INVALID_JSON)
         else:
-            response = handle_request(request)
+            if isinstance(request, dict) and request.get("progress") is True:
+                request = dict(request)
+                request.pop("progress", None)
+                reporter = ExportProgressReporter(output_stream)
+            with bind_export_progress_reporter(reporter):
+                response = handle_request(request)
 
         output_stream.write(json.dumps(response, ensure_ascii=False) + "\n")
         output_stream.flush()

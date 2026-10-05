@@ -1,8 +1,6 @@
 # 开发指南
 
-本文描述在 Windows x64 上构建和验证 0.1.27 准备版的最短路径。命令都从项目根目录执行；不要在系统目录执行。
-
-版式设置与批量提取的实施资料：[完整设计](receipt-layout-design.md)、[实施 TODO](receipt-layout-todo.md)、[验收矩阵](receipt-layout-acceptance.md)。新领域模型、共用引擎和内部持久化已分阶段接入；桌面新流程尚未开放，各阶段以 TODO 的实际证据为准。
+本文对应 0.1.60 Core，使用 Windows x64、Bun 和应用私有运行时。当前操作见[使用指南](usage.md)和[交易对手整理](counterparty-grouping.md)。历史本机验收与开发待办已归档，不作为当前版本通过证据。
 
 ## 前置条件
 
@@ -18,7 +16,7 @@
 
 ```powershell
 bun --version
-python --version
+py -3.12 --version
 rustc --version
 cargo --version
 ```
@@ -34,7 +32,7 @@ bun install --frozen-lockfile
 公开测试使用仓库内锁定的开发依赖；不必为了运行单元测试安装完整 OCR 运行时：
 
 ```powershell
-python -m pip install --requirement engine/requirements-dev.txt
+py -3.12 -m pip install --requirement engine/requirements-dev.txt
 ```
 
 `engine/requirements-dev.txt` 当前固定 PyMuPDF 1.28.2、pytest 8.4.2、numpy 2.3.5、Pillow 12.3.0 和 openpyxl 3.1.5。完整 OCR 运行时由发布准备脚本按 edition 处理。直接把 OCR 依赖装进系统 Python 会产生较大的 native 依赖和模型配置，除非你明确在做 OCR 兼容性验证，否则请使用下文的运行时准备流程。
@@ -73,13 +71,15 @@ bun run test:web
 Python 测试使用 pytest，测试中的 PDF 和 OCR 输入均为合成数据或受控夹具：
 
 ```powershell
-python -m pytest tests
+py -3.12 -m pytest tests
 ```
+
+明确指定 `tests` 目录，避免收集构建产物内第三方依赖的自测。引擎子进程会禁用用户级包目录，开发依赖需要对同一 Python 3.12 的隔离启动可见；可用 `py -3.12 -E -s -c "import pymupdf"` 检查。不要用另一个 Python 的主进程测试通过来代替实际子进程验证。
 
 Rust 测试包括 Windows 进程边界测试。先把当前 Python 解释器的绝对路径传给测试，再运行 Cargo：
 
 ```powershell
-$env:PDF_SEARCH_TEST_PYTHON = (Get-Command python).Source
+$env:PDF_SEARCH_TEST_PYTHON = (py -3.12 -c "import sys; print(sys.executable)").Trim()
 cargo test --manifest-path src-tauri/Cargo.toml --locked
 ```
 
@@ -187,7 +187,13 @@ cargo test --manifest-path src-tauri/Cargo.toml --locked bundled_ocr_health_runs
 
 ## 批量预览的界面更新回归
 
-回单版式改造的内部持久任务已新增页面 schema 2 和审核上下文 version 3。任务数据库升级、零命中页检查点、实例身份、发布时重建比对及兼容边界见[领域与持久化合同](receipt-layout-contract.md#内部持久任务与快照)。内部审核使用独立 receipt 记录表，支持基于权威清单的批量保存、旧任务记录隔离、只读恢复和归属清理；普通裁剪仍不能越过原候选框，整版校准将通过独立预览事务接入。宿主、前端和导出接线尚未完成，不提前广播全部分割能力或把内部调用测试视为桌面验收。旧任务继续读取原 schema 1 数据，不因关键词为空转成全部分割。
+截至 0.1.57，回单版式流程已使用页面 schema 2 和审核上下文 version 3。任务数据库升级、零命中页检查点、实例身份、发布时重建比对及兼容边界见[领域与持久化合同](receipt-layout-contract.md#内部持久任务与快照)。内部审核使用独立 receipt 记录表，保留批量保存、旧任务记录隔离及归属清理等能力；普通裁剪与整版校准分别受各自的边界和预览事务检查约束。
+
+当前桌面入口已接通全部分割／关键词分析、审核结果载入、缩略图总览、排除和特殊凭证处理、微调预览／保存／撤销、版式模板管理及 PDF 导出。主要调用链为 `App.tsx` 的 `runReceiptBatchAnalysis` → `ReceiptCalibrationPane` → `ReceiptOverview`／`ReceiptExportWorkspace`；校准和导出通过 Tauri 宿主调用本地 Python 引擎。此前“宿主、前端和导出接线尚未完成”的描述属于旧开发阶段，不再代表当前状态。
+
+当前界面不提供“历史任务”入口。后台保留旧任务数据与兼容读取能力，不代表用户可以在界面重新打开旧任务，也不将旧 schema 1 任务因关键词为空而改为全部分割。新任务通过“我的模板”复用已核对的版式边界，不继承旧任务的审核、排除或特殊凭证状态。
+
+按交易对手整理已接入桌面流程：CompanyAccountSelector 选择本批账户，ReceiptGroupingPanel 调用本地提取和分组，ReceiptExportWorkspace 直接选择目录并生成 PDF 和核对表。导出使用有界 JSONL 进度帧，经每次调用独立的 Tauri Channel 显示阶段、计数和耗时；普通引擎请求保持单响应协议。流程见[交易对手整理](counterparty-grouping.md)，验证范围见[版本说明](release-0.1.60.md)。
 
 批量分析和微调预览会连续更新进度，缓存命中时多个更新可能处于同一轮微任务中。文件列表应在勾选路径确实失效时才写入选择状态；不要在每次 `files` 数组变化后无条件调用 setter，再仅在 updater 内返回原值。在生产 React 和原生鼠标点击的同步优先级下，这种无效更新与进度更新交错曾触发 `Maximum update depth exceeded`（错误码 185）。
 

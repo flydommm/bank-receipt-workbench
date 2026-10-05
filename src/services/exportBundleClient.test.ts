@@ -81,6 +81,12 @@ function excludedPreview(): ExportBundlePreview {
 
 function excludedReceipt(value: ExportBundlePreview): ExportBundleReceipt {
   const result = receiptForPreview(value);
+  result.files = result.files.map((file, index) => {
+    const source = value.files[index];
+    if (!source || source.group_id === undefined) return file;
+    return { ...file, group_id: source.group_id, group_kind: source.group_kind, group_name: source.group_name,
+      grouped_pages: source.grouped_pages };
+  });
   result.receipt_schema = value.receipt_schema;
   result.summary = value.summary;
   result.excluded = value.excluded;
@@ -88,7 +94,119 @@ function excludedReceipt(value: ExportBundlePreview): ExportBundleReceipt {
   return result;
 }
 
+function groupedMergedRequest(): ExportScopeRequest {
+  return { ...request(), output_mode: 'by_counterparty_merged', include_xlsx: true,
+    expected_grouping_revision: 3, expected_review_fingerprint: sha, own_account_fingerprint: 'b'.repeat(64),
+    include_counterparty_pending: false };
+}
+
+function groupedMergedPreview(): ExportBundlePreview {
+  const input = groupedMergedRequest();
+  const value = excludedPreview();
+  return { ...value, ...input, receipt_schema: 2, output_mode: input.output_mode,
+    files: [{ ...value.files[0]!, file_id: 'grouped-merged', name: '全部分组回单.pdf', source_key: null, grouped_pages: 1 }],
+    merged_pages: 0, source_pages: 0, grouped_pages: 1, total_pages: 1 };
+}
+
+function groupedMergedReceipt(value: ExportBundlePreview): ExportBundleReceipt {
+  const result = excludedReceipt(value);
+  Object.assign(result, { expected_grouping_revision: value.expected_grouping_revision,
+    expected_review_fingerprint: value.expected_review_fingerprint, own_account_fingerprint: value.own_account_fingerprint,
+    include_counterparty_pending: value.include_counterparty_pending });
+  result.files[0]!.grouped_pages = 1;
+  result.files = [...result.files, { name: '匹配索引.xlsx', path: `${result.directory}/匹配索引.xlsx`, kind: 'xlsx', sha256: sha, size_bytes: 900 }];
+  result.merged_pages = 0; result.source_pages = 0; result.grouped_pages = 1; result.total_pages = 1; result.row_count = 1;
+  return { ...result, output_mode: 'by_counterparty_merged' } as ExportBundleReceipt;
+}
+
 describe('frozen export bundle boundary', () => {
+  it('requires complete grouping bindings for both grouped output modes', () => {
+    for (const output_mode of ['by_counterparty', 'by_counterparty_merged'] as const) {
+      const valid = { ...groupedMergedRequest(), output_mode };
+      expect(validateExportScopeRequest(valid)).toEqual(valid);
+      const missingBinding = { ...valid };
+      delete missingBinding.expected_review_fingerprint;
+      expect(() => validateExportScopeRequest(missingBinding)).toThrow(ExportBundleError);
+      expect(() => validateExportScopeRequest({ ...valid, include_xlsx: false })).toThrow(ExportBundleError);
+    }
+  });
+
+  it('accepts one grouped merged PDF with strict merged shape and receipt mode', () => {
+    const input = groupedMergedRequest();
+    const value = groupedMergedPreview();
+    const parsed = parseExportBundlePreview(value, input, 2);
+    expect(parsed.output_mode).toBe('by_counterparty_merged');
+    expect(parsed.files).toHaveLength(1);
+    expect(parsed.files[0]).not.toHaveProperty('group_id');
+    expect(parsed.grouped_pages).toBe(1);
+    const published = groupedMergedReceipt(value);
+    expect(parseExportBundleReceipt(published, parsed, 2).output_mode).toBe('by_counterparty_merged');
+    expect(parseExportBundleReceipt(published, undefined, 2).output_mode).toBe('by_counterparty_merged');
+  });
+
+  it('recovers a custom grouped merged filename without a live preview', () => {
+    const value = groupedMergedPreview();
+    value.output_name = customName;
+    value.files[0]!.name = `${customName}.pdf`;
+    value.files[0]!.grouped_pages = 1;
+    const published = groupedMergedReceipt(value);
+    published.files[0]!.name = `${customName}.pdf`;
+    published.files[0]!.path = `${published.directory}/${customName}.pdf`;
+    expect(parseExportBundleReceipt(published, undefined, 2).files[0]?.name).toBe(`${customName}.pdf`);
+    expect(() => parseExportBundleReceipt({ ...published, output_mode: 'by_counterparty' }, undefined, 2)).toThrow(ExportBundleError);
+  });
+
+  it.each(['group-file-id', 'extra-file', 'wrong-name', 'group-field', 'wrong-pages', 'wrong-output-mode'] as const)(
+    'rejects malformed grouped merged %s responses', (change) => {
+      const input = groupedMergedRequest();
+      const value = groupedMergedPreview();
+      if (change === 'group-file-id') value.files[0]!.file_id = 'group:one';
+      if (change === 'extra-file') value.files.push({ ...value.files[0]!, file_id: 'grouped-merged-2', preview_token: sourceFileToken,
+        preview_path: `C:/private/export-previews/${sourceFileToken}.pdf` });
+      if (change === 'wrong-name') value.files[0]!.name = '全部回单.pdf';
+      if (change === 'group-field') (value.files[0] as any).group_id = 'group-one';
+      if (change === 'wrong-pages') value.merged_pages = 1;
+      if (change === 'wrong-output-mode') value.output_mode = 'merged';
+      expect(() => parseExportBundlePreview(value, input, 2)).toThrow(ExportBundleError);
+      if (change === 'wrong-output-mode') return;
+      const published = groupedMergedReceipt(groupedMergedPreview());
+      if (change === 'extra-file') published.files.splice(1, 0, { name: '第二份.pdf', path: `${published.directory}/第二份.pdf`, kind: 'pdf', sha256: sha, size_bytes: 10, page_count: 1 });
+      if (change === 'wrong-name') { published.files[0]!.name = '全部回单.pdf'; published.files[0]!.path = `${published.directory}/全部回单.pdf`; }
+      if (change === 'group-field') (published.files[0] as any).group_id = 'group-one';
+      if (change === 'wrong-pages') published.grouped_pages = 2;
+      if (change === 'group-file-id') published.output_mode = 'by_counterparty';
+      expect(() => parseExportBundleReceipt(published, groupedMergedPreview(), 2)).toThrow(ExportBundleError);
+    });
+
+  it('attests counterparty groups from one source without mistaking them for source PDFs', () => {
+    const binding = { expected_grouping_revision: 3, expected_review_fingerprint: sha, own_account_fingerprint: 'b'.repeat(64), include_counterparty_pending: false };
+    const input: ExportScopeRequest = { ...request(), ...binding, output_mode: 'by_counterparty', include_xlsx: true,
+      selected_segment_ids: ['segment', 'second'], expected_records: [{ id: 'segment', record_revision: 1 }, { id: 'second', record_revision: 0 }] };
+    const value: ExportBundlePreview = { ...excludedPreview(), ...binding, output_mode: 'by_counterparty', include_xlsx: true,
+      selected_segment_ids: input.selected_segment_ids,
+      summary: { total_segments: 3, selected_count: 2, selected_source_count: 1, omitted_count: 1, omitted_unresolved_count: 0, excluded_count: 1, expected_pages: 2 },
+      files: [{ ...preview().files[0]!, file_id: 'group:first', group_id: 'first', group_kind: 'named', group_name: '客户甲', grouped_pages: 1, name: '全部回单.pdf' },
+        { ...preview().files[0]!, file_id: 'group:second', group_id: 'second', group_kind: 'named', group_name: '客户乙', grouped_pages: 1, name: '合成对手.pdf', preview_token: sourceFileToken,
+          preview_path: `C:/private/export-previews/${sourceFileToken}.pdf` }], merged_pages: 0, source_pages: 0, grouped_pages: 2, total_pages: 2 };
+    expect(validateExportScopeRequest(input)).toEqual(input);
+    const parsed = parseExportBundlePreview(value, input, 2);
+    expect(parsed.files).toHaveLength(2);
+    const published = { ...excludedReceipt(value), ...binding, grouped_pages: 2, row_count: 2 };
+    published.files.push({ name: '匹配索引.xlsx', path: `${published.directory}/匹配索引.xlsx`, kind: 'xlsx', sha256: sha, size_bytes: 900 });
+    expect(parseExportBundleReceipt(published, parsed, 2).grouped_pages).toBe(2);
+    expect(parseExportBundleReceipt(published, undefined, 2).grouped_pages).toBe(2);
+    const changedGroup = structuredClone(published);
+    (changedGroup.files[0] as any).group_name = '被替换的组';
+    expect(() => parseExportBundleReceipt(changedGroup, parsed, 2)).toThrow(ExportBundleError);
+    const invalidKind = structuredClone(value);
+    (invalidKind.files[0] as any).group_kind = 'forged';
+    expect(() => parseExportBundlePreview(invalidKind, input, 2)).toThrow(ExportBundleError);
+    expect(() => parseExportBundleReceipt({ ...published, expected_grouping_revision: 4 }, parsed, 2)).toThrow();
+    expect(() => parseExportBundlePreview({ ...value, grouped_pages: 1 }, input, 2)).toThrow();
+    expect(() => parseExportBundlePreview({ ...value, files: [value.files[0], { ...value.files[1], group_id: 'first' }] }, input, 2)).toThrow();
+    expect(() => validateExportScopeRequest({ ...input, include_xlsx: false })).toThrow();
+    expect(() => validateExportScopeRequest({ ...request(), ...binding })).toThrow();
+  });
   it('parses and attests schema2 exclusion audit while retaining legacy decoding', () => {
     const value = excludedPreview();
     const parsed = parseExportBundlePreview(value, request());

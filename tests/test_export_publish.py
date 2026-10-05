@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from copy import deepcopy
 from hashlib import sha256
+from io import StringIO
 import json
 import os
 from pathlib import Path
@@ -18,6 +19,7 @@ from engine import export_publish
 from engine import export_directory
 from engine.export_journal import ExportJournal
 from engine.exporter import DEFAULT_HEADERS
+from engine.export_progress import ExportProgressReporter, bind_export_progress_reporter
 
 
 class _FakeRecord:
@@ -197,6 +199,20 @@ def test_publish_writes_three_outputs_and_reuses_published_receipt(rendered_bund
     after = sorted(path.name for path in root.iterdir() if path.is_dir() and not path.name.startswith("."))
     assert again == receipt
     assert after == before
+
+
+def test_publish_reports_saving_indexing_and_verifying_stages(rendered_bundle) -> None:
+    service, root = rendered_bundle
+    intent_id = next(iter(service.journal.entries))
+    output = StringIO()
+    with bind_export_progress_reporter(ExportProgressReporter(output)):
+        receipt = export_publish.publish_bundle(service, intent_id, root)
+    frames = [json.loads(line) for line in output.getvalue().splitlines()]
+    stages = [frame["stage"] for frame in frames]
+    assert stages[0] == "saving"
+    assert "indexing" in stages and "verifying" in stages
+    assert frames[0]["completed"] == 0 and frames[0]["total"] == 1 and frames[0]["unit"] == "files"
+    assert receipt["state"] == "published"
 
 
 def test_publish_round_trip_persists_attempt_with_real_journal(rendered_bundle) -> None:

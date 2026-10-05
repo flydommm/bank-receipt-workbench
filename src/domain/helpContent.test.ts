@@ -30,7 +30,8 @@ describe('help content for the receipt overview workflow', () => {
       '明确选择后批量处理',
     ]);
     expect(GUIDE_STEPS).toHaveLength(6);
-    expect(guideText).toContain('导入预览 → 分析处理 → 导出结果');
+    expect(guideText).toContain('从原件到导出');
+    expect(guideText).toContain('选择文件与本方账户');
     expect(guideText).toContain('原页总览');
     expect(guideText).toContain('片段总览');
     expect(guideText).toContain('缩略图大小');
@@ -65,18 +66,30 @@ describe('help content for the receipt overview workflow', () => {
     expect(guideText).toContain('核实并完成保存');
     expect(guideText).toContain('核实并完成撤销');
     expect(guideText).toContain('导出回单');
+    expect(guideText).toContain('选择本机档案');
+    expect(guideText).toContain('清除或更换来源会清空');
+    expect(guideText).toContain('Excel 导入会完整预览');
+    expect(guideText).toContain('导出核对草稿 Excel');
+    expect(guideText).toContain('批量修改交易对手（N）');
+    expect(guideText).toContain('同版式批量识别');
+    expect(guideText).toContain('本机读取规则');
     expect(guideText).toContain('导出名称');
     expect(guideText).toContain('导出方式');
     expect(guideText).toContain('同时导出 XLSX 索引');
-    expect(guideText).toContain('同时导出清单 JSON');
     expect(guideText).toContain('选择目录并导出');
     expect(guideText).toContain('重试导出');
     expect(guideText).toContain('移除本次来源');
-    expect(guideText).toContain('不需要单独生成预览或最终预览');
-    expect(guideText).toContain('复用同次导出');
+    expect(guideText).toContain('当前阶段和已用时间');
+    expect(guideText).toContain('普通和分组流程分别记住上次选择');
+    expect(guideText).toContain('同一次导出');
     expect(guideText).toContain('合并为一个 PDF、按来源分别导出 PDF，或同时导出两种 PDF');
-    expect(guideText).toContain('全部未排除项');
     expect(guideText).toContain('总览筛选不会改变导出范围');
+    expect(guideText).toContain('查找提取回单的导出步骤');
+    expect(guideText).toContain('确认范围并生成预览');
+    expect(guideText).toContain('最终 PDF 导出预览');
+    expect(guideText).not.toContain('通用审核组件');
+    expect(guideText).not.toContain('可能进入');
+    expect(guideText).not.toContain('临时 PDF 预览');
     expect(guideText).not.toContain('预览并导出');
     expect(guideText).not.toContain('生成预览 N 处');
     expect(guideText).not.toContain('返回导出设置');
@@ -102,7 +115,6 @@ describe('help content for the receipt overview workflow', () => {
       'by_source',
       'loan_interest_notice',
       'electronic_tax_payment',
-      '选择导出范围',
       '进入微调',
       '按单张候选分割',
       '调整为整页范围',

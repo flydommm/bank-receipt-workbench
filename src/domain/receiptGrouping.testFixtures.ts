@@ -1,0 +1,17 @@
+import type { ReceiptBatchReviewPageItem } from './receiptBatch';
+import type { CompanyAccount, GroupingHeader, GroupingItem, PartyField, ReceiptGroupingSnapshot } from './receiptGrouping';
+export const syntheticHash = (n = 1) => n.toString(16).padStart(64, '0');
+export const syntheticAccount: CompanyAccount = { account_id: 'synthetic-account', account_revision: 1, company_name: '合成测试公司', bank_name: '合成测试银行', branch_name: '测试支行', account_number: '0000123456', active: true, created_at: '2026-09-28T00:00:00Z', updated_at: '2026-09-28T00:00:00Z' };
+export function syntheticField(value = '合成对手'): PartyField { return { raw: value, value, state: value ? 'present' : 'blank', evidence: [{ rect: { x0: 10, y0: 10, x1: 100, y1: 30 }, label: '名称', method: 'label' }], diagnostics: [] }; }
+export function syntheticItem(n = 1): GroupingItem {
+  const party = { name: syntheticField(), account: syntheticField('00000999'), bank: syntheticField('合成对手银行') };
+  return { binding: { segment_id: syntheticHash(n), fragment_key: syntheticHash(n + 1000), source_key: 'c:/synthetic/source.pdf', source_sha256: syntheticHash(101), source_page: n, position_index: 1, slot_id: 'slot-1', instance_id: syntheticHash(n + 2000), analysis_signature: syntheticHash(102), review_record_revision: 0 }, extraction_fingerprint: syntheticHash(103), basis_fingerprint: syntheticHash(104), extraction_state: 'ready', extracted: { payer: party, payee: party, extractor_version: 'synthetic-v1', diagnostics: [] }, field_overrides: [], own_decision: { status: 'confirmed', method: 'account_match', side: 'payer', source_bank_status: 'matched', reasons: [] }, counterparty: party, route: 'named', group: { group_id: 'named-synthetic', kind: 'named', display_name: '合成对手', key: '合成对手', manual: false }, decision_method: 'automatic', warnings: [], boundary_status: 'confirmed', document_type: null };
+}
+export function syntheticHeader(total = 1, revision = 1): GroupingHeader {
+  return { schema_version: 1, job_id: 'synthetic-job', result_revision: 'result-1', grouping_revision: revision,
+    own_account: { company_name: syntheticAccount.company_name, bank_name: syntheticAccount.bank_name, branch_name: syntheticAccount.branch_name, account_number: syntheticAccount.account_number, own_account_revision: 1, account_id: syntheticAccount.account_id, account_revision: 1, fingerprint: syntheticHash(105), selected_at: syntheticAccount.created_at }, review_fingerprint: syntheticHash(106), counts: { total, excluded: 0, extraction_pending: 0, own_pending: 0, counterparty_pending: 0, assigned: total, stale: 0 } };
+}
+export function syntheticSnapshot(count = 1): ReceiptGroupingSnapshot { return { header: syntheticHeader(count), items: Array.from({ length: count }, (_, i) => syntheticItem(i + 1)) }; }
+export function syntheticReview(item: GroupingItem): ReceiptBatchReviewPageItem {
+  return { record_revision: item.binding.review_record_revision, record: null, original: { id: item.binding.segment_id, source_key: item.binding.source_key, source_page: item.binding.source_page, instance_id: item.binding.instance_id, slot_id: item.binding.slot_id, position_index: item.binding.position_index, layout_id: 'synthetic-layout', layout_revision: 1, layout_signature: syntheticHash(107), page_geometry: { pdf_box: { x0: 0, y0: 0, x1: 600, y1: 900 }, width_pt: 600, height_pt: 900, rotation: 0, user_unit: 1 }, candidate_rect: { x0: 0, y0: 0, x1: 600, y1: 300 }, occupancy: 'occupied', selection_basis: 'occupied_slot', needs_review: false, analysis_signature: item.binding.analysis_signature } };
+}

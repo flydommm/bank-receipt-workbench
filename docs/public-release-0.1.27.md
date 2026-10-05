@@ -24,11 +24,11 @@
 
 此外提供 Core/Ocr 各自的 `metadata.zip`、`LICENSE`、`source-info.json` 和 `SHA256SUMS.txt`，共 8 个附件。两个 metadata ZIP 分别保存构建记录、运行时清单和原始许可材料，不用最后构建的 OCR 运行时清单代替 Core 清单。
 
-公开附件使用英文文件名以适配 GitHub 命名；构建记录中的中文安装包名是同一文件的原名，字节和 SHA-256 一致。当前下载应以本页和 Release 附带的 `SHA256SUMS.txt` 核验；[早期准备包记录](delivery-0.1.27-preparation.md)保留为历史资料，其旧哈希不适用于本次公开包。
+公开附件使用英文文件名以适配 GitHub 命名；构建记录中的中文安装包名是同一文件的原名，字节和 SHA-256 一致。当前下载应以本页和 Release 附带的 `SHA256SUMS.txt` 核验；早期准备包记录（历史资料已归档）保留为历史资料，其旧哈希不适用于本次公开包。
 
 ## 验证证据
 
-- 本地 NSIS 构建、Core/Ocr 私有运行时探针及对应源码归档见 [AGPL 交付记录](delivery-0.1.27-agpl.md)。
+- 本地 NSIS 构建、Core/Ocr 私有运行时探针及对应源码归档见 AGPL 交付记录（历史资料已归档）。
 - 首次远程 Windows CI：[运行 34526176098](https://github.com/flydommm/bank-receipt-workbench/actions/runs/34526176098)，测试提交 `b6054493b9239018cd94bbce1be132395aae4c24`，最终结果 `success`，Windows 作业耗时 13 分 56 秒。该提交与安装包源码相比仅更新交付文档。
 - 远程前端构建与 **55 个测试文件、1,063 项测试通过**；Python **813 项通过、18 项跳过**；Core 运行时准备通过；Rust **73 项单元测试、13 项进程集成测试通过**。本机此前的 Python 811 项记录不含后来独立验证的 2 项许可收集测试，本次远程统一执行并计入。
 - 发布后 API 核验标签直接指向 `ed550857817657f99f82a5268ef6ce81c1dfd7be`，没有把后续文档提交误标成安装包构建输入。

@@ -1,0 +1,116 @@
+{
+  "description": "Synthetic cross-layer fixture only; no real bank receipt or customer data.",
+  "input": {
+    "ordinary": {
+      "raw": "原始收款名称",
+      "normalized": "规范收款名称",
+      "state": "present",
+      "evidence": {
+        "rect": { "x0": 10, "y0": 20, "x1": 210, "y1": 42 },
+        "label": { "text": "收款人名称", "legacy_source": "synthetic" },
+        "method": "label",
+        "legacy_reader_token": "synthetic-token"
+      },
+      "diagnostics": ["公开字段诊断"],
+      "internal_diagnostics": ["ordinary-reader-trace-must-not-be-forwarded"]
+    },
+    "ambiguous": {
+      "raw": "字段存在两个候选",
+      "normalized": "字段备用值",
+      "state": "ambiguous",
+      "evidence": [
+        {
+          "rect": { "x0": 20, "y0": 50, "x1": 220, "y1": 72 },
+          "label": { "text": "对方名称", "legacy_source": "synthetic" },
+          "method": "label"
+        }
+      ],
+      "diagnostics": ["存在两个候选，需人工核对"],
+      "candidates": [
+        {
+          "raw": "候选甲原文",
+          "normalized": "候选甲规范值",
+          "state": "present",
+          "evidence": [
+            {
+              "rect": { "x0": 25, "y0": 54, "x1": 125, "y1": 68 },
+              "label": { "text": "候选一", "legacy_source": "synthetic" },
+              "method": "label"
+            }
+          ],
+          "diagnostics": ["candidate-reader-trace-secret"],
+          "reader_trace": "candidate-trace-secret"
+        },
+        {
+          "raw": "候选乙原文",
+          "value": "候选乙显式值",
+          "normalized": "候选乙备用值",
+          "state": "present",
+          "evidence": [
+            {
+              "rect": null,
+              "label": "候选二",
+              "method": "verified_region"
+            }
+          ],
+          "diagnostics": ["candidate-reader-trace-secret-2"],
+          "reader_trace": "candidate-trace-secret-2"
+        }
+      ]
+    }
+  },
+  "public_output": {
+    "ordinary": {
+      "raw": "原始收款名称",
+      "value": "规范收款名称",
+      "state": "present",
+      "evidence": [
+        {
+          "rect": { "x0": 10, "y0": 20, "x1": 210, "y1": 42 },
+          "label": "收款人名称",
+          "method": "label"
+        }
+      ],
+      "diagnostics": ["公开字段诊断"]
+    },
+    "ambiguous": {
+      "raw": "字段存在两个候选",
+      "value": "字段备用值",
+      "state": "ambiguous",
+      "evidence": [
+        {
+          "rect": { "x0": 20, "y0": 50, "x1": 220, "y1": 72 },
+          "label": "对方名称",
+          "method": "label"
+        }
+      ],
+      "diagnostics": ["存在两个候选，需人工核对"],
+      "candidates": [
+        {
+          "raw": "候选甲原文",
+          "value": "候选甲规范值",
+          "state": "present",
+          "evidence": [
+            {
+              "rect": { "x0": 25, "y0": 54, "x1": 125, "y1": 68 },
+              "label": "候选一",
+              "method": "label"
+            }
+          ]
+        },
+        {
+          "raw": "候选乙原文",
+          "value": "候选乙显式值",
+          "state": "present",
+          "evidence": [
+            {
+              "rect": null,
+              "label": "候选二",
+              "method": "verified_region"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -11,9 +11,11 @@ directory/file identity that was observed by the operation.
 from __future__ import annotations
 
 from contextlib import contextmanager
+from copy import deepcopy
 from dataclasses import dataclass
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -44,6 +46,39 @@ _GENERATION_RE = re.compile(
     r"^(?P<intent>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"
     r"\.(?P<version>[1-9][0-9]{0,6})\.json$"
 )
+
+# The anchor is the durable intent contract.  These fields may be updated by
+# the render/publish state machine and therefore belong in every compact
+# generation.  Unknown fields added after creation are treated as mutable so
+# older hosts can add forward-compatible state without rewriting the anchor.
+_MUTABLE_GENERATION_FIELDS = frozenset({
+    "state",
+    "files",
+    "attempt",
+    "receipt",
+    "residuals",
+    "residual_attempts",
+    "previous_attempts",
+})
+_IMMUTABLE_IDENTITY_FIELDS = (
+    "schema",
+    "receipt_schema",
+    "include_manifest",
+    "intent_id",
+    "job_id",
+    "created_at",
+)
+# Scope/plan and the preview binding are the known immutable payload carried
+# by a new anchor.  Other unknown keys remain forward-compatible mutable
+# extension state, including keys found in legacy full generations.
+_STATIC_ANCHOR_FIELDS = frozenset({
+    "scope",
+    "plan",
+    "preview_root",
+    "preview_identity",
+    *_IMMUTABLE_IDENTITY_FIELDS,
+})
+_COMPACT_GENERATION_FIELDS = frozenset({"version", "anchor_sha256", "data", "removed"})
 
 
 class ExportJournalError(RuntimeError):
@@ -270,6 +305,43 @@ def _canonical_clone(value: object) -> tuple[dict[str, Any], bytes]:
     return clone, encoded
 
 
+def _validate_record_shape(value: object) -> dict[str, Any]:
+    """Validate fields whose meaning is independent of JSON encoding.
+
+    Reading an already-decoded journal must not canonical-encode a large
+    anchor on every checkpoint.  Creation still uses :func:`_prepare_data` to
+    obtain a canonical clone; this helper is the cheap validation shared by
+    both that path and the compact-generation reader.
+    """
+
+    if not isinstance(value, dict):
+        raise _validation_error("export journal record is invalid")
+
+    # Check required fields before encoding so malformed Python values never
+    # get silently coerced into a different record.
+    if type(value.get("schema")) is not int or value.get("schema") != JOURNAL_SCHEMA:
+        raise _validation_error("export journal schema is unsupported")
+    if "receipt_schema" in value and (type(value["receipt_schema"]) is not int or value["receipt_schema"] != 2):
+        raise _validation_error("export receipt schema is unsupported")
+    if "include_manifest" in value and type(value["include_manifest"]) is not bool:
+        raise _validation_error("export manifest option is invalid")
+    intent_id = _validate_intent_id(value.get("intent_id"))
+    _validate_text_identifier(value.get("job_id"), "export journal job id is invalid")
+    created_at = value.get("created_at")
+    if not isinstance(created_at, str) or not created_at.strip():
+        raise _validation_error("export journal created time is invalid")
+    state = value.get("state")
+    if not isinstance(state, str) or state not in _JOURNAL_STATES:
+        raise _validation_error("export journal state is invalid")
+    if any(not isinstance(key, str) for key in value):
+        raise _validation_error("export journal record is invalid")
+    # The local variable keeps this routine's contract explicit for callers
+    # that need the validated canonical identifier without another lookup.
+    if value.get("intent_id") != intent_id:
+        raise _validation_error("export journal record is invalid")
+    return value
+
+
 def _validate_intent_id(value: object) -> str:
     if not isinstance(value, str):
         raise _validation_error("export journal intent id is invalid")
@@ -295,32 +367,13 @@ def _validate_text_identifier(value: object, message: str) -> str:
 
 
 def _prepare_data(value: object) -> tuple[dict[str, Any], bytes]:
-    if not isinstance(value, dict):
-        raise _validation_error("export journal record is invalid")
-
-    # Check required fields before encoding so malformed Python values never
-    # get silently coerced into a different record.
-    if type(value.get("schema")) is not int or value.get("schema") != JOURNAL_SCHEMA:
-        raise _validation_error("export journal schema is unsupported")
-    if "receipt_schema" in value and (type(value["receipt_schema"]) is not int or value["receipt_schema"] != 2):
-        raise _validation_error("export receipt schema is unsupported")
-    if "include_manifest" in value and type(value["include_manifest"]) is not bool:
-        raise _validation_error("export manifest option is invalid")
-    intent_id = _validate_intent_id(value.get("intent_id"))
-    _validate_text_identifier(value.get("job_id"), "export journal job id is invalid")
-    created_at = value.get("created_at")
-    if not isinstance(created_at, str) or not created_at.strip():
-        raise _validation_error("export journal created time is invalid")
-    state = value.get("state")
-    if not isinstance(state, str) or state not in _JOURNAL_STATES:
-        raise _validation_error("export journal state is invalid")
+    _validate_record_shape(value)
+    intent_id = value["intent_id"]
 
     clone, encoded = _canonical_clone(value)
     # JSON key conversion can only matter for a Python dict with non-string
     # keys.  Such a payload would not retain its required fields after JSON
     # round-tripping, so reject it rather than persisting an altered intent.
-    if any(not isinstance(key, str) for key in value):
-        raise _validation_error("export journal record is invalid")
     if clone.get("intent_id") != intent_id:
         raise _validation_error("export journal record is invalid")
     return clone, encoded
@@ -331,6 +384,31 @@ def _validate_loaded(value: object, intent_id: str) -> tuple[dict[str, Any], byt
     if clone.get("intent_id") != intent_id:
         raise _integrity_error()
     return clone, encoded
+
+
+def _validate_decoded(value: object, intent_id: str) -> dict[str, Any]:
+    """Validate JSON-decoded data without re-serialising its full payload."""
+
+    _validate_record_shape(value)
+    if value.get("intent_id") != intent_id:
+        raise _integrity_error()
+    return value
+
+
+def _reject_json_constant(value: str) -> None:
+    """Reject JavaScript-only NaN/Infinity tokens accepted by json.loads."""
+
+    raise ValueError(value)
+
+
+def _parse_json_float(value: str) -> float:
+    try:
+        parsed = float(value)
+    except (OverflowError, ValueError):
+        raise ValueError(value) from None
+    if not math.isfinite(parsed):
+        raise ValueError(value)
+    return parsed
 
 
 def _same_stat(left: os.stat_result, right: os.stat_result) -> bool:
@@ -415,6 +493,54 @@ def _read_regular_bytes(
     return bytes(raw), _FileIdentity.from_stat(final, digest)
 
 
+def _read_regular_identity(
+    path: Path,
+    expected: os.stat_result | None = None,
+) -> _FileIdentity:
+    """Hash a bounded regular file without retaining or decoding its bytes."""
+
+    initial = _ordinary_file_info(path)
+    if expected is not None and not _same_stat(expected, initial):
+        raise _conflict_error()
+    _, maximum, _ = _limits()
+    descriptor = _open_regular_for_read(path, initial)
+    digest = hashlib.sha256()
+    total = 0
+    try:
+        opened = os.fstat(descriptor)
+        if int(opened.st_size) > maximum:
+            raise _quota_error()
+        while total <= maximum:
+            remaining = maximum + 1 - total
+            chunk = os.read(descriptor, min(_READ_CHUNK_BYTES, remaining))
+            if not chunk:
+                break
+            digest.update(chunk)
+            total += len(chunk)
+            if total > maximum:
+                raise _quota_error()
+        finished = os.fstat(descriptor)
+        if not _same_stat(opened, finished) or total != int(finished.st_size):
+            raise _conflict_error()
+    except ExportJournalError:
+        raise
+    except (OSError, ValueError):
+        raise _error("export journal read failed") from None
+    finally:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+
+    try:
+        final = path.lstat()
+    except (OSError, ValueError):
+        raise _conflict_error() from None
+    if not _same_stat(finished, final):
+        raise _conflict_error()
+    return _FileIdentity.from_stat(final, digest.hexdigest())
+
+
 def _read_journal_file(
     path: Path,
     intent_id: str,
@@ -424,17 +550,99 @@ def _read_journal_file(
 
     raw, identity = _read_regular_bytes(path, expected)
     try:
-        decoded = json.loads(bytes(raw).decode("utf-8", "strict"))
+        decoded = json.loads(
+            bytes(raw).decode("utf-8", "strict"),
+            parse_constant=_reject_json_constant,
+            parse_float=_parse_json_float,
+        )
     except (TypeError, ValueError, UnicodeError, RecursionError):
         raise _validation_error("export journal JSON is invalid") from None
-    clone, _ = _validate_loaded(decoded, intent_id)
+    try:
+        clone = _validate_decoded(decoded, intent_id)
+    except ExportJournalValidationError:
+        raise
     return clone, identity
 
 
 def _generation_encoded(version: int, data: dict[str, Any]) -> bytes:
+    """Encode the legacy full-generation format.
+
+    Keep this helper's two-argument form stable: old private journals and
+    tests may still construct ``{"version", "data"}`` generations directly.
+    New saves use :func:`_compact_generation_encoded` below.
+    """
+
     if type(version) is not int or version < 1 or version > _generation_limit():
         raise _validation_error("export journal generation is invalid")
     return _canonical_json({"version": version, "data": data})
+
+
+def _compact_generation_encoded(
+    version: int,
+    anchor_sha256: str,
+    data: dict[str, Any],
+    removed: list[str],
+) -> bytes:
+    if type(version) is not int or version < 1 or version > _generation_limit():
+        raise _validation_error("export journal generation is invalid")
+    if not isinstance(anchor_sha256, str) or re.fullmatch(r"[0-9a-f]{64}", anchor_sha256) is None:
+        raise _validation_error("export journal anchor hash is invalid")
+    if not isinstance(data, dict) or any(not isinstance(key, str) for key in data):
+        raise _validation_error("export journal generation data is invalid")
+    if not isinstance(removed, list) or any(not isinstance(key, str) for key in removed):
+        raise _validation_error("export journal generation removals are invalid")
+    if removed != sorted(set(removed)):
+        raise _validation_error("export journal generation removals are invalid")
+    return _canonical_json({
+        "version": version,
+        "anchor_sha256": anchor_sha256,
+        "data": data,
+        "removed": removed,
+    })
+
+
+def _compact_changes(
+    data: dict[str, Any],
+    anchor_data: dict[str, Any],
+) -> tuple[dict[str, Any], list[str]]:
+    """Extract a standalone mutable snapshot relative to the anchor.
+
+    Static anchor values are intentionally compared with equality so an
+    in-place mutation of a nested scope/plan object cannot be mistaken for an
+    unchanged reference.  Missing static fields are explicit tombstones; this
+    is how ``close()`` retires the verbose scope and plan without restoring
+    them on the next load.
+    """
+
+    _validate_record_shape(data)
+    changes: dict[str, Any] = {}
+    removed: list[str] = []
+    for key, anchor_value in anchor_data.items():
+        if key in _STATIC_ANCHOR_FIELDS:
+            if key not in data:
+                removed.append(key)
+            elif data[key] != anchor_value:
+                raise _validation_error("export journal anchor fields are immutable")
+        elif key in data:
+            # Known mutable fields are always written so this generation is
+            # independently recoverable.  An unknown key is written only
+            # when it changed, preserving forward-compatible legacy fields
+            # without inflating every checkpoint.
+            if key in _MUTABLE_GENERATION_FIELDS or data[key] != anchor_value:
+                changes[key] = data[key]
+        else:
+            removed.append(key)
+
+    # A key added after creation is mutable extension state.  It is included
+    # in every subsequent compact generation so recovery does not depend on a
+    # chain of prior generations.
+    for key, value in data.items():
+        if key not in anchor_data and key in _STATIC_ANCHOR_FIELDS:
+            raise _validation_error("export journal anchor fields are immutable")
+        if key not in anchor_data:
+            changes[key] = value
+
+    return changes, sorted(removed)
 
 
 def _read_generation_file(
@@ -442,24 +650,60 @@ def _read_generation_file(
     intent_id: str,
     version: int,
     expected: os.stat_result | None = None,
+    *,
+    anchor_data: dict[str, Any] | None = None,
+    anchor_sha256: str | None = None,
+    anchor_size: int | None = None,
 ) -> tuple[dict[str, Any], _FileIdentity]:
     raw, identity = _read_regular_bytes(path, expected)
     try:
-        decoded = json.loads(raw.decode("utf-8", "strict"))
+        decoded = json.loads(
+            raw.decode("utf-8", "strict"),
+            parse_constant=_reject_json_constant,
+            parse_float=_parse_json_float,
+        )
     except (TypeError, ValueError, UnicodeError, RecursionError):
         # A corrupt highest generation must stop recovery; silently falling
         # back to an older publishing state could authorize the wrong action.
         raise _integrity_error() from None
+    if not isinstance(decoded, dict) or type(decoded.get("version")) is not int or decoded.get("version") != version:
+        raise _integrity_error()
+    if set(decoded) == {"version", "data"}:
+        try:
+            clone = _validate_decoded(decoded["data"], intent_id)
+        except ExportJournalValidationError:
+            raise _integrity_error() from None
+        return clone, identity
+
+    if set(decoded) != _COMPACT_GENERATION_FIELDS:
+        raise _integrity_error()
+    if anchor_data is None or anchor_sha256 is None:
+        raise _integrity_error()
+    if decoded.get("anchor_sha256") != anchor_sha256:
+        raise _integrity_error()
+    if anchor_size is not None:
+        _, maximum, _ = _limits()
+        if anchor_size < 0 or anchor_size + identity.size > maximum:
+            raise _quota_error()
+    patch = decoded.get("data")
+    removed = decoded.get("removed")
     if (
-        not isinstance(decoded, dict)
-        or set(decoded) != {"version", "data"}
-        or type(decoded.get("version")) is not int
-        or decoded.get("version") != version
-        or not isinstance(decoded.get("data"), dict)
+        not isinstance(patch, dict)
+        or any(not isinstance(key, str) for key in patch)
+        or not isinstance(removed, list)
+        or any(not isinstance(key, str) for key in removed)
+        or removed != sorted(set(removed))
     ):
         raise _integrity_error()
+    merged = dict(anchor_data)
+    for key in removed:
+        merged.pop(key, None)
+    merged.update(patch)
+    for field in _STATIC_ANCHOR_FIELDS:
+        if field in anchor_data and field in merged and merged[field] != anchor_data[field]:
+            raise _integrity_error()
     try:
-        clone, _ = _validate_loaded(decoded["data"], intent_id)
+        clone = _validate_decoded(merged, intent_id)
     except ExportJournalValidationError:
         raise _integrity_error() from None
     return clone, identity
@@ -470,10 +714,22 @@ def _read_record_file(
     intent_id: str,
     version: int,
     expected: os.stat_result | None = None,
+    *,
+    anchor_data: dict[str, Any] | None = None,
+    anchor_sha256: str | None = None,
+    anchor_size: int | None = None,
 ) -> tuple[dict[str, Any], _FileIdentity]:
     if version == 0:
         return _read_journal_file(path, intent_id, expected)
-    return _read_generation_file(path, intent_id, version, expected)
+    return _read_generation_file(
+        path,
+        intent_id,
+        version,
+        expected,
+        anchor_data=anchor_data,
+        anchor_sha256=anchor_sha256,
+        anchor_size=anchor_size,
+    )
 
 
 @dataclass(frozen=True)
@@ -566,7 +822,11 @@ def _iter_json_entries(root: Path) -> list[_JournalEntry]:
 def _latest_record(
     root: Path,
     intent_id: str,
-) -> tuple[dict[str, Any], _FileIdentity, Path, int]:
+    *,
+    include_anchor: bool = False,
+) -> tuple[dict[str, Any], _FileIdentity, Path, int] | tuple[
+    dict[str, Any], _FileIdentity, Path, int, dict[str, Any], _FileIdentity
+]:
     entries = [entry for entry in _iter_json_entries(root) if entry.intent_id == intent_id]
     anchors = [entry for entry in entries if entry.version == 0]
     if len(anchors) != 1:
@@ -580,16 +840,29 @@ def _latest_record(
         key=lambda entry: entry.version,
     )
     if not generations:
-        return anchor_data, anchor_identity, anchor.path, 0
+        result = (anchor_data, anchor_identity, anchor.path, 0)
+        if include_anchor:
+            return (*result, anchor_data, anchor_identity)
+        return result
     latest = generations[-1]
-    data, identity = _read_generation_file(latest.path, intent_id, latest.version, latest.info)
-    anchor_final, anchor_final_identity = _read_journal_file(anchor.path, intent_id, anchor.info)
-    if anchor_final != anchor_data or not _same_file_identity(anchor_final_identity, anchor_identity):
+    data, identity = _read_generation_file(
+        latest.path,
+        intent_id,
+        latest.version,
+        latest.info,
+        anchor_data=anchor_data,
+        anchor_sha256=anchor_identity.sha256,
+        anchor_size=anchor_identity.size,
+    )
+    anchor_final_identity = _read_regular_identity(anchor.path, anchor.info)
+    if not _same_file_identity(anchor_final_identity, anchor_identity):
         raise _conflict_error()
-    immutable = ("schema", "receipt_schema", "include_manifest", "intent_id", "job_id", "created_at")
-    if any(data.get(field) != anchor_data.get(field) for field in immutable):
+    if any(data.get(field) != anchor_data.get(field) for field in _IMMUTABLE_IDENTITY_FIELDS):
         raise _integrity_error()
-    return data, identity, latest.path, latest.version
+    result = (data, identity, latest.path, latest.version)
+    if include_anchor:
+        return (*result, anchor_data, anchor_identity)
+    return result
 
 
 def _intent_entries(root: Path, intent_id: str) -> list[_JournalEntry]:
@@ -602,6 +875,10 @@ def _intent_entries(root: Path, intent_id: str) -> list[_JournalEntry]:
 def _capture_generation_identities(
     entries: list[_JournalEntry],
     intent_id: str,
+    *,
+    anchor_data: dict[str, Any] | None = None,
+    anchor_sha256: str | None = None,
+    anchor_size: int | None = None,
 ) -> dict[int, _FileIdentity]:
     """Capture old generation bytes/identity before publishing a new one."""
 
@@ -614,6 +891,9 @@ def _capture_generation_identities(
             intent_id,
             entry.version,
             entry.info,
+            anchor_data=anchor_data,
+            anchor_sha256=anchor_sha256,
+            anchor_size=anchor_size,
         )
         captured[entry.version] = identity
     return captured
@@ -1175,6 +1455,10 @@ def _cleanup_old_generations(
     intent_id: str,
     keep_version: int,
     expected_identities: dict[int, _FileIdentity] | None = None,
+    *,
+    anchor_data: dict[str, Any] | None = None,
+    anchor_sha256: str | None = None,
+    anchor_size: int | None = None,
 ) -> None:
     """Best-effort old-version cleanup after a newer version is committed."""
 
@@ -1191,6 +1475,9 @@ def _cleanup_old_generations(
                 intent_id,
                 entry.version,
                 entry.info,
+                anchor_data=anchor_data,
+                anchor_sha256=anchor_sha256,
+                anchor_size=anchor_size,
             )
             if expected_identities is not None:
                 expected = expected_identities.get(entry.version)
@@ -1321,6 +1608,8 @@ class JournalRecord:
     _baseline: dict[str, Any]
     _version: int = 0
     _active: bool = True
+    _anchor_data: dict[str, Any] | None = None
+    _anchor_identity: _FileIdentity | None = None
 
     def save(self, data: dict[str, Any]) -> None:
         if not self._active:
@@ -1423,15 +1712,29 @@ class ExportJournal:
         identifier, _ = self._journal_path(intent_id)
         with self._operation():
             data, _, _, _ = _latest_record(self.root, identifier)
-            return json.loads(_canonical_json(data).decode("utf-8"))
+            return deepcopy(data)
 
     @contextmanager
     def locked(self, intent_id: str) -> Iterator[JournalRecord]:
         identifier, _ = self._journal_path(intent_id)
         with self._operation():
-            data, identity, path, version = _latest_record(self.root, identifier)
-            baseline = json.loads(_canonical_json(data).decode("utf-8"))
-            record = JournalRecord(self, identifier, path, data, identity, baseline, version)
+            latest = _latest_record(self.root, identifier, include_anchor=True)
+            data, identity, path, version, anchor_data, anchor_identity = latest
+            # Keep the object returned to callers independent from the
+            # validated anchor.  The private anchor snapshot is then a safe
+            # equality reference for nested scope/plan mutation checks.
+            baseline = data
+            record = JournalRecord(
+                self,
+                identifier,
+                path,
+                deepcopy(data),
+                identity,
+                baseline,
+                version,
+                _anchor_data=anchor_data,
+                _anchor_identity=anchor_identity,
+            )
             try:
                 yield record
             finally:
@@ -1461,25 +1764,43 @@ class ExportJournal:
     def _save_record(self, record: JournalRecord, data: dict[str, Any]) -> None:
         _assert_root_identity(self.root, self._identity)
         self._assert_record_path(record)
-        prepared, encoded = _prepare_data(data)
-        immutable = ("schema", "receipt_schema", "include_manifest", "intent_id", "job_id", "created_at")
-        if any(prepared.get(field) != record._baseline.get(field) for field in immutable):
+        _validate_record_shape(data)
+        if record._anchor_data is None or record._anchor_identity is None:
+            raise _integrity_error()
+        if any(data.get(field) != record._baseline.get(field) for field in _IMMUTABLE_IDENTITY_FIELDS):
             raise _validation_error("export journal identity fields are immutable")
+        changes, removed = _compact_changes(data, record._anchor_data)
+        generation_version = record._version + 1
+        generation_encoded = _compact_generation_encoded(
+            generation_version,
+            record._anchor_identity.sha256,
+            changes,
+            removed,
+        )
         _, maximum, _ = _limits()
-        if len(encoded) > maximum:
+        if len(generation_encoded) > maximum:
+            raise _quota_error()
+        # The rehydrated view is bounded without serialising the anchor again:
+        # its bytes plus the standalone mutable patch are a conservative upper
+        # bound for the logical record.  This prevents a compact file from
+        # bypassing the per-record limit while retaining the hot-path benefit
+        # of never encoding scope/plan during save.
+        if record._anchor_identity.size + len(generation_encoded) > maximum:
             raise _quota_error()
 
-        # Read and hash the current version before writing.  This catches both
-        # an external replacement and an in-place edit made since locked().
-        current, current_identity = _read_record_file(
-            record._path,
-            record._intent_id,
-            record._version,
-        )
-        if current != record._baseline or not _same_file_identity(current_identity, record._identity):
-            raise _conflict_error()
+        # The final pre-publish read below is the CAS boundary.  Building the
+        # compact payload and temporary file has no journal side effect, so an
+        # earlier read would only hash the same large anchor twice before the
+        # actual no-replace publish.
+        anchor_path = self._journal_path(record._intent_id)[1]
         entries = _intent_entries(self.root, record._intent_id)
-        old_generation_identities = _capture_generation_identities(entries, record._intent_id)
+        old_generation_identities = _capture_generation_identities(
+            entries,
+            record._intent_id,
+            anchor_data=record._anchor_data,
+            anchor_sha256=record._anchor_identity.sha256,
+            anchor_size=record._anchor_identity.size,
+        )
         current_version = max(entry.version for entry in entries)
         if current_version != record._version:
             raise _conflict_error()
@@ -1487,17 +1808,16 @@ class ExportJournal:
         if next_version > _generation_limit():
             raise _quota_error()
         generation_path = self._generation_path(record._intent_id, next_version)[1]
-        generation_encoded = _generation_encoded(next_version, prepared)
         _check_quota(self.root, len(generation_encoded))
         temporary, object_identity = _write_temp(self.root, generation_encoded, record._intent_id)
         try:
             _assert_root_identity(self.root, self._identity)
-            latest, latest_identity = _read_record_file(
-                record._path,
-                record._intent_id,
-                record._version,
-            )
-            if latest != current or not _same_file_identity(latest_identity, current_identity):
+            latest_identity = _read_regular_identity(record._path)
+            latest_anchor_identity = _read_regular_identity(anchor_path)
+            if (
+                not _same_file_identity(latest_identity, record._identity)
+                or not _same_file_identity(latest_anchor_identity, record._anchor_identity)
+            ):
                 raise _conflict_error()
             _publish_new(
                 temporary,
@@ -1511,19 +1831,52 @@ class ExportJournal:
                 generation_path,
                 record._intent_id,
                 next_version,
+                anchor_data=record._anchor_data,
+                anchor_sha256=record._anchor_identity.sha256,
+                anchor_size=record._anchor_identity.size,
             )
+            final_anchor_identity = _read_regular_identity(anchor_path)
+            if not _same_file_identity(final_anchor_identity, record._anchor_identity):
+                raise _conflict_error()
             _assert_root_identity(self.root, self._identity)
             _fsync_directory(self.root)
-            record.data = updated
+            # ``updated`` reuses the validated anchor's large static objects.
+            # Keep the caller-facing record independent from that anchor while
+            # normalising only the compact mutable payload decoded from disk;
+            # copying scope/plan on every checkpoint would recreate the old
+            # performance problem.
+            next_data = dict(record.data)
+            for key in tuple(next_data):
+                if key not in data:
+                    next_data.pop(key)
+            for key in changes:
+                next_data[key] = updated[key]
+            # A field equal to its anchor value is intentionally omitted from
+            # the compact patch.  Reconcile such omitted fields too: callers
+            # may pass a separate snapshot that restores an older extension
+            # value, or may explicitly restore a scope/plan tombstone.  The
+            # identity fast path keeps the normal ``record.data`` save cheap;
+            # a deep copy is limited to a real out-of-band resynchronisation.
+            for key, value in data.items():
+                if key in changes:
+                    continue
+                current = next_data.get(key)
+                if current is value or (key in next_data and current == value):
+                    continue
+                next_data[key] = deepcopy(value)
+            record.data = next_data
             record._identity = updated_identity
             record._path = generation_path
             record._version = next_version
-            record._baseline = json.loads(_canonical_json(updated).decode("utf-8"))
+            record._baseline = updated
             _cleanup_old_generations(
                 self.root,
                 record._intent_id,
                 next_version,
                 old_generation_identities,
+                anchor_data=record._anchor_data,
+                anchor_sha256=record._anchor_identity.sha256,
+                anchor_size=record._anchor_identity.size,
             )
         finally:
             if temporary is not None:
@@ -1532,14 +1885,17 @@ class ExportJournal:
     def _remove_record(self, record: JournalRecord) -> None:
         _assert_root_identity(self.root, self._identity)
         self._assert_record_path(record)
-        current, current_identity = _read_record_file(
-            record._path,
-            record._intent_id,
-            record._version,
-        )
-        if not _same_file_identity(current_identity, record._identity) or current != record._baseline:
+        if record._anchor_data is None or record._anchor_identity is None:
+            raise _integrity_error()
+        current_identity = _read_regular_identity(record._path)
+        anchor_path = self._journal_path(record._intent_id)[1]
+        anchor_identity = _read_regular_identity(anchor_path)
+        if (
+            not _same_file_identity(current_identity, record._identity)
+            or not _same_file_identity(anchor_identity, record._anchor_identity)
+        ):
             raise _conflict_error()
-        if current["state"] not in {"closed", "published"}:
+        if record._baseline.get("state") not in {"closed", "published"}:
             raise _validation_error("export journal record is not closed")
         _assert_root_identity(self.root, self._identity)
         # Pre-read every version before deleting anything.  The anchor is
@@ -1563,6 +1919,9 @@ class ExportJournal:
                     record._intent_id,
                     entry.version,
                     entry.info,
+                    anchor_data=record._anchor_data,
+                    anchor_sha256=record._anchor_identity.sha256,
+                    anchor_size=record._anchor_identity.size,
                 )
                 identities.append((entry.path, identity))
         identities.sort(key=lambda item: 0 if item[0].name == f"{record._intent_id}{_UUID_JSON_SUFFIX}" else 1)

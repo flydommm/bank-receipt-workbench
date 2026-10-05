@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -21,6 +22,7 @@ from engine.export_journal import (
     ExportJournalError,
     ExportJournalIntegrityError,
     ExportJournalQuotaError,
+    ExportJournalValidationError,
 )
 
 
@@ -44,6 +46,27 @@ def _record(*, intent_id: str | None = None, job_id: str = "job-1", state: str =
         "scope": {"selected_segment_ids": ["a", "b"], "evidence": "private"},
         "payload_path": "C:/outside/never-delete.pdf",
     }
+
+
+def _large_record(*, intent_id: str | None = None) -> dict[str, object]:
+    """Synthetic scope/plan payload used only to prove compact checkpoints."""
+
+    value = _record(intent_id=intent_id)
+    value["scope"] = {
+        "selected_segment_ids": [f"segment-{index:05d}" for index in range(900)],
+        "nested": {"evidence": "scope-" + ("s" * 240_000)},
+    }
+    value["plan"] = {
+        "files": [
+            {"file_id": f"file-{index:05d}", "pages": list(range(4)), "name": f"receipt-{index:05d}.pdf"}
+            for index in range(900)
+        ],
+        "source": "plan-" + ("p" * 240_000),
+    }
+    value["files"] = [{"file_id": "file-00000", "name": "receipt-00000.pdf"}]
+    value["attempt"] = None
+    value["receipt"] = None
+    return value
 
 
 def test_root_must_be_existing_absolute_plain_export_intents_directory(tmp_path: Path) -> None:
@@ -319,6 +342,180 @@ def test_save_publishes_immutable_generation_and_keeps_anchor(root: Path) -> Non
     assert anchor.read_bytes() == anchor_before
     assert generation.exists()
     assert journal.load(intent_id)["state"] == "rendered"
+
+
+def test_compact_generation_keeps_large_anchor_out_of_checkpoints(root: Path) -> None:
+    journal = ExportJournal(root)
+    item = _large_record()
+    journal.create(item)
+    intent_id = str(item["intent_id"])
+    anchor = root / f"{intent_id}.json"
+    anchor_before = anchor.read_bytes()
+
+    with journal.locked(intent_id) as locked:
+        changed = locked.data
+        changed["state"] = "rendered"
+        changed["files"][0]["sha256"] = "a" * 64
+        locked.save(changed)
+
+    generation = root / f"{intent_id}.1.json"
+    encoded = generation.read_bytes()
+    decoded = json.loads(encoded.decode("utf-8"))
+    assert set(decoded) == {"version", "anchor_sha256", "data", "removed"}
+    assert "scope" not in decoded["data"]
+    assert "plan" not in decoded["data"]
+    assert decoded["data"]["state"] == "rendered"
+    assert decoded["anchor_sha256"] == journal_module.hashlib.sha256(anchor_before).hexdigest()
+    assert len(encoded) < len(anchor_before) // 4
+
+    loaded = journal.load(intent_id)
+    assert loaded["scope"] == item["scope"]
+    assert loaded["plan"] == item["plan"]
+    assert loaded["files"][0]["sha256"] == "a" * 64
+
+
+def test_compact_save_serializes_only_mutable_payload(root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    journal = ExportJournal(root)
+    item = _large_record()
+    journal.create(item)
+    intent_id = str(item["intent_id"])
+    original = journal_module._canonical_json
+    calls: list[object] = []
+
+    def counted(value: object) -> bytes:
+        calls.append(value)
+        return original(value)
+
+    monkeypatch.setattr(journal_module, "_canonical_json", counted)
+    with journal.locked(intent_id) as locked:
+        changed = locked.data
+        changed["state"] = "rendered"
+        locked.save(changed)
+
+    # A checkpoint performs one canonical encode for the compact envelope and
+    # never re-encodes the synthetic multi-hundred-kilobyte anchor.
+    assert len(calls) == 1
+    assert all(not (isinstance(value, dict) and "scope" in value) for value in calls)
+
+
+def test_compact_tombstones_keep_close_from_restoring_scope_and_plan(root: Path) -> None:
+    journal = ExportJournal(root)
+    item = _large_record()
+    journal.create(item)
+    intent_id = str(item["intent_id"])
+    with journal.locked(intent_id) as locked:
+        changed = locked.data
+        changed["state"] = "closed"
+        changed.pop("scope")
+        changed.pop("plan")
+        locked.save(changed)
+
+    loaded = journal.load(intent_id)
+    assert "scope" not in loaded
+    assert "plan" not in loaded
+    generation = json.loads((root / f"{intent_id}.1.json").read_text(encoding="utf-8"))
+    assert generation["removed"] == ["plan", "scope"]
+
+
+def test_save_reconciles_omitted_anchor_values_after_restore(root: Path) -> None:
+    journal = ExportJournal(root)
+    item = _record()
+    item["future_field"] = "anchor-value"
+    journal.create(item)
+    intent_id = str(item["intent_id"])
+
+    with journal.locked(intent_id) as locked:
+        changed = locked.data
+        changed["future_field"] = "changed"
+        locked.save(changed)
+        restored = deepcopy(locked.data)
+        restored["future_field"] = "anchor-value"
+        locked.save(restored)
+        assert locked.data["future_field"] == "anchor-value"
+        restored.pop("scope")
+        restored.pop("future_field")
+        locked.save(restored)
+        restored["scope"] = deepcopy(item["scope"])
+        restored["future_field"] = "anchor-value"
+        locked.save(restored)
+
+    loaded = journal.load(intent_id)
+    assert loaded["future_field"] == "anchor-value"
+    assert loaded["scope"] == item["scope"]
+
+
+def test_compact_rejects_nested_anchor_mutation_and_anchor_tamper(root: Path) -> None:
+    journal = ExportJournal(root)
+    item = _large_record()
+    journal.create(item)
+    intent_id = str(item["intent_id"])
+    with journal.locked(intent_id) as locked:
+        locked.data["scope"]["nested"]["evidence"] = "changed"
+        with pytest.raises(ExportJournalValidationError):
+            locked.save(locked.data)
+
+    anchor = root / f"{intent_id}.json"
+    raw = anchor.read_bytes()
+    assert b'"job-1"' in raw
+    with journal.locked(intent_id) as locked:
+        anchor.write_bytes(raw.replace(b'"job-1"', b'"job-2"', 1))
+        changed = deepcopy(locked.data)
+        changed["state"] = "rendered"
+        with pytest.raises(ExportJournalConflictError):
+            locked.save(changed)
+
+
+def test_journal_rejects_nonfinite_json_constants(root: Path) -> None:
+    journal = ExportJournal(root)
+    item = _record()
+    journal.create(item)
+    intent_id = str(item["intent_id"])
+    anchor = root / f"{intent_id}.json"
+    raw = anchor.read_text(encoding="utf-8")
+    assert '"state":"created"' in raw
+    anchor.write_text(raw.replace('"state":"created"', '"state":NaN', 1), encoding="utf-8")
+    with pytest.raises(ExportJournalError):
+        journal.load(intent_id)
+    anchor.write_text(raw.replace('"evidence":"private"', '"evidence":1e999', 1), encoding="utf-8")
+    with pytest.raises(ExportJournalError):
+        journal.load(intent_id)
+
+
+def test_compact_read_enforces_anchor_plus_generation_quota(root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    journal = ExportJournal(root)
+    item = _record()
+    journal.create(item)
+    intent_id = str(item["intent_id"])
+    with journal.locked(intent_id) as locked:
+        changed = locked.data
+        changed["state"] = "rendered"
+        locked.save(changed)
+    anchor = root / f"{intent_id}.json"
+    generation = root / f"{intent_id}.1.json"
+    assert anchor.stat().st_size + generation.stat().st_size > 300
+    monkeypatch.setattr(journal_module, "MAX_JOURNAL_BYTES", 300)
+    with pytest.raises(ExportJournalQuotaError):
+        journal.load(intent_id)
+
+
+def test_old_full_generation_remains_readable_before_compact_upgrade(root: Path) -> None:
+    journal = ExportJournal(root)
+    item = _record()
+    journal.create(item)
+    intent_id = str(item["intent_id"])
+    legacy = deepcopy(item)
+    legacy["state"] = "rendered"
+    generation = root / f"{intent_id}.1.json"
+    generation.write_bytes(journal_module._generation_encoded(1, legacy))
+
+    assert journal.load(intent_id)["state"] == "rendered"
+    with journal.locked(intent_id) as locked:
+        changed = deepcopy(locked.data)
+        changed["state"] = "publishing"
+        locked.save(changed)
+    assert journal.load(intent_id)["state"] == "publishing"
+    upgraded = json.loads((root / f"{intent_id}.2.json").read_text(encoding="utf-8"))
+    assert set(upgraded) == {"version", "anchor_sha256", "data", "removed"}
 
 
 def test_corrupt_latest_generation_does_not_fallback_to_anchor(root: Path) -> None:

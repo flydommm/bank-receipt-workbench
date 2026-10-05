@@ -2,6 +2,8 @@
 
 from copy import deepcopy
 from hashlib import sha256
+from io import StringIO
+import json
 from pathlib import Path
 from uuid import uuid4
 
@@ -14,6 +16,7 @@ from engine import export_publish
 from engine.batch_previews import register_preview
 from engine.batch_store import BatchStore
 from engine.export_bundle import ExportBundleService
+from engine.export_progress import ExportProgressReporter, bind_export_progress_reporter
 from engine.export_scope import ExportScopeError
 from test_export_scope import duplicate_export_task, export_task, save  # shared isolated fixture
 
@@ -98,6 +101,28 @@ def test_real_frozen_preview_modes(bundle, export_task, mode, count, total):
     assert not list(bundle.preview_root.glob("*.pdf"))
     with pytest.raises((ExportScopeError, ValueError)):
         bundle.render(created["intent_id"])
+
+
+def test_render_reports_cumulative_pages_during_one_and_multiple_pdf_writes(bundle, export_task):
+    created = bundle.create(request_all(export_task, "both", False))
+    register(bundle, created)
+    output = StringIO()
+    with bind_export_progress_reporter(ExportProgressReporter(output)):
+        rendered = bundle.render(created["intent_id"])
+
+    frames = [json.loads(line) for line in output.getvalue().splitlines()]
+    rendering = [frame for frame in frames if frame.get("stage") == "rendering"]
+    assert rendering[0] == {
+        "type": "export_progress", "stage": "rendering", "completed": 0, "total": 4, "unit": "pages",
+    }
+    assert [frame["total"] for frame in rendering] == [4] * len(rendering)
+    completed = [frame["completed"] for frame in rendering]
+    assert completed == sorted(completed)
+    assert any(0 < value < 4 for value in completed)
+    assert completed[-1] == 4
+    writing = [frame for frame in frames if frame.get("stage") == "writing_pdf"]
+    assert writing and all(frame["completed"] is None and frame["total"] is None and frame["unit"] is None for frame in writing)
+    assert rendered["total_pages"] == 4
 
 
 def test_duplicate_candidates_keep_scope_rows_and_share_one_rendered_page(duplicate_bundle, duplicate_export_task):

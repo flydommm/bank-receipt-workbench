@@ -1,6 +1,6 @@
 [package]
 name = "pdf-search"
-version = "0.1.57"
+version = "0.1.60"
 description = "Local PDF search and precision splitting tool"
 authors = ["PDF Search Team"]
 edition = "2021"

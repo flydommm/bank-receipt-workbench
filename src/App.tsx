@@ -55,6 +55,9 @@ import type { BatchCleanup, BatchStorageUsage } from './domain/batchCleanup';
 import { PersistentBatchController, batchIsActive } from './services/persistentBatchController';
 import { ReceiptBatchController } from './services/receiptBatchController';
 import { ReceiptBatchEntry, type ReceiptBatchProcessingMode } from './components/ReceiptBatchEntry';
+import { CompanyAccountSelector } from './components/CompanyAccountSelector';
+import { ReceiptGroupingClient } from './services/receiptGroupingClient';
+import type { AccountSelection } from './domain/receiptGrouping';
 import { ReceiptCalibrationController } from './services/receiptCalibrationController';
 import { ReceiptCalibrationPane, ReceiptCalibrationNavigator } from './components/ReceiptCalibrationWorkspace';
 import type { ReceiptBatchPreparedReview, ReceiptBatchReviewPageItem } from './domain/receiptBatch';
@@ -1686,6 +1689,11 @@ export default function App() {
   // this state untouched when sources are replaced or appended so an explicit
   // user choice (including keyword search) is never silently overwritten.
   const [receiptProcessingMode, setReceiptProcessingMode] = useState<ReceiptBatchProcessingMode>('split_all');
+  const [receiptAccount, setReceiptAccount] = useState<AccountSelection | null>(null);
+  const [receiptAccountValid, setReceiptAccountValid] = useState(true);
+  const [receiptAccountScope, setReceiptAccountScope] = useState(0);
+  const [groupingJobId, setGroupingJobId] = useState<string | null>(null);
+  const [receiptGroupingClient] = useState(() => new ReceiptGroupingClient());
   const [receiptReview, setReceiptReview] = useState<{ prepared: ReceiptBatchPreparedReview; items: ReceiptBatchReviewPageItem[] } | null>(null);
   const [receiptWorkflowStep, setReceiptWorkflowStep] = useState<2 | 3>(2);
   const [receiptReviewBusy, setReceiptReviewBusy] = useState(false);
@@ -2823,14 +2831,27 @@ export default function App() {
     if (notice !== undefined) setSourceNoticeMessage(notice);
   }
 
+  function resetBatchAccountSelection(): void {
+    // Keep grouping enabled, but never silently freeze the previous batch's
+    // account into new sources. Saved profiles and historical jobs are untouched.
+    if (receiptAccount !== null) {
+      setReceiptAccount({ kind: 'inline', account: { company_name: '', bank_name: '', branch_name: '', account_number: '' } });
+      setReceiptAccountValid(false);
+      setReceiptAccountScope((scope) => scope + 1);
+    }
+  }
+
   function resetForSourceChange(notice: string, sources: readonly SearchSource[] = []): void {
     // resetReviewResults also clears the schema-2 receipt task, so a new
     // source set cannot briefly display the previous bank's result count.
     resetReviewResults();
+    resetBatchAccountSelection();
     if (sources.length > 0) navigation.replaceSources(sources);
     else navigation.clearSources();
     dispatchAnalysis({ type: 'sources_replaced' });
-    setSourceNoticeMessage(notice);
+    setSourceNoticeMessage(receiptAccount !== null
+      ? `${notice} 来源已变化，请重新选择或填写本批账户；已保存的账户档案保留。`.trim()
+      : notice);
   }
 
   function cleanupData<T>(response: BatchResponse<T>): T {
@@ -3171,6 +3192,11 @@ export default function App() {
       || engineStatus !== 'ready') return;
     const sources = files.filter((file) => file.path?.trim()).map((file) => ({ source_path: file.path!.trim(), name: file.name }));
     if (!sources.length) return;
+    if (receiptProcessingMode === 'split_all' && !receiptAccountValid) {
+      setAnalysisNoticeMessage('请先补齐本批公司、来源银行和完整账号。');
+      return;
+    }
+    const accountSelection = receiptProcessingMode === 'split_all' ? receiptAccount : null;
     const criteria = normalizeSearchCriteria(draft.criteria);
     if (receiptProcessingMode === 'search' && !criteria) {
       setAnalysisNoticeMessage('请输入至少一个关键词后再开始分析。');
@@ -3197,6 +3223,11 @@ export default function App() {
         name: `${sources[0]!.name}${sources.length > 1 ? ` 等 ${sources.length} 份 PDF` : ''}`,
         sources, processing_options, match_mode: draft.matchMode === 'fuzzy' ? 'fuzzy' : 'exact',
         ...(selectedLayoutTemplate ? { layout_template_id: selectedLayoutTemplate.id } : {}),
+      }, async (job, signal) => {
+        if (accountSelection) {
+          await receiptGroupingClient.setAccount(job.id, 0, accountSelection, signal);
+          if (!signal.aborted) setGroupingJobId(job.id);
+        } else if (!signal.aborted) setGroupingJobId(null);
       });
     } finally {
       if (requestId === searchRequestIdRef.current) searchInFlightRef.current = false;
@@ -4179,10 +4210,10 @@ export default function App() {
     resetForSourceChange('');
   }
 
-  function removeReceiptSourcesAfterExport(): void {
+  function removeReceiptSources(): void {
     const calibration = receiptCalibrationController.getSnapshot();
-    // Only the successful export action may leave the receipt review lock.
-    // Keep the ordinary source controls locked during review and publication.
+    // Explicit workspace actions may leave the receipt review lock after export
+    // or after confirming a source reset. Ordinary source controls stay locked.
     if (!receiptReview || workspaceLockedRef.current || isRunning
       || receiptReviewLoadingRef.current || calibration.reviewConfirming
       || !['results', 'saved'].includes(calibration.phase)) return;
@@ -5384,6 +5415,7 @@ export default function App() {
         />
 
         {receiptReview ? <ReceiptCalibrationPane state={receiptCalibration} controller={receiptCalibrationController}
+          groupingEnabled={groupingJobId === receiptReview.prepared.binding.job.id}
           onBack={() => setReceiptReview(null)}
           onOpenTemplates={() => {
             if (reviewTemplateChangesLocked || searchInFlightRef.current) return;
@@ -5393,7 +5425,7 @@ export default function App() {
           }}
           onWorkflowStepChange={setReceiptWorkflowStep}
           onExport={() => undefined}
-          onRemoveSources={removeReceiptSourcesAfterExport}
+          onRemoveSources={removeReceiptSources}
           initialOutputDirectory={appSettings.lastOutputDirectory}
           onExportSuccess={(directory) => updateAppSettings({ ...appSettingsRef.current, lastOutputDirectory: directory })}
         /> : <section className="preview-column panel">
@@ -5543,12 +5575,24 @@ export default function App() {
                 mode={receiptProcessingMode}
                 onModeChange={handleReceiptProcessingModeChange}
                 state={receiptBatch}
-                canAnalyze={hasReadableSources && engineStatus === 'ready'}
+                canAnalyze={hasReadableSources && engineStatus === 'ready' && (receiptProcessingMode !== 'split_all' || receiptAccountValid)}
                 showAnalyzeAction={receiptProcessingMode === 'split_all'}
                 reviewLoading={receiptReviewBusy}
                 onAnalyze={() => void runReceiptBatchAnalysis()}
                 onEnterReview={() => void openReceiptReview()}
                 onExport={() => void openReceiptReview()}
+                accountControls={<>
+                  <CompanyAccountSelector key={receiptAccountScope} value={receiptAccount} onChange={setReceiptAccount}
+                    defaultMode={receiptAccountScope > 0 ? 'saved' : undefined}
+                    onValidityChange={setReceiptAccountValid} disabled={templateChangesLocked || receiptBatch.phase === 'ready'} />
+                  {receiptBatch.phase === 'ready' && receiptAccount !== null && <button type="button" className="ghost-button"
+                    disabled={templateChangesLocked} onClick={() => {
+                      resetReviewResults();
+                      resetBatchAccountSelection();
+                      dispatchAnalysis({ type: 'sources_replaced' });
+                      setAnalysisNoticeMessage('请重新选择或填写本批账户，再开始分析。原任务和审核记录保留在历史任务中。');
+                    }}>更正本批资料并重新分析</button>}
+                </>}
                 templateControls={<>
                   <span>{selectedLayoutTemplate ? `已选模板：${layoutTemplateName(selectedLayoutTemplate)} · v${selectedLayoutTemplate.version}` : '版式模板：自动匹配'}</span>
                   <button type="button" className="text-button" disabled={templateChangesLocked}
@@ -5642,7 +5686,7 @@ export default function App() {
               emptyActionLabel={showEmptySearchAction ? '修改搜索条件' : undefined}
               onEmptyAction={showEmptySearchAction ? beginSearchEdit : undefined}
             />
-          ) : (
+          ) : (!persistentTasksEnabled || receiptProcessingMode === 'search') && (
             <div className="review-navigator-empty review-workspace-guidance" role="status">
               {hasReadableSources ? '设置搜索条件并开始分析。' : '请先选择 PDF 或文件夹，再开始分析。'}
             </div>

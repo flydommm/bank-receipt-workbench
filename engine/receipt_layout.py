@@ -83,6 +83,13 @@ def _contains(a: Mapping[str, float], b: Mapping[str, float]) -> bool:
     )
 
 
+def contains_verified_crop_envelopes(layout: dict[str, Any], bounds: Sequence[Sequence[float]]) -> bool:
+    """Keep every proven masthead and table inside its original physical slot."""
+    return len(bounds) == len(layout["slots"]) and all(
+        _contains(slot_rect(layout, slot), _box(box))
+        for slot, box in zip(layout["slots"], bounds, strict=True))
+
+
 def _verified_keys(descriptor: Mapping[str, Any]) -> tuple[str | None, tuple[str, ...]]:
     receipts = descriptor.get("receipts")
     if (descriptor.get("status") != "ready" or not isinstance(receipts, list) or not receipts

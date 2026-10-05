@@ -37,6 +37,39 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('PdfThumbnailGrid', () => {
+  it('moves existing thumbnail keyboard focus to the new virtual card and Enter opens that card', async () => {
+    const user = userEvent.setup();
+    const onOpen = vi.fn();
+    const cards = Array.from({ length: 5000 }, (_, index) => card(index));
+    const props = { cards, size: 192, shape: 'receipt' as const, scrollKey: 'follow-button-focus', onOpen, followFocus: true };
+    const { rerender } = render(<PdfThumbnailGrid {...props} focusedId="page-0" />);
+    screen.getByRole('button', { name: '打开 第 1 页' }).focus();
+    rerender(<PdfThumbnailGrid {...props} focusedId="page-4999" />);
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: '打开 第 5000 页' }));
+    await user.keyboard('{Enter}');
+    expect(onOpen).toHaveBeenLastCalledWith(cards[4999]);
+    const region = screen.getByRole('region');
+    region.focus();
+    rerender(<PdfThumbnailGrid {...props} focusedId="page-0" />);
+    expect(document.activeElement).toBe(region);
+  });
+
+  it('follows keyboard focus across a large virtual grid without resetting manual scrolling', () => {
+    const cards = Array.from({ length: 5000 }, (_, index) => card(index));
+    const props = { cards, size: 192, shape: 'receipt' as const, scrollKey: 'follow-focus', onOpen: vi.fn(), followFocus: true };
+    const { container, rerender } = render(<PdfThumbnailGrid {...props} focusedId="page-0" />);
+    const region = screen.getByRole('region');
+    rerender(<PdfThumbnailGrid {...props} focusedId="page-4999" />);
+    expect(region.scrollTop).toBeGreaterThan(9000);
+    expect(screen.getByRole('button', { name: '打开 第 5000 页' })).toBeTruthy();
+    expect(container.querySelectorAll('[data-card-id]').length).toBeLessThan(40);
+    fireEvent.scroll(region, { target: { scrollTop: 1000 } });
+    rerender(<PdfThumbnailGrid {...props} cards={[...cards]} focusedId="page-4999" />);
+    expect(region.scrollTop).toBe(1000);
+    rerender(<PdfThumbnailGrid {...props} focusedId="page-0" />);
+    expect(region.scrollTop).toBeLessThan(100);
+  });
+
   it('mounts a bounded window for thousands of cards and loads later pages while scrolling', async () => {
     const cards = Array.from({ length: 5000 }, (_, index) => card(index));
     const { container } = render(<PdfThumbnailGrid cards={cards} size={192} shape="page" scrollKey="bounded" onOpen={vi.fn()} />);
@@ -175,6 +208,50 @@ describe('PdfThumbnailGrid', () => {
     expect(load).not.toHaveBeenCalled();
     expect(onOpen).not.toHaveBeenCalled();
     expect((screen.getByRole('checkbox') as HTMLInputElement).disabled).toBe(true);
+  });
+
+  it('draws the same per-fragment status at the real boundary in both views, without duplicate card badges', async () => {
+    const rect = { x0: 0, y0: 100, x1: 600, y1: 300 };
+    const overlay = { rect, tone: 'pending' as const, badge: '待复核', label: '第 1 栏：待复核' };
+    const fragment = card(0, { rect, tone: 'pending', badge: '待复核', overlays: [overlay] });
+    const props = { size: 192, scrollKey: 'fragment-status', onOpen: vi.fn() };
+    const { container, rerender } = render(<PdfThumbnailGrid {...props} shape="receipt" cards={[fragment]} />);
+    const svg = await screen.findByRole('img');
+    expect(svg.getAttribute('viewBox')).toBe('0 100 600 200');
+    expect(container.querySelectorAll('.pdf-thumbnail-overlay.tone-pending')).toHaveLength(1);
+    expect(container.querySelector('.pdf-thumbnail-overlay-badge')?.textContent).toBe('待复核');
+    expect(container.querySelector('.pdf-thumbnail-badge')).toBeNull();
+    expect(svg.querySelector('title')?.textContent).toBe('第 1 栏：待复核');
+    // Only the display border is inset for its stroke; the crop remains exact.
+    const border = container.querySelector('.pdf-thumbnail-overlay')!;
+    expect(Number(border.getAttribute('x'))).toBeGreaterThanOrEqual(rect.x0);
+    expect(Number(border.getAttribute('x')) + Number(border.getAttribute('width'))).toBeLessThanOrEqual(rect.x1);
+    expect(Number(border.getAttribute('y')) + Number(border.getAttribute('height'))).toBeLessThanOrEqual(rect.y1);
+
+    rerender(<PdfThumbnailGrid {...props} shape="page" cards={[card(0, { badge: '1 / 1 处', overlays: [overlay] })]} />);
+    expect(screen.getByRole('img').getAttribute('viewBox')).toBe('0 0 600 800');
+    expect(container.querySelector('.pdf-thumbnail-overlay-badge')?.textContent).toBe('待复核');
+    expect(container.querySelector('.pdf-thumbnail-badge')?.textContent).toBe('1 / 1 处');
+    expect(container.querySelector('.pdf-thumbnail-meta .pdf-thumbnail-badge')?.textContent).toBe('1 / 1 处');
+    expect(load).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the fragment status readable when its image fails to load', async () => {
+    load.mockRejectedValueOnce(new Error('synthetic failure'));
+    const rect = { x0: 0, y0: 0, x1: 600, y1: 800 };
+    const { container } = render(<PdfThumbnailGrid cards={[card(0, {
+      rect, tone: 'confirmed', badge: '已确认', overlays: [{ rect, tone: 'confirmed', badge: '已确认' }],
+    })]} size={192} shape="receipt" scrollKey="failed-status" onOpen={vi.fn()} />);
+    await screen.findByText('缩略图加载失败');
+    expect(container.querySelector('.pdf-thumbnail-badge')?.textContent).toBe('已确认');
+    expect(container.querySelector('.pdf-thumbnail-overlay-badge')).toBeNull();
+  });
+
+  it('does not add review markings to unanalysed source pages', async () => {
+    const { container } = render(<PdfThumbnailGrid cards={[card(0)]} size={192} shape="page" scrollKey="unanalysed" onOpen={vi.fn()} />);
+    await screen.findByRole('img');
+    expect(container.querySelector('.pdf-thumbnail-overlay')).toBeNull();
+    expect(container.querySelector('.pdf-thumbnail-overlay-badge')).toBeNull();
   });
 
   it('keeps an invalid crop hidden and reuses the page when its geometry is repaired', async () => {
