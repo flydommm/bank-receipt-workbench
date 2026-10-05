@@ -91,32 +91,57 @@ describe('ReceiptGroupingPanel navigation', () => {
   });
 
   it('列表上下键可连续越过 200 张并同步实际焦点，不误触发勾选', async () => {
+    const user = userEvent.setup();
     const snapshot = syntheticSnapshot(405);
     const { client } = mockClient(snapshot);
     render(<ReceiptGroupingPanel {...props(snapshot, { client })} />);
     await screen.findByRole('navigation', { name: '分组筛选' });
 
+    const rows = () => [...document.querySelectorAll<HTMLElement>('.receipt-grouping-row')];
     const focusedRow = () => document.querySelector<HTMLElement>('.receipt-grouping-row.is-focused');
+    const expectFocusedPage = (page: number) => {
+      const row = focusedRow();
+      expect(row).toBeTruthy();
+      expect(row?.textContent).toContain(`第 ${page} 页`);
+      expect(document.activeElement).toBe(row);
+      expect(screen.getByText('已选 0 / 200（批量上限）')).toBeTruthy();
+    };
     const firstRow = focusedRow();
     expect(firstRow).toBeTruthy();
+    expect(rows()).toHaveLength(200);
     const checkbox = within(firstRow as HTMLElement).getByRole('checkbox');
     checkbox.focus();
     fireEvent.keyDown(checkbox, { key: 'ArrowDown' });
     expect(focusedRow()).toBe(firstRow);
+    expect(document.activeElement).toBe(checkbox);
     expect(screen.getByText('已选 0 / 200（批量上限）')).toBeTruthy();
 
-    for (let index = 0; index < 404; index += 1) {
+    await user.click(rows()[198]);
+    expectFocusedPage(199);
+    for (const [key, page] of [['ArrowDown', 200], ['ArrowDown', 201], ['ArrowDown', 202], ['ArrowUp', 201], ['ArrowUp', 200], ['ArrowUp', 199]] as const) {
       const row = focusedRow();
       expect(row).toBeTruthy();
-      fireEvent.keyDown(row as HTMLElement, { key: 'ArrowDown' });
+      fireEvent.keyDown(row as HTMLElement, { key });
+      expectFocusedPage(page);
     }
-    await waitFor(() => expect(focusedRow()?.textContent).toContain('第 405 页'));
+
+    const list = document.querySelector<HTMLElement>('.receipt-grouping-list');
+    expect(list).toBeTruthy();
+    fireEvent.scroll(list as HTMLElement);
+    await waitFor(() => expect(rows()).toHaveLength(402));
+    fireEvent.scroll(list as HTMLElement);
+    await waitFor(() => expect(rows()).toHaveLength(405));
+
+    await user.click(rows()[403]);
+    expectFocusedPage(404);
+    const row404 = focusedRow() as HTMLElement;
+    fireEvent.keyDown(row404, { key: 'ArrowDown' });
+    expectFocusedPage(405);
     const lastRow = focusedRow() as HTMLElement;
-    expect(document.activeElement).toBe(lastRow);
     fireEvent.keyDown(lastRow, { key: 'ArrowDown' });
-    expect(focusedRow()).toBe(lastRow);
+    expectFocusedPage(405);
     fireEvent.keyDown(lastRow, { key: 'Enter' });
-    expect(document.activeElement).toBe(lastRow);
+    expectFocusedPage(405);
   }, 30_000);
 
   it('总览契约提供当前筛选片段并支持上下键与 onOpen 切换', async () => {
