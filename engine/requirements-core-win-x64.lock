@@ -1,2 +1,4 @@
 # Windows x64 / CPython 3.12 release wheels. Do not edit hashes manually.
+et_xmlfile==2.0.0 --hash=sha256:7a91720bc756843502c3b7504c77b8fe44217c85c537d85037f0f536151b2caa
+openpyxl==3.1.5 --hash=sha256:5282c12b107bffeef825f4617dc029afaf41d0ea60823bbb665ef3079dc79de2
 pymupdf==1.28.2 --hash=sha256:ebd244918798502d7b4504c90410d1711a4d7675a32584ca30f1bab419ecbffe

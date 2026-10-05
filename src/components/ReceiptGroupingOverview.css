@@ -1,0 +1,30 @@
+.receipt-grouping-overview {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.receipt-grouping-overview-toolbar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.receipt-grouping-overview > .pdf-thumbnail-grid {
+  flex: 1;
+  min-height: 0;
+}
+
+.receipt-grouping-overview > p {
+  margin: 4px 12px;
+  font-size: 12px;
+}

@@ -22,7 +22,13 @@ _ISSUER_ALIASES = {
     "上海浦东发展银行": "上海浦东发展银行", "兴业银行": "兴业银行",
     "平安银行": "平安银行", "华夏银行": "华夏银行",
     "广发银行": "广发银行", "中国银行": "中国银行",
+    # Only this named institution has these equivalent legal/display names.
+    # A bare "农商银行" must never merge unrelated regional institutions.
+    "深圳农商银行": "深圳农商银行", "深圳农村商业银行": "深圳农商银行",
+    "深圳农村商业银行股份有限公司": "深圳农商银行",
 }
+_BANK_CHANNELS = frozenset({"网上银行", "企业网上银行", "个人网上银行", "电子银行", "手机银行", "网络银行"})
+_RURAL_BANK_CATEGORIES = frozenset({"农商银行", "农村商业银行", "农商行"})
 _HEADER_BANK = re.compile(r"[\u4e00-\u9fff]{2,18}(?:银行|农村信用合作联社|农村信用社)")
 _NON_ISSUER_WORDS = ("开户", "付款", "收款", "银行行号", "账号", "户名", "对方", "对手", "代理", "清算")
 _ACCOUNT_LABELS = (
@@ -32,13 +38,32 @@ _ACCOUNT_LABELS = (
 )
 
 
+def is_bank_channel_heading(text: str) -> bool:
+    """A distribution channel is not an institution, including cached reads."""
+    return "".join(unicodedata.normalize("NFC", text).split()) in _BANK_CHANNELS
+
+
+def rural_bank_identity_unspecified(observed: str, expected: str) -> bool:
+    """A category alone cannot prove a match or a different institution.
+
+    Never canonicalize regional rural banks to one shared bank. This only
+    distinguishes insufficient identity evidence from a positive mismatch.
+    """
+    left, right = ("".join(unicodedata.normalize("NFC", text).split()) for text in (observed, expected))
+    rural_name = r"[\u4e00-\u9fff]{2,18}(?:农商银行|农村商业银行)(?:股份有限公司|有限责任公司)?"
+    return ((left in _RURAL_BANK_CATEGORIES and (right in _RURAL_BANK_CATEGORIES or re.fullmatch(rural_name, right) is not None))
+            or (right in _RURAL_BANK_CATEGORIES and re.fullmatch(rural_name, left) is not None))
+
+
 def canonical_bank_heading(text: str) -> str | None:
     """Lexical normalization only; it cannot establish receipt ownership."""
     compact = re.sub(r"[A-Za-z\s·.\-]+", "", unicodedata.normalize("NFC", text))
-    if any(word in compact for word in _NON_ISSUER_WORDS) or not _HEADER_BANK.fullmatch(compact):
+    if is_bank_channel_heading(compact) or any(word in compact for word in _NON_ISSUER_WORDS):
         return None
     if compact in _ISSUER_ALIASES:
         return _ISSUER_ALIASES[compact]
+    if not _HEADER_BANK.fullmatch(compact):
+        return None
     return _ISSUER_ALIASES.get(compact.removeprefix("中国"), compact)
 
 

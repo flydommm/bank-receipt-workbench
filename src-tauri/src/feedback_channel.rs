@@ -5,19 +5,18 @@ use std::fmt;
 
 const FEEDBACK_CHANNELS_JSON: &str = include_str!("../../src/domain/feedbackChannels.json");
 
-pub const INVALID_FEEDBACK_CHANNEL_ERROR: &str = "反馈渠道无效，请选择 GitHub 或邮箱。";
+pub const INVALID_FEEDBACK_CHANNEL_ERROR: &str = "反馈渠道无效，请选择邮箱。";
 pub const FEEDBACK_CHANNEL_CONFIG_ERROR: &str = "反馈渠道配置不可用，请稍后重试。";
 pub const FEEDBACK_CHANNEL_UNSUPPORTED_ERROR: &str =
-    "当前系统暂不支持直接打开反馈渠道，请复制地址后手动打开。";
+    "当前系统暂不支持直接打开邮件客户端，请复制邮箱地址后手动发送。";
 pub const FEEDBACK_CHANNEL_NO_HANDLER_ERROR: &str =
-    "未找到可用的默认浏览器或邮件客户端，请检查系统默认应用设置后重试。";
-pub const FEEDBACK_CHANNEL_OPEN_ERROR: &str = "无法打开反馈渠道，请检查系统默认应用设置后重试。";
+    "未找到可用的默认邮件客户端，请检查系统默认应用设置后重试。";
+pub const FEEDBACK_CHANNEL_OPEN_ERROR: &str = "无法打开邮件客户端，请复制邮箱地址后手动发送。";
 
 /// The webview may select a channel, but it cannot supply a destination.
 /// Destinations are resolved from the embedded, reviewed resource below.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FeedbackChannel {
-    Github,
     Email,
 }
 
@@ -36,7 +35,7 @@ impl<'de> Visitor<'de> for FeedbackChannelVisitor {
     type Value = FeedbackChannel;
 
     fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("the lowercase feedback channel `github` or `email`")
+        formatter.write_str("the lowercase feedback channel `email`")
     }
 
     fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
@@ -44,7 +43,6 @@ impl<'de> Visitor<'de> for FeedbackChannelVisitor {
         E: de::Error,
     {
         match value {
-            "github" => Ok(FeedbackChannel::Github),
             "email" => Ok(FeedbackChannel::Email),
             _ => Err(E::custom(INVALID_FEEDBACK_CHANNEL_ERROR)),
         }
@@ -54,8 +52,6 @@ impl<'de> Visitor<'de> for FeedbackChannelVisitor {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FeedbackChannelConfig {
-    #[serde(rename = "githubUrl")]
-    github_url: String,
     email: String,
     #[serde(rename = "emailUrl")]
     email_url: String,
@@ -89,7 +85,6 @@ fn validate_config(config: &FeedbackChannelConfig) -> Result<(), &'static str> {
     // These values are compile-time embedded, but keep the launcher fail-closed
     // if the reviewed resource is accidentally malformed or edited later.
     let values = [
-        config.github_url.as_str(),
         config.email.as_str(),
         config.email_url.as_str(),
         config.wechat.as_str(),
@@ -97,15 +92,6 @@ fn validate_config(config: &FeedbackChannelConfig) -> Result<(), &'static str> {
     if values.iter().any(|value| {
         value.is_empty() || value.trim() != *value || has_forbidden_control_character(value)
     }) {
-        return Err(FEEDBACK_CHANNEL_CONFIG_ERROR);
-    }
-
-    let github_url = config.github_url.as_str();
-    if !github_url.starts_with("https://github.com/")
-        || github_url.contains('?')
-        || github_url.contains('#')
-        || github_url.ends_with('/')
-    {
         return Err(FEEDBACK_CHANNEL_CONFIG_ERROR);
     }
 
@@ -136,7 +122,6 @@ fn load_config() -> Result<FeedbackChannelConfig, &'static str> {
 fn target_for_channel(channel: FeedbackChannel) -> Result<String, &'static str> {
     let config = load_config()?;
     Ok(match channel {
-        FeedbackChannel::Github => config.github_url,
         FeedbackChannel::Email => config.email_url,
     })
 }
@@ -233,16 +218,13 @@ mod tests {
     #[test]
     fn serde_accepts_only_lowercase_supported_channels() {
         assert_eq!(
-            serde_json::from_str::<FeedbackChannel>(r#""github""#).unwrap(),
-            FeedbackChannel::Github
-        );
-        assert_eq!(
             serde_json::from_str::<FeedbackChannel>(r#""email""#).unwrap(),
             FeedbackChannel::Email
         );
         for invalid in [
             r#""Github""#,
             r#""EMAIL""#,
+            r#""github""#,
             r#""mailto:someone@example.com""#,
             r#""https://attacker.example/""#,
             r#""github\n""#,
@@ -265,10 +247,6 @@ mod tests {
     fn selected_targets_are_exactly_the_embedded_reviewed_values() {
         let config = load_config().expect("embedded feedback channel config should be valid");
         assert_eq!(
-            target_for_channel(FeedbackChannel::Github).unwrap(),
-            config.github_url
-        );
-        assert_eq!(
             target_for_channel(FeedbackChannel::Email).unwrap(),
             config.email_url
         );
@@ -278,9 +256,9 @@ mod tests {
     fn fake_launcher_receives_only_the_fixed_target_and_returns_opened() {
         let expected = load_config()
             .expect("embedded feedback channel config should be valid")
-            .github_url;
+            .email_url;
         let mut received = None;
-        let result = open_feedback_channel_with_launcher(FeedbackChannel::Github, |target| {
+        let result = open_feedback_channel_with_launcher(FeedbackChannel::Email, |target| {
             received = Some(target.to_owned());
             Ok(())
         })
@@ -299,13 +277,6 @@ mod tests {
         assert_eq!(error, FEEDBACK_CHANNEL_NO_HANDLER_ERROR);
         assert!(!error.contains(&target));
         assert!(!error.contains("mailto:"));
-
-        let error = open_feedback_channel_with_launcher(FeedbackChannel::Github, |_target| {
-            Err(LauncherError::ShellExecute)
-        })
-        .unwrap_err();
-        assert_eq!(error, FEEDBACK_CHANNEL_OPEN_ERROR);
-        assert!(!error.contains("https://"));
     }
 
     #[cfg(target_os = "windows")]
@@ -321,7 +292,7 @@ mod tests {
     #[cfg(not(target_os = "windows"))]
     #[test]
     fn non_windows_launcher_is_explicitly_unsupported() {
-        let target = target_for_channel(FeedbackChannel::Github).unwrap();
+        let target = target_for_channel(FeedbackChannel::Email).unwrap();
         assert_eq!(
             launch_feedback_target(&target).unwrap_err().user_message(),
             FEEDBACK_CHANNEL_UNSUPPORTED_ERROR

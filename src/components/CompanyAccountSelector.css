@@ -1,0 +1,106 @@
+.company-account-selector {
+  min-width: 0;
+  margin-block: 2px;
+  padding: 10px;
+  border: 1px solid #dfe7ed;
+  border-radius: 10px;
+  background: #f7faf9;
+  color: #172b42;
+}
+
+.company-account-selector p {
+  margin: 0;
+  color: #586f80;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.company-account-selector .company-account-selector__hint { margin-top: 7px; }
+.company-account-selector__mode {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  margin-block: 10px;
+  padding: 3px;
+  border: 1px solid #dfe7ed;
+  border-radius: 8px;
+  background: #eef3f3;
+}
+
+.company-account-selector fieldset,
+.company-account-selector__saved {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr));
+  gap: 9px 10px;
+  min-width: 0;
+}
+
+.company-account-selector fieldset { margin: 0; border: 0; padding: 0; }
+.company-account-selector legend { margin-bottom: 8px; padding: 0; font-size: 12px; font-weight: 600; }
+.company-account-selector label { display: grid; min-width: 0; gap: 4px; font-size: 12px; color: #405c70; }
+.company-account-selector label:has(input[type="checkbox"]) { display: flex; align-items: center; gap: 8px; color: #172b42; font-size: 13px; font-weight: 600; }
+.company-account-selector input[type="checkbox"] { margin: 0; accent-color: #2f8d82; }
+.company-account-selector input:not([type="checkbox"]),
+.company-account-selector select {
+  width: 100%;
+  min-width: 0;
+  min-height: 34px;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  border: 1px solid #b9c8cf;
+  border-radius: 6px;
+  background: #fff;
+  color: #172b42;
+  font: inherit;
+  font-size: 13px;
+}
+
+.company-account-selector__wide,
+.company-account-selector fieldset > p,
+.company-account-selector fieldset > button,
+.company-account-selector__saved > p,
+.company-account-selector__saved > div { grid-column: 1 / -1; }
+
+.company-account-selector button {
+  min-width: 0;
+  min-height: 32px;
+  padding: 5px 10px;
+  border: 1px solid #b9c8cf;
+  border-radius: 6px;
+  background: #fff;
+  color: #284d48;
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.company-account-selector button:hover:not(:disabled) { border-color: #3f8b7b; background: #edf6f3; color: #286c60; }
+.company-account-selector__mode button { padding-inline: 4px; border-color: transparent; background: transparent; }
+.company-account-selector button[aria-pressed="true"] { border-color: #9bc6bb; background: #fff; color: #286c60; font-weight: 600; box-shadow: 0 1px 3px #172b420a; }
+.company-account-selector button:disabled { opacity: .5; cursor: default; }
+.company-account-selector [role="alert"] { color: #a13c36; }
+.company-account-selector > [role="status"],
+.company-account-selector > [role="alert"] { margin-top: 8px; }
+.company-account-selector :focus-visible { outline: 2px solid #286c60; outline-offset: 2px; }
+
+.company-account-selector__management { display: grid; gap: 6px; }
+.company-account-selector .company-account-selector__branch { color: #405c70; }
+.company-account-selector__actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.company-account-selector__actions button { min-height: 28px; padding: 4px 8px; border-color: #d8e3e6; background: transparent; }
+.company-account-selector__management > p:last-child { font-size: 11px; }
+
+.company-account-selector__import {
+  display: grid;
+  gap: 6px;
+  margin-top: 2px;
+  padding-top: 11px;
+  border-top: 1px solid #dfe7ed;
+}
+
+.company-account-selector__import-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 10px; }
+.company-account-selector__import h3 { margin: 0; font-size: 12px; font-weight: 600; }
+.company-account-selector .company-account-selector__template { min-height: 28px; padding: 3px 6px; border-color: transparent; background: transparent; color: #286c60; font-size: 12px; text-decoration: underline; text-underline-offset: 3px; }
+.company-account-selector__import > p { font-size: 11px; }
+.company-account-selector .company-account-selector__import-success { color: #286c60; }
+.company-account-selector__import > button { justify-self: start; }

@@ -14,6 +14,10 @@ from engine.computation import (
     computation_info,
     computation_summary,
 )
+from engine.receipt_grouping_version import (
+    GROUPING_ONLY_SOURCE_FILES,
+    SHARED_ANALYSIS_SOURCE_FILES,
+)
 
 
 def test_computation_info_exposes_a_stable_versioned_result_fingerprint() -> None:
@@ -87,6 +91,52 @@ def test_historical_layout_snapshot_participates_in_computation_version():
 def test_receipt_review_binding_participates_in_computation_version():
     assert {"engine/receipt_review_models.py", "engine/receipt_review_store.py",
             "engine/receipt_review_read.py", "engine/review_store_v2.py", "engine/batch_review.py"} <= set(COMPUTATION_SOURCE_FILES)
+
+
+def test_party_extraction_and_grouping_use_an_independent_algorithm_version():
+    from engine.receipt_grouping_version import GROUPING_SOURCE_FILES, grouping_algorithm_version
+
+    grouping_sources = set(GROUPING_SOURCE_FILES)
+    assert {"engine/receipt_parties.py", "engine/receipt_grouping_models.py",
+            "engine/receipt_grouping_store.py", "engine/receipt_grouping_api.py"} <= grouping_sources
+    assert set(GROUPING_ONLY_SOURCE_FILES).isdisjoint(COMPUTATION_SOURCE_FILES)
+    assert grouping_sources & set(COMPUTATION_SOURCE_FILES) == set(SHARED_ANALYSIS_SOURCE_FILES) == {
+        "engine/receipt_document_types.py", "engine/receipt_issuer.py",
+    }
+    version = grouping_algorithm_version()
+    assert isinstance(version, str) and version.startswith("grouping-v1-")
+
+
+@pytest.mark.parametrize("relative_path", GROUPING_ONLY_SOURCE_FILES + SHARED_ANALYSIS_SOURCE_FILES)
+def test_source_changes_invalidate_only_the_versions_that_depend_on_them(
+    monkeypatch: pytest.MonkeyPatch, relative_path: str,
+) -> None:
+    from engine import receipt_grouping_version as versions
+
+    # Alter bytes observed by the real fingerprint readers, never source files.
+    # This verifies both algorithms rather than just comparing their file lists.
+    changed_path = (Path(__file__).parents[1] / relative_path).resolve()
+    read_bytes = Path.read_bytes
+    versions.clear_grouping_algorithm_version()
+    try:
+        analysis_before = computation_info()["computation_version"]
+        grouping_before = versions.grouping_algorithm_version()
+        extraction_before = versions.extraction_algorithm_version()
+
+        def changed_bytes(path: Path) -> bytes:
+            content = read_bytes(path)
+            return content + b"\n# synthetic algorithm change\n" if path.resolve() == changed_path else content
+
+        monkeypatch.setattr(Path, "read_bytes", changed_bytes)
+        versions.clear_grouping_algorithm_version()
+
+        assert versions.grouping_algorithm_version() != grouping_before
+        shared = relative_path in SHARED_ANALYSIS_SOURCE_FILES
+        assert (computation_info()["computation_version"] != analysis_before) is shared
+        if shared:
+            assert versions.extraction_algorithm_version() != extraction_before
+    finally:
+        versions.clear_grouping_algorithm_version()
 
 
 def test_desktop_runtime_contract_invalidates_previous_analysis(monkeypatch: pytest.MonkeyPatch):

@@ -6,6 +6,7 @@ from typing import Any
 from .export_bundle import ExportBundleService
 from .export_journal import ExportJournalQuotaError
 from .export_scope import ExportScopeError
+from .export_progress import report_export_progress
 
 _PRIVATE_FIELDS = {"batch_database_path", "review_database_path", "journal_root", "preview_root"}
 _OPERATIONS = {
@@ -16,7 +17,9 @@ _OPERATIONS = {
     "export_intent_publish": {"intent_id", "directory"},
     "export_intent_status": {"job_id"},
     "export_intent_reconcile": {"active_tokens"},
+    "export_intent_grouping_draft": {"job_id", "result_revision", "expected_grouping_revision", "expected_review_fingerprint", "own_account_fingerprint", "directory"},
 }
+_PROGRESS_OPERATIONS = frozenset({"export_intent_create", "export_intent_render", "export_intent_publish"})
 _MESSAGES = {
     "export_scope_invalid": "导出范围无效或包含未解决片段，请返回审核后重试。",
     "export_scope_stale": "任务结果或审核记录已变化，请重新生成导出预览。",
@@ -26,6 +29,9 @@ _MESSAGES = {
     "pdf_export_failed": "PDF 导出预览生成失败，请重试。",
     "cleanup_failed": "临时导出文件清理失败，文件已保留，请稍后重试。",
     "export_recovery_required": "上次导出尚待核对，请重新打开任务检查发布状态。",
+    "draft_export_failed": "核对草稿未能保存，请检查输出目录后重试；草稿不替代正式导出审核。",
+    "grouping_stale": "本方资料、分组或审核依据已变化，请重新载入分组并生成导出结果。",
+    "grouping_incomplete": "仍有片段的本方身份或交易对手去向未确认，请返回分组核对。",
 }
 
 
@@ -54,6 +60,9 @@ def handle_export_request(request: dict[str, Any]) -> dict[str, Any]:
     operation = request.get("op")
     if operation not in _OPERATIONS or set(request) != {"op"} | _PRIVATE_FIELDS | _OPERATIONS[operation]:
         return {"status": "error", "code": "invalid_request", "message": "导出请求字段无效。"}
+    report_progress = operation in _PROGRESS_OPERATIONS
+    if report_progress:
+        report_export_progress("validating", force=True)
     try:
         paths = {}
         for key in _PRIVATE_FIELDS:
@@ -64,6 +73,9 @@ def handle_export_request(request: dict[str, Any]) -> dict[str, Any]:
             if not path.is_absolute():
                 raise ExportScopeError("host path must be absolute")
             paths[key] = path
+        if operation == "export_intent_grouping_draft":
+            from .receipt_grouping_draft import publish_grouping_draft
+            return {"status": "ok", "data": publish_grouping_draft(paths["batch_database_path"], paths["review_database_path"], request)}
         service = ExportBundleService(paths["batch_database_path"], paths["review_database_path"],
                                       paths["journal_root"], paths["preview_root"])
         if operation == "export_intent_create":
@@ -96,3 +108,6 @@ def handle_export_request(request: dict[str, Any]) -> dict[str, Any]:
         return response
     except Exception:
         return {"status": "error", "code": "export_failed", "message": "导出操作未完成，请检查任务与存储目录后重试。"}
+    finally:
+        if report_progress:
+            report_export_progress("finalizing", force=True)

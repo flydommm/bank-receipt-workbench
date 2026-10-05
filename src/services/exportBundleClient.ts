@@ -2,6 +2,15 @@ import { invoke } from '@tauri-apps/api/core';
 import type { ExportOutputMode } from '../domain/exportIntent';
 import { normalizeExportName, validateExportName } from '../domain/exportNaming';
 import { sameExportPath } from '../components/localEngineAdapter';
+import { exportProgressChannel, type ExportProgress } from './exportProgress';
+
+export type ReceiptExportOutputMode = ExportOutputMode | 'by_counterparty' | 'by_counterparty_merged';
+export type GroupedExportBinding = {
+  expected_grouping_revision: number;
+  expected_review_fingerprint: string;
+  own_account_fingerprint: string;
+  include_counterparty_pending: boolean;
+};
 
 export type ExportScopeRequest = {
   job_id: string;
@@ -9,11 +18,11 @@ export type ExportScopeRequest = {
   scope_kind: 'all' | 'sources' | 'list';
   selected_segment_ids: string[];
   expected_records: Array<{ id: string; record_revision: number }>;
-  output_mode: ExportOutputMode;
+  output_mode: ReceiptExportOutputMode;
   include_xlsx: boolean;
   include_manifest?: boolean;
   output_name?: string;
-};
+} & Partial<GroupedExportBinding>;
 export type ExportScopeSummary = {
   total_segments: number; selected_count: number; selected_source_count: number;
   omitted_count: number; omitted_unresolved_count: number; expected_pages: number; excluded_count?: number;
@@ -25,30 +34,35 @@ export type ExportExcludedItem = {
 export type ExportBundleFile = {
   file_id: string; name: string; source_key: string | null; page_count: number;
   preview_token: string; preview_path: string; sha256: string; size_bytes: number;
+  group_id?: string; group_kind?: string; group_name?: string; grouped_pages?: number;
 };
 export type ExportBundlePreview = {
   intent_id: string; state: 'rendered'; job_id: string; result_revision: string;
   scope_kind: ExportScopeRequest['scope_kind']; selected_segment_ids: string[];
-  source_fingerprint: string; review_revision: string; output_mode: ExportOutputMode;
+  source_fingerprint: string; review_revision: string; output_mode: ReceiptExportOutputMode;
   include_xlsx: boolean; summary: ExportScopeSummary; files: ExportBundleFile[];
   include_manifest?: boolean;
   merged_pages: number; source_pages: number; total_pages: number;
   receipt_schema?: 2;
   excluded?: ExportExcludedItem[]; excluded_digest?: string;
   output_name?: string;
-};
+  grouped_pages?: number;
+} & Partial<GroupedExportBinding>;
 export type ExportPublishedFile = {
   name: string; path: string; kind: 'pdf' | 'xlsx' | 'json'; sha256: string;
   size_bytes: number; page_count?: number;
+  group_id?: string; group_kind?: string; group_name?: string; grouped_pages?: number;
 };
 export type ExportBundleReceipt = {
   intent_id: string; state: 'published'; directory: string; files: ExportPublishedFile[];
   summary: ExportScopeSummary; merged_pages: number; source_pages: number; total_pages: number; row_count: number;
+  output_mode?: ReceiptExportOutputMode;
   receipt_schema?: 2;
   excluded?: ExportExcludedItem[]; excluded_digest?: string;
   merged_name?: string;
   include_manifest?: boolean;
-};
+  grouped_pages?: number;
+} & Partial<GroupedExportBinding>;
 export type ExportResidual = { path: string; reason: string };
 export type ExportPublicationStatus = { job_id: string; publication: ExportBundleReceipt | null; residuals: ExportResidual[] };
 type BundleInvoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
@@ -99,13 +113,23 @@ function outputName(value: unknown): string {
   return normalizeExportName(result);
 }
 const DEFAULT_MERGED_FILENAMES = new Set(['全部匹配结果.pdf', '全部回单.pdf']);
+const DEFAULT_GROUPED_MERGED_FILENAME = '全部分组回单.pdf';
+const GROUP_KINDS = new Set(['named', 'internal', 'blank', 'special', 'counterparty_pending']);
 function array(value: unknown, max: number, nonempty = false): unknown[] {
   if (!Array.isArray(value) || value.length > max || (nonempty && !value.length)) return invalid();
   return value;
 }
-function mode(value: unknown): ExportOutputMode {
-  if (value !== 'merged' && value !== 'by_source' && value !== 'both') return invalid();
+function mode(value: unknown): ReceiptExportOutputMode {
+  if (value !== 'merged' && value !== 'by_source' && value !== 'both' && value !== 'by_counterparty' && value !== 'by_counterparty_merged') return invalid();
   return value;
+}
+function groupedMode(value: unknown): value is 'by_counterparty' | 'by_counterparty_merged' {
+  return value === 'by_counterparty' || value === 'by_counterparty_merged';
+}
+function groupKind(value: unknown): string {
+  const result = text(value, 64);
+  if (!GROUP_KINDS.has(result)) return invalid();
+  return result;
 }
 function scopeKind(value: unknown): ExportScopeRequest['scope_kind'] {
   if (value !== 'all' && value !== 'sources' && value !== 'list') return invalid();
@@ -243,14 +267,24 @@ function unpack(value: unknown): unknown {
   return result.data;
 }
 
-export type ExportBundleClientOptions = { expectedReceiptSchema?: 2 };
+export type ExportBundleClientOptions = { expectedReceiptSchema?: 2; onProgress?: (progress: ExportProgress) => void };
+
+const GROUPING_FIELDS = ['expected_grouping_revision', 'expected_review_fingerprint', 'own_account_fingerprint', 'include_counterparty_pending'] as const;
+function groupedBinding(data: Record<string, unknown>, required: boolean): GroupedExportBinding | undefined {
+  const present = GROUPING_FIELDS.filter((field) => field in data).length;
+  if (!required) { if (present) return invalid(); return undefined; }
+  if (present !== GROUPING_FIELDS.length) return invalid();
+  return { expected_grouping_revision: count(data.expected_grouping_revision, Number.MAX_SAFE_INTEGER),
+    expected_review_fingerprint: hash(data.expected_review_fingerprint), own_account_fingerprint: hash(data.own_account_fingerprint),
+    include_counterparty_pending: bool(data.include_counterparty_pending) };
+}
 
 export function validateExportScopeRequest(value: ExportScopeRequest): ExportScopeRequest {
   const data = object(value);
   const fields = ['job_id', 'result_revision', 'scope_kind', 'selected_segment_ids', 'expected_records', 'output_mode', 'include_xlsx'];
   const keys = Object.keys(data);
   if (fields.some((key) => !(key in data))
-      || keys.some((key) => !fields.includes(key) && key !== 'output_name' && key !== 'include_manifest')) return invalid();
+      || keys.some((key) => !fields.includes(key) && key !== 'output_name' && key !== 'include_manifest' && !GROUPING_FIELDS.includes(key as typeof GROUPING_FIELDS[number]))) return invalid();
   const ids = array(data.selected_segment_ids, 50_000, true).map((id) => text(id));
   const selected = new Set(ids);
   const seen = new Set<string>();
@@ -264,9 +298,13 @@ export function validateExportScopeRequest(value: ExportScopeRequest): ExportSco
   });
   if (selected.size !== ids.length || expected.length !== ids.length) return invalid();
   const output_name = 'output_name' in data ? outputName(data.output_name) : undefined;
+  const requestedMode = mode(data.output_mode);
+  const grouping = groupedBinding(data, groupedMode(requestedMode));
+  if (grouping && !data.include_xlsx) return invalid();
   return { job_id: text(data.job_id), result_revision: text(data.result_revision), scope_kind: scopeKind(data.scope_kind),
-    selected_segment_ids: ids, expected_records: expected, output_mode: mode(data.output_mode), include_xlsx: bool(data.include_xlsx),
+    selected_segment_ids: ids, expected_records: expected, output_mode: requestedMode, include_xlsx: bool(data.include_xlsx),
     ...('include_manifest' in data ? { include_manifest: bool(data.include_manifest) } : {}),
+    ...grouping,
     ...(output_name === undefined ? {} : { output_name }) };
 }
 
@@ -274,6 +312,10 @@ export function parseExportBundlePreview(value: unknown, request: ExportScopeReq
   const data = object(value);
   const receiptSchema = data.receipt_schema === undefined ? undefined : data.receipt_schema === 2 ? 2 : invalid();
   if (expectedReceiptSchema !== undefined && receiptSchema !== expectedReceiptSchema) return invalid();
+  const grouped = groupedMode(request.output_mode);
+  const groupedMerged = request.output_mode === 'by_counterparty_merged';
+  const grouping = groupedBinding(data, grouped);
+  if (grouped && (receiptSchema !== 2 || GROUPING_FIELDS.some((field) => data[field] !== request[field]))) return invalid();
   if (data.state !== 'rendered' || data.job_id !== request.job_id || data.result_revision !== request.result_revision
       || data.scope_kind !== request.scope_kind || data.output_mode !== request.output_mode || data.include_xlsx !== request.include_xlsx) return invalid();
   const requestedOutputName = request.output_name;
@@ -295,33 +337,59 @@ export function parseExportBundlePreview(value: unknown, request: ExportScopeReq
     return invalid();
   }
   if ((receiptSchema === 2) !== exclusions.present) return invalid();
-  const tokens = new Set<string>(); const names = new Set<string>(); const fileIds = new Set<string>(); const sources = new Set<string>();
+  const tokens = new Set<string>(); const names = new Set<string>(); const fileIds = new Set<string>(); const sources = new Set<string>(); const groups = new Set<string>();
   const allowedMergedNames = requestedOutputName === undefined
     ? DEFAULT_MERGED_FILENAMES : new Set([`${requestedOutputName}.pdf`]);
+  const allowedGroupedMergedName = requestedOutputName === undefined
+    ? DEFAULT_GROUPED_MERGED_FILENAME : `${requestedOutputName}.pdf`;
   const files = array(data.files, 501, true).map((entry): ExportBundleFile => {
     const file = object(entry);
+    const hasGroupIdentityFields = ['group_id', 'group_kind', 'group_name'].some((field) => field in file);
     const parsed = { file_id: text(file.file_id), name: filename(file.name), source_key: file.source_key === null ? null : text(file.source_key),
       page_count: count(file.page_count, 50_000, true), preview_token: token(file.preview_token), preview_path: path(file.preview_path),
-      sha256: hash(file.sha256), size_bytes: count(file.size_bytes, Number.MAX_SAFE_INTEGER, true) };
+      sha256: hash(file.sha256), size_bytes: count(file.size_bytes, Number.MAX_SAFE_INTEGER, true),
+      ...(grouped && !groupedMerged ? { group_id: text(file.group_id),
+        group_kind: groupKind(file.group_kind), group_name: text(file.group_name),
+        grouped_pages: count(file.grouped_pages, 50_000, true),
+      } : {}),
+      ...(groupedMerged ? { grouped_pages: count(file.grouped_pages, 50_000, true) } : {}) };
     const basename = parsed.preview_path.split(/[\\/]/).pop();
     if (!parsed.name.endsWith('.pdf') || basename !== `${parsed.preview_token}.pdf`
         || tokens.has(parsed.preview_token) || names.has(parsed.name.toLocaleLowerCase()) || fileIds.has(parsed.file_id)) return invalid();
     tokens.add(parsed.preview_token); names.add(parsed.name.toLocaleLowerCase()); fileIds.add(parsed.file_id);
     if (parsed.source_key !== null) { if (sources.has(parsed.source_key)) return invalid(); sources.add(parsed.source_key); }
-    if ((parsed.file_id === 'merged') !== (parsed.source_key === null)
+    if (groupedMerged) {
+      if (hasGroupIdentityFields || parsed.source_key !== null || parsed.file_id !== 'grouped-merged'
+          || parsed.grouped_pages !== parsed.page_count || parsed.name !== allowedGroupedMergedName) return invalid();
+    } else if (grouped) {
+      if (parsed.source_key !== null || !parsed.group_id || groups.has(parsed.group_id) || parsed.file_id !== `group:${parsed.group_id}`) return invalid();
+      if (parsed.grouped_pages !== parsed.page_count) return invalid();
+      groups.add(parsed.group_id);
+    } else if (hasGroupIdentityFields || file.grouped_pages !== undefined || (parsed.file_id === 'merged') !== (parsed.source_key === null)
         || (parsed.file_id === 'merged'
           && !allowedMergedNames.has(parsed.name))) return invalid();
     return parsed;
   });
   const merged = files.filter((file) => file.file_id === 'merged').reduce((total, file) => total + file.page_count, 0);
-  const separate = files.filter((file) => file.file_id !== 'merged').reduce((total, file) => total + file.page_count, 0);
-  if (count(data.merged_pages) !== merged || count(data.source_pages) !== separate || count(data.total_pages, 100_000) !== merged + separate
+  const separate = groupedMerged ? 0 : files.filter((file) => file.file_id !== 'merged').reduce((total, file) => total + file.page_count, 0);
+  const sourcePages = grouped ? 0 : separate;
+  const groupedPages = grouped ? count(data.grouped_pages) : 0;
+  const totalPages = count(data.total_pages, 100_000);
+  const expectedTotalPages = groupedMerged ? merged + groupedPages : merged + separate;
+  if ((grouped ? groupedPages !== (groupedMerged ? files.reduce((total, file) => total + file.page_count, 0) : separate)
+      || (groupedMerged ? (files.length !== 1 || merged !== 0 || separate !== 0 || !files[0] || files[0].file_id !== 'grouped-merged')
+        : separate !== scope.expected_pages)
+      || (groupedMerged ? groupedPages !== scope.expected_pages : false)
+      || !grouping || !request.include_xlsx : data.grouped_pages !== undefined)
+      || count(data.merged_pages) !== merged || count(data.source_pages) !== sourcePages || totalPages !== expectedTotalPages
       || (request.output_mode === 'merged' && (files.length !== 1 || merged !== scope.expected_pages || separate !== 0))
       || (request.output_mode === 'by_source' && (merged !== 0 || separate !== scope.expected_pages || sources.size !== scope.selected_source_count))
       || (request.output_mode === 'both' && (merged !== scope.expected_pages || separate !== scope.expected_pages || sources.size !== scope.selected_source_count))) return invalid();
   return { intent_id: token(data.intent_id), state: 'rendered', job_id: request.job_id, result_revision: request.result_revision,
     scope_kind: request.scope_kind, selected_segment_ids: ids, source_fingerprint: hash(data.source_fingerprint), review_revision: hash(data.review_revision),
-    output_mode: request.output_mode, include_xlsx: request.include_xlsx, summary: scope, files, merged_pages: merged, source_pages: separate, total_pages: merged + separate,
+    output_mode: request.output_mode, include_xlsx: request.include_xlsx, summary: scope, files, merged_pages: merged, source_pages: sourcePages,
+    total_pages: totalPages,
+    ...grouping, ...(grouped ? { grouped_pages: groupedPages } : {}),
     ...(receiptSchema === 2 ? { receipt_schema: 2 as const } : {}),
     ...(includeManifest === undefined ? {} : { include_manifest: includeManifest }),
     ...(exclusions.present ? { excluded: exclusions.excluded, excluded_digest: exclusions.excluded_digest } : {}),
@@ -332,6 +400,14 @@ export function parseExportBundleReceipt(value: unknown, preview?: ExportBundleP
   const data = object(value);
   const receiptSchema = data.receipt_schema === undefined ? undefined : data.receipt_schema === 2 ? 2 : invalid();
   if (expectedReceiptSchema !== undefined && receiptSchema !== expectedReceiptSchema) return invalid();
+  const declaredOutputMode = data.output_mode === undefined ? undefined : mode(data.output_mode);
+  const grouped = data.grouped_pages !== undefined || (declaredOutputMode !== undefined && groupedMode(declaredOutputMode))
+    || Boolean(preview && groupedMode(preview.output_mode));
+  const groupedMerged = declaredOutputMode === 'by_counterparty_merged' || preview?.output_mode === 'by_counterparty_merged';
+  if (declaredOutputMode !== undefined && grouped && !groupedMode(declaredOutputMode)) return invalid();
+  const grouping = groupedBinding(data, grouped);
+  const groupedPages = grouped ? count(data.grouped_pages, 50_000, true) : 0;
+  if (grouped && receiptSchema !== 2) return invalid();
   if (data.state !== 'published') return invalid();
   const includeManifest = 'include_manifest' in data ? bool(data.include_manifest) : undefined;
   const directory = path(data.directory);
@@ -346,7 +422,18 @@ export function parseExportBundleReceipt(value: unknown, preview?: ExportBundleP
         || (kind === 'xlsx' && parsed.name !== '匹配索引.xlsx') || (kind === 'json' && parsed.name !== '导出清单.json')
         || (kind === 'pdf' && !parsed.name.endsWith('.pdf'))) return invalid();
     names.add(parsed.name.toLocaleLowerCase());
-    if (kind === 'pdf') parsed.page_count = count(file.page_count, 50_000, true);
+    if (kind === 'pdf') {
+      parsed.page_count = count(file.page_count, 50_000, true);
+      if (grouped && file.group_id !== undefined) parsed.group_id = text(file.group_id);
+      if (grouped && file.group_kind !== undefined) parsed.group_kind = groupKind(file.group_kind);
+      if (grouped && file.group_name !== undefined) parsed.group_name = text(file.group_name);
+      if (grouped && file.grouped_pages !== undefined) parsed.grouped_pages = count(file.grouped_pages, 50_000, true);
+      const hasGroupFields = ['group_id', 'group_kind', 'group_name'].some((field) => field in file);
+      if (groupedMerged && (hasGroupFields || file.grouped_pages === undefined || parsed.grouped_pages !== parsed.page_count)) return invalid();
+      if (grouped && !groupedMerged && (file.group_id === undefined || file.group_kind === undefined
+          || file.group_name === undefined || file.grouped_pages === undefined || parsed.grouped_pages !== parsed.page_count)) return invalid();
+      if (!grouped && ['group_id', 'group_kind', 'group_name', 'grouped_pages'].some((field) => field in file)) return invalid();
+    }
     else if (file.page_count !== undefined) return invalid();
     return parsed;
   });
@@ -362,28 +449,39 @@ export function parseExportBundleReceipt(value: unknown, preview?: ExportBundleP
   const totalPages = count(data.total_pages, 100_000); const rowCount = count(data.row_count);
   const pdfFiles = files.filter((file) => file.kind === 'pdf');
   const previewMergedName = preview?.files.find((file) => file.file_id === 'merged')?.name;
-  const legacyMergedCandidates = preview === undefined
+  const previewGroupedMergedName = preview?.files.find((file) => file.file_id === 'grouped-merged')?.name;
+  const legacyMergedCandidates = preview === undefined && !grouped
     ? pdfFiles.filter((file) => DEFAULT_MERGED_FILENAMES.has(file.name)) : [];
-  if (declaredMergedName === undefined && preview === undefined
+  if (declaredMergedName === undefined && preview === undefined && !grouped
       && pdfFiles.some((file) => DEFAULT_MERGED_FILENAMES.has(file.name))
       && legacyMergedCandidates.length !== 1) return invalid();
   const inferredMergedName = declaredMergedName ?? previewMergedName
     ?? (legacyMergedCandidates.length === 1 ? legacyMergedCandidates[0]!.name : undefined);
   const mergedFiles = inferredMergedName === undefined ? [] : pdfFiles.filter((file) => file.name === inferredMergedName);
-  const sourceFiles = inferredMergedName === undefined
+  const sourceFiles = grouped ? [] : inferredMergedName === undefined
     ? pdfFiles
     : pdfFiles.filter((file) => file.name !== inferredMergedName);
   if (declaredMergedName !== undefined && mergedFiles.length !== 1) return invalid();
-  if (!pdfFiles.length || mergedFiles.length > 1
-      || mergedFiles.reduce((total, file) => total + file.page_count!, 0) !== mergedPages
-      || sourceFiles.reduce((total, file) => total + file.page_count!, 0) !== sourcePages
-      || (mergedFiles.length > 0 && mergedPages !== scope.expected_pages)
-      || (sourceFiles.length > 0 && (sourcePages !== scope.expected_pages || sourceFiles.length !== scope.selected_source_count))) return invalid();
-  if (mergedPages + sourcePages !== totalPages || files.filter((file) => file.kind === 'json').length !== Number(includeManifest ?? true)
+  if (groupedMerged) {
+    const groupedMergedName = previewGroupedMergedName
+      ?? (preview === undefined ? undefined : (preview.output_name === undefined ? DEFAULT_GROUPED_MERGED_FILENAME : `${preview.output_name}.pdf`));
+    if (pdfFiles.length !== 1 || (groupedMergedName !== undefined && pdfFiles[0]!.name !== groupedMergedName) || declaredMergedName !== undefined
+        || mergedPages !== 0 || sourcePages !== 0 || groupedPages !== scope.expected_pages
+        || totalPages !== groupedPages || !files.some((file) => file.kind === 'xlsx')) return invalid();
+  } else if (grouped && (declaredMergedName !== undefined || mergedPages !== 0 || sourcePages !== 0 || groupedPages !== scope.expected_pages
+      || !files.some((file) => file.kind === 'xlsx'))) return invalid();
+  if (!pdfFiles.length || (!groupedMerged && mergedFiles.length > 1)
+      || (!groupedMerged && mergedFiles.reduce((total, file) => total + file.page_count!, 0) !== mergedPages)
+      || (!groupedMerged && sourceFiles.reduce((total, file) => total + file.page_count!, 0) !== sourcePages)
+      || (!groupedMerged && mergedFiles.length > 0 && mergedPages !== scope.expected_pages)
+      || (!groupedMerged && sourceFiles.length > 0 && (sourcePages !== scope.expected_pages || sourceFiles.length !== scope.selected_source_count))) return invalid();
+  if (mergedPages + sourcePages + groupedPages !== totalPages || files.filter((file) => file.kind === 'json').length !== Number(includeManifest ?? true)
       || files.filter((file) => file.kind === 'pdf').reduce((total, file) => total + file.page_count!, 0) !== totalPages
       || (files.some((file) => file.kind === 'xlsx') ? rowCount !== scope.selected_count : rowCount !== 0)) return invalid();
   const result: ExportBundleReceipt = { intent_id: token(data.intent_id), state: 'published', directory, files, summary: scope,
-    merged_pages: mergedPages, source_pages: sourcePages, total_pages: totalPages, row_count: rowCount };
+    merged_pages: mergedPages, source_pages: sourcePages, total_pages: totalPages, row_count: rowCount,
+    ...(declaredOutputMode === undefined ? {} : { output_mode: declaredOutputMode }),
+    ...grouping, ...(grouped ? { grouped_pages: groupedPages } : {}) };
   if (receiptSchema === 2) result.receipt_schema = 2;
   if (includeManifest !== undefined) result.include_manifest = includeManifest;
   if (exclusions.present) { result.excluded = exclusions.excluded; result.excluded_digest = exclusions.excluded_digest; }
@@ -391,13 +489,18 @@ export function parseExportBundleReceipt(value: unknown, preview?: ExportBundleP
   if (preview) {
     const pdfs = files.filter((file) => file.kind === 'pdf');
     if (previewMergedName !== undefined && inferredMergedName !== previewMergedName) return invalid();
+    if (groupedMerged && previewGroupedMergedName !== undefined && pdfs.length !== 1) return invalid();
     // by_source previews intentionally have no merged PDF. A custom name is
     // required to identify the merged artifact only for modes that include
     // that artifact; source files are validated by their complete set below.
-    if (preview.output_name !== undefined && preview.output_mode !== 'by_source'
+    if (preview.output_name !== undefined && preview.output_mode !== 'by_source' && preview.output_mode !== 'by_counterparty'
+        && preview.output_mode !== 'by_counterparty_merged'
         && inferredMergedName !== `${preview.output_name}.pdf`) return invalid();
     if (result.intent_id !== preview.intent_id || mergedPages !== preview.merged_pages || sourcePages !== preview.source_pages
-        || totalPages !== preview.total_pages || JSON.stringify(scope) !== JSON.stringify(preview.summary)
+        || totalPages !== preview.total_pages || grouped !== groupedMode(preview.output_mode)
+        || (declaredOutputMode !== undefined && declaredOutputMode !== preview.output_mode)
+        || (grouped && (groupedPages !== preview.grouped_pages
+          || GROUPING_FIELDS.some((field) => data[field] !== preview[field]))) || JSON.stringify(scope) !== JSON.stringify(preview.summary)
         || receiptSchema !== preview.receipt_schema
         || includeManifest !== preview.include_manifest
         || exclusions.present !== (preview.excluded !== undefined || preview.excluded_digest !== undefined)
@@ -408,6 +511,9 @@ export function parseExportBundleReceipt(value: unknown, preview?: ExportBundleP
     for (const file of preview.files) {
       const published = byName.get(file.name);
       if (!published || published.sha256 !== file.sha256 || published.size_bytes !== file.size_bytes || published.page_count !== file.page_count) return invalid();
+      for (const field of ['group_id', 'group_kind', 'group_name', 'grouped_pages'] as const) {
+        if (published[field] !== file[field]) return invalid();
+      }
     }
   }
   return result;
@@ -415,13 +521,21 @@ export function parseExportBundleReceipt(value: unknown, preview?: ExportBundleP
 
 export class ExportBundleClient {
   constructor(private readonly call: BundleInvoke = invoke, private readonly options: ExportBundleClientOptions = {}) {}
+  private async callWithProgress(request: Record<string, unknown>): Promise<unknown> {
+    const progress = this.options.onProgress ? exportProgressChannel(this.options.onProgress) : null;
+    try {
+      return await this.call('export_bundle_command', { request, ...(progress ? { onProgress: progress.channel } : {}) });
+    } finally {
+      progress?.close();
+    }
+  }
   async create(request: ExportScopeRequest): Promise<ExportBundlePreview> {
     const detached = validateExportScopeRequest(request);
-    return parseExportBundlePreview(unpack(await this.call('export_bundle_command', { request: { op: 'create', scope: detached } })), detached, this.options.expectedReceiptSchema);
+    return parseExportBundlePreview(unpack(await this.callWithProgress({ op: 'create', scope: detached })), detached, this.options.expectedReceiptSchema);
   }
   async publish(preview: ExportBundlePreview, directory: string): Promise<ExportBundleReceipt> {
     const selectedDirectory = path(directory);
-    const result = parseExportBundleReceipt(unpack(await this.call('export_bundle_command', { request: { op: 'publish', intent_id: token(preview.intent_id), directory: selectedDirectory } })), preview, this.options.expectedReceiptSchema);
+    const result = parseExportBundleReceipt(unpack(await this.callWithProgress({ op: 'publish', intent_id: token(preview.intent_id), directory: selectedDirectory })), preview, this.options.expectedReceiptSchema);
     if (!sameExportPath(result.directory.split(/[\\/]/).slice(0, -1).join('/'), selectedDirectory)) return invalid();
     return result;
   }

@@ -2,7 +2,7 @@ import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import feedbackChannels from '../domain/feedbackChannels.json';
 import type { FeedbackInvoke } from './localFeedback';
 
-export type FeedbackChannel = 'github' | 'email';
+export type FeedbackChannel = 'email';
 export type FeedbackContact = 'email' | 'wechat';
 
 export type FeedbackChannelErrorCode =
@@ -25,11 +25,11 @@ export class FeedbackChannelError extends Error {
   }
 }
 
-const INVALID_CHANNEL_MESSAGE = '反馈渠道无效，请选择邮箱或 GitHub。';
+const INVALID_CHANNEL_MESSAGE = '反馈渠道无效，请选择邮箱。';
 const INVALID_CONTACT_MESSAGE = '联系方式无效，请选择屏幕上显示的邮箱或微信号。';
-const TAURI_UNAVAILABLE_MESSAGE = '打开反馈入口需要在桌面应用中运行，请通过屏幕上的邮箱、微信或 GitHub 手动联系。';
-const OPEN_FAILED_MESSAGE = '无法打开反馈入口，请通过屏幕上的邮箱、微信或 GitHub 手动联系。';
-const INVALID_RESPONSE_MESSAGE = '打开反馈入口返回了无效结果，请通过屏幕上的邮箱、微信或 GitHub 手动联系。';
+const TAURI_UNAVAILABLE_MESSAGE = '打开邮件入口需要在桌面应用中运行，请复制屏幕上的邮箱手动联系。';
+const OPEN_FAILED_MESSAGE = '无法打开邮件客户端，请复制屏幕上的邮箱手动联系。';
+const INVALID_RESPONSE_MESSAGE = '打开邮件入口返回了无效结果，请复制屏幕上的邮箱手动联系。';
 const CLIPBOARD_MESSAGE = '无法自动复制联系方式，请手动选择并复制下方显示的邮箱或微信号。';
 
 type TauriWindow = Window & { __TAURI_INTERNALS__?: unknown };
@@ -47,7 +47,7 @@ function defaultInvoke(command: string, args?: Record<string, unknown>): Promise
 }
 
 function isFeedbackChannel(value: unknown): value is FeedbackChannel {
-  return value === 'github' || value === 'email';
+  return value === 'email';
 }
 
 function isFeedbackContact(value: unknown): value is FeedbackContact {

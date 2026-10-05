@@ -16,6 +16,9 @@ import { APP_SETTINGS_STORAGE_KEY, DEFAULT_APP_SETTINGS } from './domain/appSett
 import type { LayoutDefinition } from './domain/receiptLayout';
 import type { ReceiptBatchJobSnapshot, ReceiptBatchPreparedReview, ReceiptBatchReviewPageItem } from './domain/receiptBatch';
 import type { ReceiptReviewContext } from './domain/receiptReview';
+import { ReceiptGroupingClient } from './services/receiptGroupingClient';
+import { syntheticHeader, syntheticItem, syntheticAccount } from './domain/receiptGrouping.testFixtures';
+import type { AccountSelection, GroupingHeader, CompanyAccount } from './domain/receiptGrouping';
 
 vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn(async () => () => undefined) }));
 
@@ -141,7 +144,7 @@ describe('desktop receipt workflow entry routing', () => {
   it('places the workflow stage beside the app title and keeps sidebar headings concise', () => {
     installClients();
     render(<App />);
-    expect(topbarWorkflow().textContent).toContain('导入预览');
+    expect(topbarWorkflow().textContent).toContain('选择文件与本方账户');
     const title = screen.getByRole('heading', { name: '银行回单工作台', level: 1 });
     const titleRow = title.closest('.brand-title-row');
     expect(titleRow).toBeTruthy();
@@ -159,8 +162,10 @@ describe('desktop receipt workflow entry routing', () => {
     render(<App />);
     await upload(user, null);
     expect((screen.getByRole('radio', { name: '分割全部回单' }) as HTMLInputElement).checked).toBe(true);
+    expect(screen.queryByText('设置搜索条件并开始分析。')).toBeNull();
     await user.click(screen.getByRole('radio', { name: '查找提取回单' }));
     expect((screen.getByRole('radio', { name: '查找提取回单' }) as HTMLInputElement).checked).toBe(true);
+    expect(screen.getByText('设置搜索条件并开始分析。')).toBeTruthy();
     vi.mocked(localEngineAdapter.pickPdfFiles).mockResolvedValue({ files: [sourceB], directory: '/docs' });
     await user.click(screen.getByRole('button', { name: '添加 PDF' }));
     expect((screen.getByRole('radio', { name: '查找提取回单' }) as HTMLInputElement).checked).toBe(true);
@@ -320,12 +325,12 @@ describe('desktop receipt workflow entry routing', () => {
       return ok(job);
     });
     render(<App />); await upload(user);
-    expect(topbarWorkflow().textContent).toContain('导入预览');
+    expect(topbarWorkflow().textContent).toContain('选择文件与本方账户');
     await user.type(screen.getByRole('textbox', { name: '包含关键词 1' }), '手续费');
     await user.click(screen.getByRole('button', { name: '开始分析' }));
     await screen.findByText('分析中 · 0/2 页');
     expect((screen.getByRole('button', { name: '我的模板' }) as HTMLButtonElement).disabled).toBe(true);
-    expect(topbarWorkflow().textContent).toContain('分析处理');
+    expect(topbarWorkflow().textContent).toContain('分析并检查分割');
     expect(screen.queryByRole('progressbar')).toBeNull();
     expect(screen.queryByRole('textbox', { name: '包含关键词 1' })).toBeNull();
     const job = client.jobs.get('receipt-job-1')!;
@@ -523,10 +528,10 @@ describe('desktop receipt workflow entry routing', () => {
     await user.type(screen.getByRole('textbox', { name: '包含关键词 1' }), '手续费');
     await user.click(screen.getByRole('button', { name: '开始分析' }));
     await screen.findByRole('region', { name: '回单检查总览' });
-    expect(topbarWorkflow().textContent).toContain('分析处理');
+    expect(topbarWorkflow().textContent).toContain('分析并检查分割');
     await user.click(screen.getByRole('button', { name: '导出回单' }));
     await screen.findByRole('heading', { name: '导出设置' });
-    expect(topbarWorkflow().textContent).toContain('导出结果');
+    expect(topbarWorkflow().textContent).toContain('检查并导出（分组时先核对对手）');
     await user.click(screen.getByRole('button', { name: '选择目录并导出' }));
     await screen.findByText('已生成 1 个文件，共 2 页。');
     expect(pickOutputFolder).toHaveBeenCalledWith(configuredOutputDirectory);
@@ -534,7 +539,7 @@ describe('desktop receipt workflow entry routing', () => {
     await user.click(screen.getByRole('button', { name: '移除本次来源' }));
 
     await screen.findByText('0 份 PDF · 未添加');
-    expect(topbarWorkflow().textContent).toContain('导入预览');
+    expect(topbarWorkflow().textContent).toContain('选择文件与本方账户');
     expect(screen.queryByRole('heading', { name: '最终导出预览' })).toBeNull();
     expect(screen.queryByRole('region', { name: '回单检查总览' })).toBeNull();
     const files = screen.getByRole('complementary', { name: '当前文件' });
@@ -557,3 +562,65 @@ describe('desktop receipt workflow entry routing', () => {
     expect(client.jobs.has('receipt-job-1')).toBe(true);
   });
 });
+
+it.each(['replace', 'clear', 'correct'] as const)('requires a fresh account binding after %s without changing the previous job', async (action) => {
+  const clients = installClients();
+  const one = { ...syntheticAccount, account_id: 'fixture-old', bank_name: '合成银行甲', account_number: '00001111' };
+  const two = { ...syntheticAccount, account_id: 'fixture-new', bank_name: '合成银行乙', account_number: '00002222' };
+  const accounts: CompanyAccount[] = [one, two];
+  vi.spyOn(ReceiptGroupingClient.prototype, 'loadAccounts').mockResolvedValue(accounts);
+  const headers = new Map<string, GroupingHeader>();
+  const select = vi.spyOn(ReceiptGroupingClient.prototype, 'setAccount').mockImplementation(async (jobId, _revision, selection: AccountSelection) => {
+    if (selection.kind !== 'saved') throw new Error('Expected selected archive');
+    const profile = accounts.find((item) => item.account_id === selection.account_id)!;
+    const header = { ...syntheticHeader(2), job_id: jobId, own_account: { ...syntheticHeader(2).own_account, company_name: profile.company_name, bank_name: profile.bank_name, account_number: profile.account_number, account_id: profile.account_id, account_revision: profile.account_revision } };
+    headers.set(jobId, header); return header;
+  });
+  vi.spyOn(ReceiptGroupingClient.prototype, 'prepare').mockImplementation(async (jobId, revision) => ({ ...headers.get(jobId)!, result_revision: revision }));
+  vi.spyOn(ReceiptGroupingClient.prototype, 'loadAll').mockImplementation(async (header) => ({ header, items: originals(clients.jobs.get(header.job_id)!).map((review, index) => ({ ...syntheticItem(index + 1), binding: { ...syntheticItem(index + 1).binding, segment_id: review.original.id, source_key: review.original.source_key, source_sha256: sourceHash(review.original.source_key), source_page: review.original.source_page, position_index: review.original.position_index, slot_id: review.original.slot_id, instance_id: review.original.instance_id, analysis_signature: review.original.analysis_signature } })) }));
+  const user = userEvent.setup(); render(<App />); await upload(user, 'split_all');
+  await user.click(screen.getByLabelText('启用按交易对手整理'));
+  await user.click(screen.getByRole('button', { name: '选择本机档案' }));
+  await user.selectOptions(screen.getByLabelText('档案公司'), one.company_name);
+  await user.selectOptions(screen.getByLabelText('档案来源银行'), one.bank_name);
+  await user.selectOptions(screen.getByLabelText('档案本方账号'), one.account_id);
+  await user.click(screen.getByRole('button', { name: '开始回单分析' }));
+  await user.click(await screen.findByRole('button', { name: '进入交易对手分组' }));
+  const first = await screen.findByRole('region', { name: '交易对手核对与分组' });
+  await waitFor(() => expect(within(first).getByLabelText('待确认与本批信息').textContent).toContain(one.bank_name));
+  if (action === 'correct') {
+    await user.click(screen.getByRole('button', { name: '返回分析' }));
+    await user.click(screen.getByRole('button', { name: '更正本批资料并重新分析' }));
+  } else {
+    if (action === 'clear') {
+      await user.click(screen.getByRole('button', { name: '清除来源' }));
+      await user.click(await screen.findByRole('button', { name: '确认清除来源' }));
+    } else {
+      await user.click(screen.getByRole('button', { name: '返回分析' }));
+    }
+    vi.mocked(localEngineAdapter.pickPdfFiles).mockResolvedValue({ files: [sourceB], directory: '/docs' });
+    await user.click(screen.getByRole('button', { name: '选择 PDF' }));
+    await screen.findByText('2 页 · 文档已读取');
+  }
+  expect((screen.getByLabelText('启用按交易对手整理') as HTMLInputElement).checked).toBe(true);
+  expect((screen.getByRole('button', { name: '开始回单分析' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(clients.create).toHaveBeenCalledTimes(1);
+  expect(headers.get('receipt-job-1')?.own_account.bank_name).toBe(one.bank_name);
+  expect(clients.jobs.get('receipt-job-1')?.state).toBe('ready_for_review');
+  expect(screen.getByRole('button', { name: '选择本机档案' }).getAttribute('aria-pressed')).toBe('true');
+  expect(screen.getByRole('button', { name: '仅填写本批资料' }).getAttribute('aria-pressed')).toBe('false');
+  await user.click(screen.getByRole('button', { name: '选择本机档案' }));
+  await user.selectOptions(screen.getByLabelText('档案公司'), two.company_name);
+  await user.selectOptions(screen.getByLabelText('档案来源银行'), two.bank_name);
+  await user.selectOptions(screen.getByLabelText('档案本方账号'), two.account_id);
+  const expected = two;
+  expect((screen.getByLabelText('档案来源银行') as HTMLSelectElement).value).toBe(expected.bank_name);
+  expect((screen.getByLabelText('档案本方账号') as HTMLSelectElement).value).toBe(expected.account_id);
+  await user.click(screen.getByRole('button', { name: '开始回单分析' }));
+  await user.click(await screen.findByRole('button', { name: '进入交易对手分组' }));
+  const next = await screen.findByRole('region', { name: '交易对手核对与分组' });
+  await waitFor(() => expect(within(next).getByLabelText('待确认与本批信息').textContent).toContain(expected.bank_name));
+  expect(within(next).getByLabelText('待确认与本批信息').textContent).not.toContain(one.bank_name);
+  expect(select.mock.calls.map((call) => call[2])).toEqual([{ kind: 'saved', account_id: one.account_id, account_revision: 1 }, { kind: 'saved', account_id: expected.account_id, account_revision: 1 }]);
+  expect(clients.create.mock.calls[1][0].sources[0].source_path).toBe(action === 'correct' ? sourceA : sourceB);
+}, 30000);

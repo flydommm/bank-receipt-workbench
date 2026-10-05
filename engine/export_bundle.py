@@ -6,7 +6,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from uuid import UUID, uuid4
 
 from . import engine as core
@@ -16,7 +16,8 @@ from .batch_store import BatchStore
 from .export_journal import ExportJournal
 from .export_directory import writable_directory
 from .export_plan import build_output_plan
-from .export_scope import ExportScopeError, _digest, capture_export_scope, hold_export_scope, validate_scope_request
+from .export_scope import ExportScopeError, GROUPED_OUTPUT_MODES, _digest, capture_export_scope, hold_export_scope, validate_scope_request
+from .export_progress import EXPORT_PROGRESS_MAX_TOTAL, report_export_progress
 
 MAX_BUNDLE_FILES = 501
 MAX_RETAINED_RECEIPTS = 128
@@ -45,6 +46,14 @@ def _uuid(value: object) -> str:
 def scope_request(snapshot: dict[str, Any]) -> dict[str, Any]:
     keys = ("job_id", "result_revision", "scope_kind", "selected_segment_ids", "expected_records", "output_mode", "include_xlsx")
     request = {key: snapshot[key] for key in keys}
+    if snapshot.get("output_mode") in GROUPED_OUTPUT_MODES:
+        for key in (
+            "expected_grouping_revision",
+            "expected_review_fingerprint",
+            "own_account_fingerprint",
+            "include_counterparty_pending",
+        ):
+            request[key] = snapshot[key]
     if "output_name" in snapshot:
         request["output_name"] = snapshot["output_name"]
     if "include_manifest" in snapshot:
@@ -53,6 +62,9 @@ def scope_request(snapshot: dict[str, Any]) -> dict[str, Any]:
 
 
 def _plan(snapshot: dict[str, Any], processed_at: str) -> dict[str, Any]:
+    if snapshot.get("output_mode") in GROUPED_OUTPUT_MODES:
+        from .receipt_grouped_export import build_grouped_receipt_output_plan
+        return build_grouped_receipt_output_plan(snapshot, processed_at)
     if snapshot.get("schema") == 2:
         from .receipt_export_plan import build_receipt_output_plan
         return build_receipt_output_plan(
@@ -149,10 +161,17 @@ class ExportBundleService:
             storage_bytes = _journal_storage_bytes(self.journal.root)
         return metadata
 
-    def create(self, request: object) -> dict[str, Any]:
+    def create(self, request: object, *, grouping_snapshot: object | None = None,
+               grouping_snapshot_reader: Callable[..., object] | None = None) -> dict[str, Any]:
         validated = validate_scope_request(request)
         with BatchStore(self.batch_database) as store:
-            snapshot = capture_export_scope(store, self.review_database, validated)
+            snapshot = capture_export_scope(
+                store,
+                self.review_database,
+                validated,
+                grouping_snapshot=grouping_snapshot,
+                grouping_snapshot_reader=grouping_snapshot_reader,
+            )
         created_at = datetime.now(timezone.utc).isoformat(timespec="microseconds")
         plan = _plan(snapshot, created_at)
         if not 1 <= len(plan["files"]) <= MAX_BUNDLE_FILES:
@@ -176,9 +195,12 @@ class ExportBundleService:
         files = []
         for file in plan["files"]:
             token = str(uuid4())
-            files.append({"file_id": file["file_id"], "name": file["name"], "source_key": file["source_key"],
-                          "page_count": file["page_count"], "preview_token": token,
-                          "preview_path": str(self.preview_root / f"{token}.pdf")})
+            descriptor = {"file_id": file["file_id"], "name": file["name"], "source_key": file["source_key"],
+                         "page_count": file["page_count"], "preview_token": token,
+                         "preview_path": str(self.preview_root / f"{token}.pdf")}
+            if plan.get("schema") == 3:
+                descriptor.update({key: file[key] for key in ("group_id", "group_kind", "group_name", "grouped_pages") if key in file})
+            files.append(descriptor)
         entry = {"schema": 1, "intent_id": str(uuid4()), "job_id": snapshot["job_id"], "created_at": created_at,
                  **({"receipt_schema": 2} if snapshot.get("schema") == 2 else {}),
                  **({"include_manifest": snapshot["include_manifest"]} if "include_manifest" in snapshot else {}),
@@ -210,7 +232,7 @@ class ExportBundleService:
                     "include_manifest" in snapshot and (type(snapshot["include_manifest"]) is not bool
                                                         or snapshot["include_manifest"] is not entry["include_manifest"])):
                 raise ExportScopeError("export manifest option does not match its intent")
-            if snapshot.get("schema") == 2 and entry.get("receipt_schema") != 2:
+            if snapshot.get("schema") in {2, 3} and entry.get("receipt_schema") != snapshot.get("schema"):
                 raise ExportScopeError("receipt export intent schema is missing")
             payload = {key: value for key, value in snapshot.items() if key != "snapshot_digest"}
             if (snapshot["snapshot_digest"] != _digest(payload) or snapshot["job_id"] != entry["job_id"]
@@ -221,6 +243,11 @@ class ExportBundleService:
             for file, planned in zip(files, entry["plan"]["files"], strict=True):
                 if any(file[key] != planned[key] for key in ("file_id", "name", "source_key", "page_count")):
                     raise ExportScopeError("export preview file set does not match frozen plan")
+                if snapshot.get("output_mode") in GROUPED_OUTPUT_MODES and any(
+                    file.get(key) != planned.get(key)
+                    for key in ("group_id", "group_kind", "group_name", "grouped_pages")
+                ):
+                    raise ExportScopeError("grouped export preview file set does not match frozen plan")
 
     @staticmethod
     def _public_preview(entry: dict[str, Any]) -> dict[str, Any]:
@@ -233,10 +260,17 @@ class ExportBundleService:
                          **({"include_manifest": snapshot["include_manifest"]} if "include_manifest" in snapshot else {}),
                          **({key: snapshot[key] for key in ("excluded", "excluded_digest")}
                             if snapshot.get("schema") == 2 else {}),
+                         **({key: snapshot[key] for key in (
+                             "expected_grouping_revision", "expected_review_fingerprint",
+                             "own_account_fingerprint", "include_counterparty_pending",
+                         )} if snapshot.get("output_mode") in GROUPED_OUTPUT_MODES else {}),
                          "files": [{key: file[key] for key in ("file_id", "name", "source_key", "page_count",
-                                                               "preview_token", "preview_path", "sha256", "size_bytes") if key in file}
+                                                               "preview_token", "preview_path", "sha256", "size_bytes",
+                                                               "group_id", "group_kind", "group_name", "grouped_pages") if key in file}
                                    for file in entry["files"]],
-                         **{key: entry["plan"][key] for key in ("merged_pages", "source_pages", "total_pages")}})
+                         **{key: entry["plan"][key] for key in ("merged_pages", "source_pages", "total_pages")},
+                         **({"grouped_pages": entry["plan"]["grouped_pages"]}
+                            if entry["plan"].get("schema") == 3 else {})})
 
     def render(self, intent_id: str) -> dict[str, Any]:
         with self.journal.locked(_uuid(intent_id)) as record:
@@ -255,11 +289,40 @@ class ExportBundleService:
                         raise
                     except Exception:
                         raise ExportScopeError("host preview registration is unavailable") from None
-                with hold_export_scope(store, self.review_database, scope_request(entry["scope"]),
-                                       expected_snapshot=entry["scope"]):
+                with hold_export_scope(
+                    store,
+                    self.review_database,
+                    scope_request(entry["scope"]),
+                    expected_snapshot=entry["scope"],
+                ):
                     pass
-                with writable_directory(self.preview_root, self.preview_identity):
-                    for file, planned in zip(entry["files"], entry["plan"]["files"], strict=True):
+                with writable_directory(self.preview_root, self.preview_identity), core._reuse_pdf_export_sources():
+                    planned_files = entry["plan"]["files"]
+                    total_pages = sum(int(planned["page_count"]) for planned in planned_files)
+                    progress_total_pages = total_pages if 0 < total_pages <= EXPORT_PROGRESS_MAX_TOTAL else None
+                    completed_pages = 0
+                    if progress_total_pages is None:
+                        report_export_progress("rendering", force=True)
+                    else:
+                        report_export_progress("rendering", 0, progress_total_pages, "pages", force=True)
+                    for file, planned in zip(entry["files"], planned_files, strict=True):
+                        file_completed_pages = 0
+
+                        def report_page_progress(completed: int) -> None:
+                            nonlocal file_completed_pages
+                            file_completed_pages = completed
+                            completed_total = completed_pages + file_completed_pages
+                            if progress_total_pages is None:
+                                report_export_progress("rendering")
+                            else:
+                                report_export_progress(
+                                    "rendering",
+                                    completed_total,
+                                    progress_total_pages,
+                                    "pages",
+                                    force=completed == int(planned["page_count"]),
+                                )
+
                         selections: dict[str, dict[str, Any]] = {}
                         for output_index, page in enumerate(planned["pages"], start=1):
                             selection = selections.setdefault(page["source_key"], {
@@ -268,22 +331,34 @@ class ExportBundleService:
                             # ordinal for ordering clips. Receipt identity is
                             # kept in the frozen plan/index, never fabricated
                             # as a legacy segment number in persisted records.
-                            ordinal = output_index if entry["plan"].get("schema") == 2 else page["segment_no"]
+                            ordinal = output_index if entry["plan"].get("schema") in {2, 3} else page["segment_no"]
                             selection["segments"].append({"page_number": page["source_page"], "segment_no": ordinal,
                                                            "rect": page["rect"], "keep_full_page": page["keep_full_page"],
                                                            "review_status": "confirmed"})
                         result = core._export_pdf_response({"op": "export_pdf", "output_path": file["preview_path"],
-                                                            "export_token": file["preview_token"], "selections": list(selections.values())})
+                                                            "export_token": file["preview_token"], "selections": list(selections.values()),
+                                                            "_progress": report_page_progress,
+                                                            "_before_save": lambda: report_export_progress("writing_pdf", force=True)})
                         if result.get("status") != "ok":
                             raise ExportScopeError("PDF export preview generation failed", "pdf_export_failed")
+                        report_export_progress("verifying", force=True)
                         identity = core._owned_created_output_identity(file["preview_token"], Path(file["preview_path"]), "pdf")
                         if (result["output_path"] != file["preview_path"] or result["page_count"] != file["page_count"]
                                 or result["sha256"] != identity["sha256"]):
                             raise ExportScopeError("PDF preview does not match frozen output plan")
                         file.update(sha256=identity["sha256"], size_bytes=identity["size"], identity=identity)
-                        record.save(entry)
-                with hold_export_scope(store, self.review_database, scope_request(entry["scope"]),
-                                       expected_snapshot=entry["scope"]):
+                        completed_pages += int(planned["page_count"])
+                        # Every preview token/path was saved at create(), and
+                        # its ownership manifest durably records the PDF above.
+                        # Those tokens are sufficient for close/reconcile after
+                        # a partial render; avoid rewriting the frozen scope
+                        # and plan once per file just to retain progress.
+                with hold_export_scope(
+                    store,
+                    self.review_database,
+                    scope_request(entry["scope"]),
+                    expected_snapshot=entry["scope"],
+                ):
                     entry["state"] = "rendered"
                     record.save(entry)
             return self._public_preview(entry)

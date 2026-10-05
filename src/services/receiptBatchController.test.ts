@@ -12,6 +12,67 @@ const job = (state: ReceiptBatchJobSnapshot['state']): ReceiptBatchJobSnapshot =
 });
 
 describe('ReceiptBatchController', () => {
+  const splitInput = {
+    name: 'synthetic', sources: [{ source_path: 'C:/synthetic.pdf', name: 'synthetic.pdf' }],
+    processing_options: { processing_mode: 'split_all' as const, criteria: null }, match_mode: 'exact' as const,
+  };
+
+  it('waits for the selected account to be bound before starting analysis', async () => {
+    let finishSetup!: () => void;
+    const setupPending = new Promise<void>((resolve) => { finishSetup = resolve; });
+    const client = {
+      create: vi.fn().mockResolvedValue({ status: 'ok', data: job('queued') }),
+      start: vi.fn().mockResolvedValue({ status: 'ok', data: job('ready_for_review') }),
+    } as unknown as ReceiptBatchClient;
+    const controller = new ReceiptBatchController(client);
+    const beforeStart = vi.fn(async (created: ReceiptBatchJobSnapshot, signal: AbortSignal) => {
+      expect(created.id).toBe('job-1');
+      expect(signal.aborted).toBe(false);
+      await setupPending;
+    });
+    const running = controller.createAndStart(splitInput, beforeStart);
+    await vi.waitFor(() => expect(beforeStart).toHaveBeenCalledTimes(1));
+    expect(controller.getSnapshot()).toMatchObject({ phase: 'creating', busy: true });
+    expect(client.start).not.toHaveBeenCalled();
+    finishSetup();
+    expect((await running)?.state).toBe('ready_for_review');
+    expect(client.start).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not start analysis when binding the account fails', async () => {
+    const client = {
+      create: vi.fn().mockResolvedValue({ status: 'ok', data: job('queued') }),
+      start: vi.fn(),
+    } as unknown as ReceiptBatchClient;
+    const controller = new ReceiptBatchController(client);
+    const result = await controller.createAndStart(splitInput, async () => { throw new Error('本方资料保存失败'); });
+    expect(result).toBeNull();
+    expect(client.start).not.toHaveBeenCalled();
+    expect(controller.getSnapshot()).toMatchObject({ phase: 'failed', busy: false, error: '本方资料保存失败' });
+  });
+
+  it('does not start a cleared task after its account setup completes', async () => {
+    let finishSetup!: () => void;
+    let setupSignal: AbortSignal | undefined;
+    const setupPending = new Promise<void>((resolve) => { finishSetup = resolve; });
+    const client = {
+      create: vi.fn().mockResolvedValue({ status: 'ok', data: job('queued') }),
+      start: vi.fn(),
+    } as unknown as ReceiptBatchClient;
+    const controller = new ReceiptBatchController(client);
+    const running = controller.createAndStart(splitInput, async (_created, signal) => {
+      setupSignal = signal;
+      await setupPending;
+    });
+    await vi.waitFor(() => expect(setupSignal).toBeDefined());
+    controller.clear();
+    expect(setupSignal?.aborted).toBe(true);
+    finishSetup();
+    expect(await running).toBeNull();
+    expect(client.start).not.toHaveBeenCalled();
+    expect(controller.getSnapshot()).toMatchObject({ phase: 'idle', job: null, busy: false });
+  });
+
   it('creates and starts a schema-2 job, exposing a ready snapshot', async () => {
     const client = {
       create: vi.fn().mockResolvedValue({ status: 'ok', data: job('queued') }),

@@ -25,7 +25,7 @@ def main() -> None:
     packages = []
     for dist in importlib.metadata.distributions():
         license_files = [str(p).replace('\\', '/') for p in (dist.files or [])
-                         if (p.name.upper().startswith(('LICENSE', 'COPYING', 'NOTICE'))
+                         if (p.name.upper().startswith(('LICENSE', 'LICENCE', 'COPYING', 'NOTICE'))
                              or '/licenses/' in str(p).replace('\\', '/').lower())
                          and p.suffix not in {'.py', '.pyc'}
                          and dist.locate_file(p).is_file()]

@@ -36,7 +36,7 @@
   overflow-wrap: anywhere;
   text-align: right;
 }
-.receipt-batch-entry__mode { display: grid; min-width: 0; gap: 5px; margin: 0; border: 0; padding: 0; }
+.receipt-batch-entry__mode { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(120px, 100%), 1fr)); min-width: 0; gap: 5px 10px; margin: 0; border: 0; padding: 0; }
 .receipt-batch-entry__mode legend { margin: 0 0 .125rem; padding: 0; color: #365267; font-size: var(--font-md, .875rem); font-weight: 700; line-height: 1.35; }
 .receipt-batch-entry__mode label { display: flex; min-width: 0; gap: 7px; align-items: flex-start; color: #20374a; font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; }
 .receipt-batch-entry__mode:not(:disabled) label { cursor: pointer; }
@@ -45,7 +45,7 @@
 .receipt-batch-entry__mode-hint { min-width: 0; margin: -.1rem 0 0; color: #6b8791; font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
 .receipt-batch-entry__error { min-width: 0; color: #a33a32; background: #fff4f2; padding: var(--space-2, .625rem); border-radius: .5rem; font-size: var(--font-sm, .75rem); line-height: 1.45; overflow-wrap: anywhere; }
 .receipt-batch-entry__summary { min-width: 0; color: #356f67; background: #f0faf7; padding: var(--space-2, .625rem); border-radius: .5rem; font-size: var(--font-md, .875rem); line-height: 1.45; overflow-wrap: anywhere; }
-.receipt-batch-entry button { width: 100%; }
+.receipt-batch-entry > button { width: 100%; }
 .receipt-batch-entry .receipt-batch-entry__analyze-action {
   width: min(100%, 170px);
   justify-self: end;

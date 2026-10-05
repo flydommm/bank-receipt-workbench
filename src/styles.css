@@ -71,6 +71,8 @@ mark { background: #f1c979; color: #1e3347; padding: 1px 3px; }
 .crop-box { position: absolute; top: 183px; left: 50px; right: 50px; height: 216px; border: 2px solid #71bd46; background: rgba(178, 222, 133, .08); color: #4c9b2e; font: 10px Inter, sans-serif; padding: 7px; }
 .crop-box i { position: absolute; right: 9px; bottom: 6px; font-style: normal; font-size: 17px; }
 .results-column { display: flex; min-height: 0; flex-direction: column; padding-bottom: 0; }
+.results-column:has(> .receipt-batch-entry[data-mode="split_all"]) { overflow-y: auto; overscroll-behavior: contain; }
+.results-column > .receipt-batch-entry[data-mode="split_all"] { flex: 0 0 auto; }
 .results-column > .panel-heading { flex: 0 0 auto; }
 .analysis-button { display: block; margin: 0 20px 10px; }
 .right-status { flex: 0 0 auto; margin: 0 20px 10px; border: 1px solid #d7e4eb; border-radius: 8px; padding: 8px 10px; background: #f4f8fa; color: #5d778a; font-size: 10px; line-height: 1.5; }

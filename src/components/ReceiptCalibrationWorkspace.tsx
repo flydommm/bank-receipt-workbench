@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { CropEditor } from './CropEditor';
 import { localEngineAdapter, type EnginePagePreview } from './localEngineAdapter';
 import { ReceiptLayoutEditor } from './ReceiptLayoutEditor';
@@ -9,6 +9,11 @@ import { slotRect } from '../domain/receiptLayout';
 import type { PdfRect } from '../domain/cropReview';
 import { calibrationBusy, isReceiptExcluded, matchesReceiptFilter, needsReceiptReview, type ReceiptCalibrationController, type ReceiptCalibrationState } from '../services/receiptCalibrationController';
 import { ReceiptOverview } from './ReceiptOverview';
+import { ReceiptGroupingPanel } from './ReceiptGroupingPanel';
+import { ReceiptGroupingPreview } from './ReceiptGroupingPreview';
+import { ReceiptGroupingOverview } from './ReceiptGroupingOverview';
+import type { ReceiptGroupingSnapshot } from '../domain/receiptGrouping';
+import { exportReceiptGroupingDraft } from '../services/receiptGroupingDraftClient';
 import { SPECIAL_DOCUMENT_LABELS, isSpecialDocumentType } from '../domain/receiptBatch';
 import { ReceiptPagePreviewCache, receiptPageKey, SupersededReceiptPreview } from '../services/receiptPagePreviewCache';
 import { canRetryTemplateSave, templateReferenceAllowed, templateSaveFailureMessage, type ReceiptLayoutTarget } from '../services/receiptLayoutClient';
@@ -143,27 +148,52 @@ const diagnosticMessage = (value: Record<string, unknown>) => {
     cross_boundary_block: '有内容跨越栏位边界', low_confidence_exclude: '有内容被低置信度排除',
     manual_exception_conflict: '本轮与此前单独调整或保留整页的决定冲突',
     excluded_template_protection: '应用模板可能改变已排除片段的边界或命中证据，本轮已阻止保存；请单独核对该页。',
+    template_content_outside_crop: '模板边界会裁掉本页回单的标题、标志或表格正文，已阻止应用；请微调边界后另存模板。',
+    reference_layout_conflict: '保存的模板与当前页面内容不完全匹配，已保留自动识别边界，请核对后再应用模板。',
     content_outside_slot: '有内容在裁剪框外', content_crosses_boundary: '有内容跨越裁剪边界',
   };
   return codes[String(value.code ?? value.kind)] ?? '此页存在需要检查的版式内容';
 };
 
-export function ReceiptCalibrationPane({ state, controller, onExport, onBack, onOpenTemplates, onRemoveSources, initialOutputDirectory, onExportSuccess, onWorkflowStepChange }: Props & {
+export function ReceiptCalibrationPane({ state, controller, onExport, onBack, onOpenTemplates, onRemoveSources, initialOutputDirectory, onExportSuccess, onWorkflowStepChange, groupingEnabled = false }: Props & {
   onExport: () => void; onBack: () => void; onRemoveSources?: () => void;
   onOpenTemplates?: () => void;
   initialOutputDirectory?: string | null; onExportSuccess?: (directory: string) => void;
   onWorkflowStepChange?: (step: 2 | 3) => void;
+  groupingEnabled?: boolean;
 }) {
   const [exportContext, setExportContext] = useState<string | null>(null);
+  const [groupingState, setGroupingState] = useState<{ reviewKey: string; snapshot: ReceiptGroupingSnapshot } | null>(null);
+  const [enteredBatch, setEnteredBatch] = useState<string | null>(null);
+  const [groupingEntry, setGroupingEntry] = useState<string | null>(null);
+  const [groupingBusy, setGroupingBusy] = useState(false);
+  const [groupingFocus, setGroupingFocus] = useState<{ id: string; sequence: number } | null>(null);
+  const [draftNotice, setDraftNotice] = useState<string | null>(null);
+  const [confirmClearSources, setConfirmClearSources] = useState(false);
   const { session, phase, preparation, draft, preview, operation } = state;
+  const reviewKey = session ? receiptExportContextKey(session.prepared, session.items) : '';
+  const batchKey = session ? JSON.stringify([session.prepared.binding.job.id, session.prepared.binding.job.result_revision, session.prepared.binding.contextKey,
+    session.prepared.prepared?.context_key, session.prepared.prepared?.result_revision]) : '';
+  const grouping = groupingEnabled && enteredBatch === batchKey && groupingState?.reviewKey === reviewKey ? groupingState.snapshot : null;
+  const receiveGrouping = useCallback((snapshot: ReceiptGroupingSnapshot | null) => {
+    setGroupingState(snapshot ? { reviewKey, snapshot } : null);
+  }, [reviewKey]);
+  useEffect(() => { setGroupingEntry(null); setGroupingFocus(null); setDraftNotice(null); }, [reviewKey, groupingEnabled]);
+  useEffect(() => { setEnteredBatch(null); setGroupingState(null); setGroupingBusy(false); }, [batchKey, groupingEnabled]);
   const unresolved = session?.items.filter(needsReceiptReview).length ?? 0;
   const retainedCount = session?.items.filter((item) => !isReceiptExcluded(item)).length ?? 0;
-  const exportKey = session ? receiptExportContextKey(session.prepared, session.items) : null;
-  const canExport = retainedCount > 0 && unresolved === 0 && phase === 'results' && !state.reviewConfirming;
+  const exportKey = session ? receiptExportContextKey(session.prepared, session.items, grouping) : null;
+  const groupingReady = !groupingEnabled || Boolean(grouping && grouping.header.counts.own_pending === 0
+    && grouping.header.counts.extraction_pending === 0 && grouping.header.counts.stale === 0);
+  const canEnterGrouping = retainedCount > 0 && unresolved === 0 && phase === 'results' && !state.reviewConfirming;
+  const canExport = canEnterGrouping && groupingReady && (!groupingEnabled || !groupingBusy);
   useEffect(() => {
     if (!canExport || exportContext !== exportKey) setExportContext(null);
   }, [canExport, exportContext, exportKey]);
   const exporting = Boolean(session && canExport && exportContext !== null && exportContext === exportKey);
+  const showingGrouping = groupingEnabled && enteredBatch === batchKey && groupingEntry === reviewKey && canEnterGrouping && !exporting;
+  useEffect(() => { if (!showingGrouping) setConfirmClearSources(false); }, [showingGrouping]);
+  const startExport = () => { if (canExport) { setExportContext(exportKey); onExport(); } };
   useEffect(() => { onWorkflowStepChange?.(exporting ? 3 : 2); }, [exporting, onWorkflowStepChange]);
   if (!session) return <p role="status">正在载入审核工作区…</p>;
   const sample = session.items.find((item) => item.original.id === state.selectedId);
@@ -297,15 +327,57 @@ export function ReceiptCalibrationPane({ state, controller, onExport, onBack, on
           <button type="button" onClick={() => void controller.undo()} disabled={!operation || undoing}>撤销本轮</button>
           <button type="button" className="primary" onClick={() => void controller.leave()}>{applyingTemplate ? '查看待复核片段' : '完成微调，返回结果'}</button></div></>}
     </div>;
-  return <section className="receipt-calibration-pane panel" data-phase={phase} aria-label="回单版式与预览">
-    <div className="receipt-calibration-overview" hidden={phase !== 'results' || exporting}>
-      <ReceiptOverview state={state} controller={controller} canExport={canExport} active={phase === 'results' && !exporting}
+  return <section className="receipt-calibration-pane panel" data-phase={phase} data-grouping={showingGrouping || undefined} aria-label="回单版式与预览">
+    <div className="receipt-calibration-overview" hidden={phase !== 'results' || exporting || showingGrouping}>
+      <ReceiptOverview state={state} controller={controller} canExport={groupingEnabled ? canEnterGrouping : canExport}
+        primaryActionLabel={groupingEnabled ? '进入交易对手分组' : '导出回单'}
+        active={phase === 'results' && !exporting && !showingGrouping} requestedSegment={groupingFocus}
         onBack={onBack} onOpenTemplates={onOpenTemplates}
-        onExport={() => { if (canExport) { setExportContext(exportKey); onExport(); } }}
+        onExport={groupingEnabled ? () => { if (canEnterGrouping) { setEnteredBatch(batchKey); setGroupingEntry(reviewKey); } } : startExport}
         renderPage={(card) => <ReceiptSourcePage path={card.path} sha={card.sha} page={card.page} pageCount={card.pageCount}
           width={card.width} height={card.height} rect={card.rect ?? null} onChange={() => undefined} />} />
     </div>
+    {groupingEnabled && enteredBatch === batchKey && <div className="receipt-calibration-grouping" hidden={!showingGrouping}>
+      {confirmClearSources && <div className="receipt-calibration-clear-sources" role="alert">
+        <span>清除本次来源并返回导入页面？原始 PDF、已导出的文件和已保存模板都会保留。</span>
+        <button type="button" disabled={groupingBusy} onClick={() => setConfirmClearSources(false)}>取消清除</button>
+        <button type="button" disabled={groupingBusy} onClick={() => {
+          if (!groupingBusy) { setConfirmClearSources(false); onRemoveSources?.(); }
+        }}>确认清除来源</button>
+      </div>}
+      <ReceiptGroupingPanel key={batchKey} jobId={session.prepared.binding.job.id}
+        resultRevision={session.prepared.prepared?.result_revision ?? session.prepared.binding.job.result_revision!}
+        reviewItems={session.items} onSnapshotChange={receiveGrouping}
+        active={showingGrouping} autoExtract onBusyChange={setGroupingBusy} initialOutputDirectory={initialOutputDirectory}
+        onBack={() => { if (!groupingBusy) setGroupingEntry(null); }} onExport={startExport} canExport={canExport}
+        onBackToAnalysis={() => { if (!groupingBusy) onBack(); }}
+        onRemoveSources={onRemoveSources ? () => {
+          if (!groupingBusy) setConfirmClearSources(true);
+        } : undefined}
+        disabled={phase !== 'results' || exporting || state.reviewConfirming}
+        onSelectSegment={(id) => {
+          if (groupingBusy) return;
+          setGroupingEntry(null); controller.select(id);
+          setGroupingFocus((previous) => ({ id, sequence: (previous?.sequence ?? 0) + 1 }));
+        }}
+        renderPreview={(id, { controls, fieldSelection }) => {
+          const item = session.items.find((entry) => entry.original.id === id) ?? null;
+          const itemSource = session.prepared.binding.job.sources.find((entry) => entry.source_key === item?.original.source_key) ?? null;
+          return <ReceiptGroupingPreview reviewItem={item} source={itemSource} active={showingGrouping} contextKey={batchKey} controls={controls} fieldSelection={fieldSelection} />;
+        }}
+        renderOverview={(context) => <ReceiptGroupingOverview session={session} {...context} />}
+        onExportDraft={async (snapshot) => {
+          setDraftNotice(null);
+          const directory = await localEngineAdapter.pickOutputFolder(initialOutputDirectory);
+          if (!directory) return;
+          const receipt = await exportReceiptGroupingDraft(snapshot.header, directory);
+          setDraftNotice(`核对草稿已保存：${receipt.path}。修改请在工作台完成后重新导出。`);
+          onExportSuccess?.(directory);
+        }} />
+      {draftNotice && <p role="status">{draftNotice}</p>}
+    </div>}
     {exporting ? <ReceiptExportWorkspace key={exportContext} prepared={session.prepared} items={session.items} onClose={() => setExportContext(null)}
+      grouping={grouping}
       onRemoveSources={onRemoveSources} initialOutputDirectory={initialOutputDirectory} onExportSuccess={onExportSuccess} />
       : phase !== 'results' && <ReceiptPaneSplit preview={pagePreview} controls={controls} resizable={['editing', 'previewing', 'preview', 'saving', 'uncertain'].includes(phase)} />}
   </section>;

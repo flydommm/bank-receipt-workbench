@@ -22,8 +22,9 @@ from .crop_templates import describe_crop_page
 from .receipt_layout import (
     PageLayoutEvidence, ReceiptPageComputation, LayoutSuggestion,
     collect_visible_objects, compatible_reference, compute_receipt_page, suggest_layout,
-    refresh_saved_layout_identity,
+    refresh_saved_layout_identity, contains_verified_crop_envelopes,
 )
+from .receipt_visual_identity import requires_verified_crop_envelopes
 from .receipt_layout_models import parse_processing_options, parse_layout_definition
 from .private_temp import private_temporary_directory
 from .search import SearchBudget, SearchClause, SearchMatch, SearchQuery, search_pages, search_pages_multi
@@ -152,6 +153,11 @@ class BatchPdfSource:
             self._receipt_evidence.popitem(last=False)
         return evidence
 
+    def verified_template_crop_envelopes(self, page: int) -> tuple[tuple[float, ...], ...]:
+        """Read source-bound outer form bounds without OCR or changing a crop."""
+        from .receipt_visual_identity import verified_crop_envelopes
+        return verified_crop_envelopes(self._page_evidence(page, allow_ocr=False).descriptor)
+
     def compute_receipt_page(
         self, page: int, processing_options: dict[str, Any], match_mode: str, budget: SearchBudget,
         *, layout_definition: dict[str, Any] | None = None, slot_count: int | None = None,
@@ -272,8 +278,16 @@ class BatchPdfSource:
             elif compatible:
                 historical = apply_historical_reference(initial.layout_definition, historical_layouts)
                 if historical is not None:
-                    suggestion = LayoutSuggestion(historical, "historical_reference", True,
-                        (*initial.diagnostics, {"code": "historical_layout_applied"}))
+                    if (requires_verified_crop_envelopes(historical) and not contains_verified_crop_envelopes(
+                            historical, self.verified_template_crop_envelopes(page))):
+                        # A matching outer form does not imply unchanged body
+                        # height. Retain the automatic crop if any current
+                        # table would be truncated or its proof is unavailable.
+                        suggestion = replace(initial, needs_review=True,
+                            diagnostics=(*initial.diagnostics, {"code": "reference_layout_conflict"}))
+                    else:
+                        suggestion = LayoutSuggestion(historical, "historical_reference", True,
+                            (*initial.diagnostics, {"code": "historical_layout_applied"}))
         return compute_receipt_page(evidence, self.sha256, options, match_mode=match_mode, budget=budget,
                                     suggestion=suggestion, source_policy=policy, reference=reference,
                                     workspace_id=workspace_id, slot_count=slot_count,

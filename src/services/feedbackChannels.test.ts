@@ -36,7 +36,8 @@ afterEach(() => {
 });
 
 describe('feedback channel service', () => {
-  it.each(['email', 'github'] as const)('opens the %s channel with only its name', async (channel) => {
+  it('opens the email channel with only its name', async () => {
+    const channel = 'email' as const;
     const call = vi.fn<FeedbackInvoke>().mockResolvedValue({ status: 'opened' });
 
     await expect(openFeedbackChannel(channel, call)).resolves.toBeUndefined();
@@ -52,7 +53,7 @@ describe('feedback channel service', () => {
     await expect(openFeedbackChannel('browser' as FeedbackChannel, call)).rejects.toMatchObject({
       name: 'FeedbackChannelError',
       code: 'INVALID_CHANNEL',
-      message: '反馈渠道无效，请选择邮箱或 GitHub。',
+      message: '反馈渠道无效，请选择邮箱。',
     });
     expect(call).not.toHaveBeenCalled();
   });
@@ -60,7 +61,7 @@ describe('feedback channel service', () => {
   it('requires the desktop bridge when no invoke implementation is supplied', async () => {
     await expect(openFeedbackChannel('email')).rejects.toMatchObject({
       code: 'TAURI_UNAVAILABLE',
-      message: '打开反馈入口需要在桌面应用中运行，请通过屏幕上的邮箱、微信或 GitHub 手动联系。',
+      message: '打开邮件入口需要在桌面应用中运行，请复制屏幕上的邮箱手动联系。',
     });
   });
 
@@ -70,7 +71,7 @@ describe('feedback channel service', () => {
 
     await expect(openFeedbackChannel('email', call)).rejects.toMatchObject({
       code: 'OPEN_FAILED',
-      message: '无法打开反馈入口，请通过屏幕上的邮箱、微信或 GitHub 手动联系。',
+      message: '无法打开邮件客户端，请复制屏幕上的邮箱手动联系。',
     });
     await expect(openFeedbackChannel('email', call)).rejects.not.toThrow('secret@example.com');
   });
@@ -84,9 +85,9 @@ describe('feedback channel service', () => {
     enableTauri();
     const call = vi.fn<FeedbackInvoke>().mockResolvedValue(response);
 
-    await expect(openFeedbackChannel('github', call)).rejects.toMatchObject({
+    await expect(openFeedbackChannel('email', call)).rejects.toMatchObject({
       code: 'INVALID_RESPONSE',
-      message: '打开反馈入口返回了无效结果，请通过屏幕上的邮箱、微信或 GitHub 手动联系。',
+      message: '打开邮件入口返回了无效结果，请复制屏幕上的邮箱手动联系。',
     });
   });
 

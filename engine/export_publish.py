@@ -17,6 +17,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import stat
 from typing import Any, Iterator, TYPE_CHECKING
 from uuid import UUID, uuid4
@@ -30,8 +31,9 @@ from .export_directory import (
     rename_directory_no_replace as _rename_directory_handle,
     writable_directory,
 )
-from .export_scope import ExportScopeError, hold_export_scope, _digest
+from .export_scope import ExportScopeError, GROUPED_OUTPUT_MODES, hold_export_scope, _digest
 from .export_plan import _normalise_output_name
+from .export_progress import report_export_progress
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle guard
     from .export_bundle import ExportBundleService
@@ -40,6 +42,7 @@ if TYPE_CHECKING:  # pragma: no cover - import cycle guard
 MAX_RESIDUAL_ATTEMPTS = 16
 _CHUNK_SIZE = 1024 * 1024
 _WINDOWS_REPARSE_POINT = 0x0400
+_SHA256 = re.compile(r"^[a-f0-9]{64}$")
 _rename_expectations: ContextVar[tuple[object, object] | None] = ContextVar(
     "export_publish_rename_expectations",
     default=None,
@@ -375,7 +378,11 @@ def _build_manifest(entry: dict[str, Any], attempt: dict[str, Any]) -> dict[str,
             })
     mappings: list[dict[str, object]] = []
     mapping_headers = exporter.MAPPING_HEADERS
-    if scope.get("schema") == 2:
+    grouped = scope.get("output_mode") in GROUPED_OUTPUT_MODES
+    if grouped:
+        from .receipt_grouped_export import GROUPED_MAPPING_HEADERS
+        mapping_headers = GROUPED_MAPPING_HEADERS
+    elif scope.get("schema") == 2:
         from .receipt_export_plan import RECEIPT_MAPPING_HEADERS
         mapping_headers = RECEIPT_MAPPING_HEADERS
     for mapping in plan.get("mappings", []):
@@ -394,7 +401,7 @@ def _build_manifest(entry: dict[str, Any], attempt: dict[str, Any]) -> dict[str,
     if not isinstance(summary, dict):
         summary = {}
     return {
-        "version": 2 if scope.get("schema") == 2 else 1,
+        "version": 3 if grouped else (2 if scope.get("schema") == 2 else 1),
         "intent_id": entry.get("intent_id"),
         "job_id": entry.get("job_id"),
         "result_revision": scope.get("result_revision"),
@@ -409,6 +416,11 @@ def _build_manifest(entry: dict[str, Any], attempt: dict[str, Any]) -> dict[str,
             **({"processing_mode": scope["processing_options"]["processing_mode"]} if scope.get("schema") == 2 else {}),
             **({"excluded": deepcopy(scope["excluded"]), "excluded_digest": scope["excluded_digest"]}
                if entry.get("receipt_schema") == 2 else {}),
+            **({key: scope[key] for key in (
+                "expected_grouping_revision", "expected_review_fingerprint",
+                "own_account_fingerprint", "include_counterparty_pending",
+            )} if grouped else {}),
+            **({"grouped_pages": plan.get("grouped_pages", 0)} if grouped else {}),
             **({"output_name": scope["output_name"]} if "output_name" in scope else {}),
         },
         "sources": sources,
@@ -421,7 +433,9 @@ def _receipt(entry: dict[str, Any], attempt: dict[str, Any], final_directory: Pa
     _include_manifest(entry)
     scope = entry["scope"]
     plan = entry["plan"]
+    grouped = isinstance(scope, dict) and scope.get("output_mode") in GROUPED_OUTPUT_MODES
     files: list[dict[str, object]] = []
+    planned_pdf_index = 0
     for record in attempt.get("files", []):
         if not isinstance(record, dict) or record.get("state") != "created":
             raise ExportPublishError("publication file set is incomplete")
@@ -437,7 +451,20 @@ def _receipt(entry: dict[str, Any], attempt: dict[str, Any], final_directory: Pa
         }
         if record.get("kind") == "pdf":
             item["page_count"] = record.get("page_count")
+            if grouped:
+                planned_files = plan.get("files", [])
+                if planned_pdf_index >= len(planned_files):
+                    raise ExportPublishError("grouped PDF publication file set is incomplete")
+                planned = planned_files[planned_pdf_index]
+                if not isinstance(planned, dict) or planned.get("name") != record.get("name"):
+                    raise ExportPublishError("grouped PDF plan does not match publication files")
+                for key in ("group_id", "group_kind", "group_name", "grouped_pages"):
+                    if key in planned:
+                        item[key] = planned[key]
+                planned_pdf_index += 1
         files.append(item)
+    if grouped and planned_pdf_index != len(plan.get("files", [])):
+        raise ExportPublishError("grouped PDF publication file set is incomplete")
     summary = deepcopy(scope.get("summary", {}))
     if not isinstance(summary, dict):
         summary = {}
@@ -446,14 +473,20 @@ def _receipt(entry: dict[str, Any], attempt: dict[str, Any], final_directory: Pa
         **({"receipt_schema": entry["receipt_schema"]} if "receipt_schema" in entry else {}),
         **({"include_manifest": entry["include_manifest"]} if "include_manifest" in entry else {}),
         "state": "published",
+        **({"output_mode": "by_counterparty_merged"} if scope.get("output_mode") == "by_counterparty_merged" else {}),
         "directory": str(final_directory),
         "files": files,
         "summary": summary,
         **({"excluded": deepcopy(scope["excluded"]), "excluded_digest": scope["excluded_digest"]}
            if entry.get("receipt_schema") == 2 else {}),
+        **({key: scope[key] for key in (
+            "expected_grouping_revision", "expected_review_fingerprint",
+            "own_account_fingerprint", "include_counterparty_pending",
+        )} if grouped else {}),
         "merged_pages": plan.get("merged_pages", 0),
         "source_pages": plan.get("source_pages", 0),
         "total_pages": plan.get("total_pages", 0),
+        **({"grouped_pages": plan.get("grouped_pages", 0)} if grouped else {}),
         "row_count": summary.get("selected_count", 0) if scope.get("include_xlsx") else 0,
         **({
             "merged_name": next(
@@ -482,6 +515,16 @@ def _validated_receipt(entry: dict[str, Any]) -> dict[str, object]:
             or value.get("receipt_schema") != receipt_schema
             or ("receipt_schema" in value and type(value["receipt_schema"]) is not int)):
         raise ExportPublishError("published receipt schema does not match its intent")
+    scope = entry.get("scope")
+    grouped = ((isinstance(scope, dict) and scope.get("output_mode") in GROUPED_OUTPUT_MODES)
+               or ("grouped_pages" in value and "expected_grouping_revision" in value))
+    grouped_merged = value.get("output_mode") == "by_counterparty_merged"
+    if "output_mode" in value and not grouped_merged:
+        raise ExportPublishError("published receipt output mode is invalid")
+    if grouped_merged and not grouped:
+        raise ExportPublishError("published receipt grouped mode is incomplete")
+    if isinstance(scope, dict) and grouped_merged != (scope.get("output_mode") == "by_counterparty_merged"):
+        raise ExportPublishError("published receipt output mode does not match its intent")
     directory_raw = value.get("directory")
     files = value.get("files")
     if not isinstance(directory_raw, str) or not Path(directory_raw).is_absolute() or not isinstance(files, list):
@@ -519,6 +562,18 @@ def _validated_receipt(entry: dict[str, Any]) -> dict[str, object]:
             pdf_count += 1
             if not name.lower().endswith(".pdf") or type(item.get("page_count")) is not int or item["page_count"] < 1:
                 raise ExportPublishError("published PDF receipt is invalid")
+            if grouped:
+                group_fields = {"group_id", "group_kind", "group_name"}
+                if (type(item.get("grouped_pages")) is not int or item["grouped_pages"] < 1
+                        or item["grouped_pages"] != item["page_count"]):
+                    raise ExportPublishError("published grouped PDF receipt is invalid")
+                if grouped_merged:
+                    if group_fields.intersection(item):
+                        raise ExportPublishError("merged grouped PDF cannot claim one group")
+                elif (not isinstance(item.get("group_id"), str) or not item["group_id"].strip()
+                        or item.get("group_kind") not in {"named", "internal", "blank", "special", "counterparty_pending"}
+                        or not isinstance(item.get("group_name"), str) or not item["group_name"].strip()):
+                    raise ExportPublishError("published grouped PDF receipt is invalid")
         elif kind == "xlsx":
             xlsx_count += 1
             if name != "匹配索引.xlsx" or "page_count" in item:
@@ -532,12 +587,31 @@ def _validated_receipt(entry: dict[str, Any]) -> dict[str, object]:
     for key in ("summary", "merged_pages", "source_pages", "total_pages", "row_count"):
         if key not in value:
             raise ExportPublishError("published receipt is incomplete")
+    if grouped:
+        if xlsx_count != 1 or (grouped_merged and pdf_count != 1):
+            raise ExportPublishError("published grouped receipt file set is incomplete")
+        if (type(value.get("expected_grouping_revision")) is not int
+                or value["expected_grouping_revision"] < 0
+                or _SHA256.fullmatch(str(value.get("expected_review_fingerprint", ""))) is None
+                or _SHA256.fullmatch(str(value.get("own_account_fingerprint", ""))) is None
+                or type(value.get("include_counterparty_pending")) is not bool
+                or type(value.get("grouped_pages")) is not int
+                or value["grouped_pages"] < 1
+                or value.get("merged_pages") != 0
+                or value.get("source_pages") != 0
+                or value.get("total_pages") != value.get("grouped_pages")):
+            raise ExportPublishError("published grouped receipt binding or totals are invalid")
+        if isinstance(scope, dict) and any(
+            value.get(key) != scope.get(key)
+            for key in ("expected_grouping_revision", "expected_review_fingerprint",
+                        "own_account_fingerprint", "include_counterparty_pending")
+        ):
+            raise ExportPublishError("published grouped receipt binding does not match frozen scope")
     if not isinstance(value.get("summary"), dict):
         raise ExportPublishError("published receipt summary is invalid")
     exclusion_fields = {"excluded", "excluded_digest"}
-    scope = entry.get("scope")
     has_exclusions_contract = (receipt_schema == 2 or bool(exclusion_fields.intersection(value)) or "excluded_count" in value["summary"]
-                              or isinstance(scope, dict) and "excluded" in scope)
+                              or (isinstance(scope, dict) and "excluded" in scope))
     if has_exclusions_contract:
         from .receipt_export_plan import validate_receipt_exclusion_audit
         from .receipt_review_models import ReceiptReviewError
@@ -562,6 +636,10 @@ def _validated_receipt(entry: dict[str, Any]) -> dict[str, object]:
     if any(type(value[key]) is not int or value[key] < 0 for key in ("merged_pages", "source_pages", "total_pages", "row_count")):
         raise ExportPublishError("published receipt totals are invalid")
     pdf_files = [item for item in files if isinstance(item, dict) and item.get("kind") == "pdf"]
+    if grouped:
+        if sum(item.get("page_count", 0) for item in pdf_files) != value["grouped_pages"]:
+            raise ExportPublishError("published grouped receipt page totals are invalid")
+        return deepcopy(value)
     inferred_merged_name = declared_merged_name
     if inferred_merged_name is None and any(item.get("name") == "全部匹配结果.pdf" for item in pdf_files):
         inferred_merged_name = "全部匹配结果.pdf"
@@ -644,7 +722,12 @@ def _write_xlsx(path: Path, plan: dict[str, Any], scope: dict[str, Any]) -> dict
         output = path.open("x+b")
         before = os.fstat(output.fileno())
         index_options = {}
-        if scope.get("schema") == 2:
+        extra_sheets = ()
+        if scope.get("output_mode") in GROUPED_OUTPUT_MODES:
+            from .receipt_grouped_export import GROUPED_DETAIL_HEADERS, GROUPED_INDEX_HEADERS, GROUPED_MAPPING_HEADERS
+            index_options = {"headers": GROUPED_INDEX_HEADERS, "mapping_headers": GROUPED_MAPPING_HEADERS}
+            extra_sheets = (("核对明细", GROUPED_DETAIL_HEADERS, plan.get("detail_rows", [])),)
+        elif scope.get("schema") == 2:
             from .receipt_export_plan import RECEIPT_INDEX_HEADERS, RECEIPT_MAPPING_HEADERS
             index_options = {"headers": RECEIPT_INDEX_HEADERS, "mapping_headers": RECEIPT_MAPPING_HEADERS}
         result = exporter.export_bundle_index(
@@ -652,6 +735,7 @@ def _write_xlsx(path: Path, plan: dict[str, Any], scope: dict[str, Any]) -> dict
             plan.get("index_rows", []),
             plan.get("mappings", []),
             _scope_rows(scope),
+            extra_sheets=extra_sheets,
             **index_options,
         )
         if result is not None and result is not output:
@@ -1115,6 +1199,9 @@ def _build_attempt_outputs(record: Any, entry: dict[str, Any], attempt: dict[str
     if not isinstance(planned_files, list) or len(planned_files) != len(descriptors):
         raise ExportPublishError("frozen output file set is invalid")
 
+    pdf_total = len(planned_files)
+    saved_pdfs = 0
+    report_export_progress("saving", 0, pdf_total, "files", force=True)
     for descriptor, planned in zip(descriptors, planned_files, strict=True):
         if not isinstance(descriptor, dict) or not isinstance(planned, dict):
             raise ExportPublishError("frozen output file set is invalid")
@@ -1147,7 +1234,13 @@ def _build_attempt_outputs(record: Any, entry: dict[str, Any], attempt: dict[str
         output["state"] = "created"
         output["identity"] = identity
         record.save(entry)
+        saved_pdfs += 1
+        report_export_progress("saving", saved_pdfs, pdf_total, "files", force=True)
 
+    index_total = int(bool(scope.get("include_xlsx"))) + int(_include_manifest(entry))
+    indexed = 0
+    if index_total:
+        report_export_progress("indexing", 0, index_total, "files", force=True)
     if bool(scope.get("include_xlsx")):
         output = _reserve_file(attempt, temporary, "匹配索引.xlsx", "xlsx")
         record.save(entry)
@@ -1167,6 +1260,8 @@ def _build_attempt_outputs(record: Any, entry: dict[str, Any], attempt: dict[str
         output["state"] = "created"
         output["identity"] = identity
         record.save(entry)
+        indexed += 1
+        report_export_progress("indexing", indexed, index_total, "files", force=True)
 
     if _include_manifest(entry):
         manifest_output = _reserve_file(attempt, temporary, "导出清单.json", "json")
@@ -1175,6 +1270,8 @@ def _build_attempt_outputs(record: Any, entry: dict[str, Any], attempt: dict[str
         manifest_output["state"] = "created"
         manifest_output["identity"] = identity
         record.save(entry)
+        indexed += 1
+        report_export_progress("indexing", indexed, index_total, "files", force=True)
 
     attempt["expected_receipt"] = _receipt(entry, attempt, Path(str(attempt["final_path"])))
     attempt["state"] = "ready"
@@ -1193,6 +1290,7 @@ def _finalise_attempt(service: "ExportBundleService", record: Any, entry: dict[s
 
     renamed = False
     try:
+        report_export_progress("verifying", force=True)
         residuals = _verify_temporary_directory(attempt, temporary)
         if not residuals:
             residuals = _verify_attempt_files(attempt, temporary)

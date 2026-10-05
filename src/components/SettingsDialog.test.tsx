@@ -113,6 +113,13 @@ describe('SettingsDialog', () => {
     });
   });
 
+  it('explains that the XLSX default is applied when export settings open', () => {
+    renderDialog();
+
+    expect(screen.getByText('打开导出设置时使用此默认值，仍可按任务单独调整。')).toBeTruthy();
+    expect(screen.queryByText('进入导出预览时使用此默认值，仍可按任务单独调整。')).toBeNull();
+  });
+
   it('only renders keyboard shortcut help when hints are enabled', () => {
     const { view, ...props } = renderDialog();
 

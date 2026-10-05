@@ -1,0 +1,48 @@
+.receipt-field-rule-editor { min-width: 0; color: #36515f; font-size: 12px; }
+.receipt-field-rule-editor > header { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.receipt-field-rule-editor p { margin: 8px 0; line-height: 1.6; }
+.receipt-field-rule-editor label { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
+.receipt-field-rule-editor select { max-width: 340px; }
+.receipt-field-rule-editor__fields { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.receipt-field-rule-editor__fields strong { color: #267565; }
+.receipt-field-rule-editor__regions { display: flex; gap: 6px; flex-wrap: wrap; }
+.receipt-field-rule-editor__regions > span { padding: 3px 6px; border-radius: 4px; background: #eaf5f1; }
+.receipt-field-rule-editor__regions button { padding: 1px 4px; min-height: 24px; }
+.receipt-field-rule-editor__apply { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 0; }
+.receipt-field-rule-editor__apply small { flex-basis: 100%; color: #7d6b40; }
+.receipt-field-rule-editor__differences { padding: 8px 0; }
+.receipt-field-rule-editor__differences table { table-layout: fixed; }
+.receipt-field-rule-editor__differences td small { display: block; margin-top: 4px; }
+.receipt-field-rule-editor__pages { display: flex; gap: 8px; justify-content: flex-end; align-items: center; padding-top: 8px; }
+.receipt-field-rule-editor__preview { margin-top: 8px; border: 1px solid #d8e4e4; }
+.receipt-field-rule-editor > header { padding-bottom: 8px; border-bottom: 1px solid #dfe7e9; }
+.receipt-field-rule-editor > header strong { color: #22394a; font-size: 15px; }
+.receipt-field-rule-editor > header p { margin: 4px 0 0; color: #718592; }
+.receipt-field-rule-editor__setup, .receipt-field-rule-editor__results, .receipt-field-rule-editor__confirm { padding: 12px; margin: 10px 0; border: 1px solid #dfe7e9; border-radius: 8px; background: #f8fbfa; }
+.receipt-field-rule-editor__extra { padding: 8px 0; }
+.receipt-field-rule-editor__extra summary { color: #257b6d; cursor: pointer; }
+.receipt-field-rule-editor__hint { color: #718592; font-size: 11px; }
+.receipt-field-rule-editor__filters { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.receipt-grouping-panel .receipt-field-rule-editor button[aria-pressed="true"] { color: #1d695d; background: #eaf5f1; border-color: #a9d2c5; font-weight: 600; }
+.receipt-field-rule-editor__results select { flex: 1; max-width: 600px; }
+.receipt-field-rule-editor__preview-caption { padding: 7px 10px; background: #f2f6f7; color: #527383; }
+.receipt-field-rule-editor__differences .is-previewing { background: #edf7f3; }
+.receipt-field-rule-editor__differences td { overflow-wrap: anywhere; }
+.receipt-field-rule-editor__confirm { background: #f0f8f5; }
+.receipt-field-rule-editor__confirm input[type="text"], .receipt-field-rule-editor__confirm input:not([type]) { flex: 1; max-width: 480px; }
+.receipt-field-rule-editor__confirm .receipt-field-rule-editor__apply { justify-content: flex-end; }
+.receipt-grouping-issue-filter { padding: 6px 11px; background: #fffaf0; font-size: 11px; }
+.receipt-grouping-issue-filter select { display: block; width: 100%; margin-top: 4px; }
+.receipt-grouping-rule-entry { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.receipt-grouping-rule-entry small { color: #7b9096; font-size: 10px; }
+.receipt-grouping-rule-tools { padding: 5px 14px; border-bottom: 1px solid #dfe7e9; color: #527383; font-size: 11px; }
+.receipt-grouping-rule-tools > summary { cursor: pointer; }
+.receipt-grouping-rule-tools__actions { display: flex; gap: 7px; flex-wrap: wrap; padding: 7px 0; }
+.receipt-grouping-rule-tools__rules { margin: 6px 0; padding-left: 18px; max-height: 170px; overflow: auto; }
+.receipt-grouping-rule-tools__rules li { padding: 4px 0; }
+.receipt-grouping-rule-tools__rules button { margin-left: 8px; }
+.receipt-grouping-diagnostics { padding: 10px; border: 1px solid #dfe7e9; border-radius: 6px; background: #f9fbfb; }
+.receipt-grouping-diagnostics dl { display: flex; gap: 8px; flex-wrap: wrap; }
+.receipt-grouping-diagnostics dd { margin: 0 12px 0 0; }
+.receipt-grouping-diagnostics ul { margin: 6px 0; }
+.receipt-grouping-diagnostics__details { max-height: 210px; overflow: auto; }

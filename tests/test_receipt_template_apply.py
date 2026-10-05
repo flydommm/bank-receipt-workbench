@@ -14,6 +14,7 @@ from engine.layout_template_store import LayoutTemplateStore
 from engine.receipt_calibration_journal import undo_calibration_operation
 from engine.receipt_checkpoint import encode_receipt_checkpoint
 from engine.receipt_layout_history import TemplateUnavailableError
+from engine.receipt_layout_review import TemplateNoTargetsError
 from engine.receipt_layout_reference import save_reference_layout
 from engine.receipt_snapshot import assemble_receipt_results
 from engine.receipt_layout_calibration import validate_complete_layout
@@ -298,7 +299,7 @@ def test_incompatible_bank_template_does_not_apply_to_existing_result(tmp_path):
         other = _ready(store, [_pdf(tmp_path, "other", title="中国民生银行业务回单", counts=(3,))], ALL)
         prepared = _prepared(store, other, review)
         template = save_reference_layout(_draft(prepared), templates, "other-bank-layout")
-        with pytest.raises(TemplateUnavailableError):
+        with pytest.raises(TemplateNoTargetsError):
             _apply(store, target, review, templates, template["id"])
 
 

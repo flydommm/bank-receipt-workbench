@@ -123,9 +123,24 @@ afterEach(() => {
 });
 
 describe('ReceiptOverview', () => {
+  it('limits thumbnail selections to a group and opens a requested source without changing review records', async () => {
+    const currentSession = session([item('first', 1), item('second', 2)]);
+    const service = controller();
+    const props = { state: state(currentSession), controller: service, canExport: false,
+      onExport: vi.fn(), onBack: vi.fn(), renderPage: vi.fn(() => <div>合成原件预览</div>) };
+    const view = render(<ReceiptOverview {...props} groupingFilterIds={['second']} />);
+    expect(screen.getByRole('checkbox', { name: '全选当前筛选结果（1 处）' })).toBeTruthy();
+    expect(view.container.querySelector('[data-card-id="first"]')).toBeNull();
+    expect(view.container.querySelector('[data-card-id="second"]')).toBeTruthy();
+    view.rerender(<ReceiptOverview {...props} groupingFilterIds={null} requestedSegment={{ id: 'first', sequence: 1 }} />);
+    await screen.findByRole('dialog');
+    expect(screen.getByText('合成原件预览')).toBeTruthy();
+    expect(service.reviewSelection).not.toHaveBeenCalled();
+    expect(service.classifySelection).not.toHaveBeenCalled();
+  });
   it('shows the review order without making template saving a prerequisite for every receipt', () => {
     renderOverview(session([item('id-1', 1)]));
-    expect(screen.getByRole('note').textContent).toContain('核对并排除无效 → 核对特殊单证 → 应用模板或微调 → 逐栏复核（可保存或更新模板） → 检查预览 → 导出');
+    expect(screen.getByRole('note').textContent).toContain('排除无效 → 核对特殊单证 → 必要时调整边界或模板 → 完成复核 → 检查并导出');
   });
 
   it('offers current-result template preview only after special and suspected items are handled', () => {
@@ -173,6 +188,70 @@ describe('ReceiptOverview', () => {
     fireEvent.click(screen.getByRole('button', { name: '原页总览' }));
     await waitFor(() => expect(view.container.querySelectorAll('.pdf-thumbnail-overlay.attention-suspected')).toHaveLength(1));
     expect(view.container.querySelectorAll('.pdf-thumbnail-overlay.attention-special')).toHaveLength(1);
+  });
+
+  it('projects ordinary fragment status and boundaries consistently in both overview modes', () => {
+    const automatic = item('automatic', 1, '/a.pdf', { original: original('automatic', 1, '/a.pdf', { needs_review: false }) });
+    const pending = item('pending', 1);
+    const confirmed = item('confirmed', 1);
+    confirmed.record = record(confirmed, 'confirmed');
+    const currentSession = session([automatic, pending, confirmed], { sources: [source('/a.pdf', '三种状态.pdf', 1)] });
+    const originalReferences = currentSession.items.map((entry) => ({ original: entry.original, record: entry.record }));
+
+    const receiptCards = buildReceiptOverviewCards(currentSession, currentSession.items, 'receipts', 'all', true);
+    expect(receiptCards.map((card) => [card.id, card.tone, card.badge])).toEqual([
+      ['automatic', 'automatic', '自动候选'],
+      ['pending', 'pending', '待复核'],
+      ['confirmed', 'confirmed', '已确认'],
+    ]);
+    for (const card of receiptCards) {
+      expect(card.rect).toBeTruthy();
+      expect(card.overlays).toHaveLength(1);
+      expect(card.overlays?.[0]).toMatchObject({ rect: card.rect, tone: card.tone, attention: card.attention, badge: card.badge });
+      expect(card.overlays?.[0]?.label).toContain(card.label);
+    }
+
+    const pageCard = buildReceiptOverviewCards(currentSession, currentSession.items, 'pages', 'all', true)[0];
+    expect(pageCard.tone).toBeUndefined();
+    expect(pageCard.badge).toBe('3 / 3 处');
+    expect(pageCard.ids).toEqual(['automatic', 'pending', 'confirmed']);
+    expect(pageCard.overlays?.map((overlay) => [overlay.tone, overlay.attention, overlay.badge])).toEqual([
+      ['automatic', undefined, '自动候选'],
+      ['pending', undefined, '待复核'],
+      ['confirmed', undefined, '已确认'],
+    ]);
+    expect(pageCard.overlays?.map((overlay) => overlay.label)).toEqual(receiptCards.map((card) => card.overlays?.[0]?.label));
+    expect(currentSession.items.map((entry) => ({ original: entry.original, record: entry.record }))).toEqual(originalReferences);
+  });
+
+  it('keeps blocked, suspected, special, excluded, and restored statuses explicit', () => {
+    const suspected = { ...item('suspected', 1), exclusion_notice: { code: 'suspected_invalid_slot' as const } };
+    const blocked = item('blocked', 2);
+    blocked.record = record(blocked, 'blocked');
+    const special = { ...item('special', 3), page_notice: { code: 'special_document' as const, document_type: 'loan_interest_notice' as const } };
+    const excluded = { ...item('excluded', 4), exclusion_notice: { code: 'suspected_invalid_slot' as const } };
+    excluded.record = record(excluded, 'excluded');
+    const currentSession = session([suspected, blocked, special, excluded], { sources: [source('/a.pdf', '状态流转.pdf', 4)] });
+
+    const cards = () => buildReceiptOverviewCards(currentSession, currentSession.items, 'receipts', 'all', true);
+    expect(cards().map((card) => [card.id, card.tone, card.attention, card.badge])).toEqual([
+      ['suspected', 'pending', 'suspected', '待核对'],
+      ['blocked', 'pending', undefined, '需调整'],
+      ['special', 'pending', 'special', '待复核'],
+      ['excluded', 'excluded', undefined, '已排除'],
+    ]);
+
+    suspected.record = record(suspected, 'confirmed');
+    expect(cards().find((card) => card.id === 'suspected')).toMatchObject({ tone: 'confirmed', attention: undefined, badge: '已确认' });
+    suspected.record = record(suspected, 'excluded');
+    expect(cards().find((card) => card.id === 'suspected')).toMatchObject({ tone: 'excluded', attention: undefined, badge: '已排除' });
+    suspected.record = record(suspected, 'needs_review');
+    expect(cards().find((card) => card.id === 'suspected')).toMatchObject({ tone: 'pending', attention: 'suspected', badge: '待核对' });
+
+    special.record = record(special, 'confirmed');
+    expect(cards().find((card) => card.id === 'special')).toMatchObject({ tone: 'confirmed', attention: 'special', badge: '已确认' });
+    special.record = record(special, 'excluded');
+    expect(cards().find((card) => card.id === 'special')).toMatchObject({ tone: 'excluded', attention: undefined, badge: '已排除' });
   });
 
   it('keeps excluded fragments visually marked without suggesting they still await review', async () => {

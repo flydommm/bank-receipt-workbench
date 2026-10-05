@@ -320,7 +320,7 @@ export function SettingsDialog({
               />
               <span>同时导出审核索引 XLSX</span>
             </label>
-            <p className="settings-dialog-help">进入导出预览时使用此默认值，仍可按任务单独调整。</p>
+            <p className="settings-dialog-help">打开导出设置时使用此默认值，仍可按任务单独调整。</p>
           </section>
 
           <section className="settings-dialog-section" aria-labelledby="settings-preview-defaults">

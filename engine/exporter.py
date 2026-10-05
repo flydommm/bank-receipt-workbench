@@ -27,14 +27,16 @@ def export_index(path: str | Path, rows: Iterable[Mapping[str, object]], headers
 def export_bundle_index(path: str | Path, rows: Iterable[Mapping[str, object]],
                         mappings: Iterable[Mapping[str, object]], scope_rows: Iterable[Mapping[str, object]], *,
                         headers: tuple[str, ...] = DEFAULT_HEADERS,
-                        mapping_headers: tuple[str, ...] = MAPPING_HEADERS) -> Path: ...
+                        mapping_headers: tuple[str, ...] = MAPPING_HEADERS,
+                        extra_sheets: Iterable[tuple[str, tuple[str, ...], Iterable[Mapping[str, object]]]] = ()) -> Path: ...
 
 
 @overload
 def export_bundle_index(path: BinaryIO, rows: Iterable[Mapping[str, object]],
                         mappings: Iterable[Mapping[str, object]], scope_rows: Iterable[Mapping[str, object]], *,
                         headers: tuple[str, ...] = DEFAULT_HEADERS,
-                        mapping_headers: tuple[str, ...] = MAPPING_HEADERS) -> BinaryIO: ...
+                        mapping_headers: tuple[str, ...] = MAPPING_HEADERS,
+                        extra_sheets: Iterable[tuple[str, tuple[str, ...], Iterable[Mapping[str, object]]]] = ()) -> BinaryIO: ...
 
 
 def export_bundle_index(
@@ -45,18 +47,17 @@ def export_bundle_index(
     *,
     headers: tuple[str, ...] = DEFAULT_HEADERS,
     mapping_headers: tuple[str, ...] = MAPPING_HEADERS,
+    extra_sheets: Iterable[tuple[str, tuple[str, ...], Iterable[Mapping[str, object]]]] = (),
 ) -> Path | BinaryIO:
-    """Write the three worksheets used by a multi-file export bundle."""
+    """Write the standard bundle worksheets and optional review worksheets."""
 
+    sheets: list[tuple[str, tuple[str, ...], Iterable[Mapping[str, object]]]] = [
+        ("索引", headers, rows),
+        ("输出映射", mapping_headers, mappings),
+        ("导出范围", ("item", "value"), scope_rows),
+    ]
+    sheets.extend(extra_sheets)
     return write_xlsx_sheets(
         path,
-        (
-            ("索引", headers, rows),
-            (
-                "输出映射",
-                mapping_headers,
-                mappings,
-            ),
-            ("导出范围", ("item", "value"), scope_rows),
-        ),
+        sheets,
     )

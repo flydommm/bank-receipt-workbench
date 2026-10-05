@@ -12,8 +12,9 @@ from copy import deepcopy
 from hashlib import sha256
 import json
 from pathlib import Path
+import re
 import sqlite3
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator, Mapping
 
 from .batch_models import BatchModelError
 from .batch_pdf import BatchSourceError, open_batch_source
@@ -24,10 +25,14 @@ from .review_store_v2 import ReviewStoreError, _final_rect_is_legal, _validate_c
 from .export_plan import _normalise_output_name
 
 MAX_SCOPE_ITEMS = 50_000
+GROUPED_OUTPUT_MODES = ("by_counterparty", "by_counterparty_merged")
 _REQUEST_FIELDS = {"job_id", "result_revision", "scope_kind", "selected_segment_ids",
                    "expected_records", "output_mode", "include_xlsx"}
 _OPTIONAL_REQUEST_FIELDS = {"output_name", "include_manifest"}
+_GROUPED_REQUEST_FIELDS = {"expected_grouping_revision", "expected_review_fingerprint",
+                           "own_account_fingerprint", "include_counterparty_pending"}
 _CONFIRMED = {"confirmed", "page_confirmed", "group_confirmed"}
+_SHA256 = re.compile(r"^[a-f0-9]{64}$")
 
 
 class ExportScopeError(ValueError):
@@ -48,15 +53,32 @@ def _identifier(value: object) -> bool:
 
 
 def validate_scope_request(request: object) -> dict[str, Any]:
-    if (not isinstance(request, dict) or not _REQUEST_FIELDS.issubset(request)
-            or set(request) - _REQUEST_FIELDS - _OPTIONAL_REQUEST_FIELDS):
+    if not isinstance(request, dict) or not _REQUEST_FIELDS.issubset(request):
+        raise ExportScopeError("export scope fields are invalid")
+    grouped = request.get("output_mode") in GROUPED_OUTPUT_MODES
+    allowed = _REQUEST_FIELDS | _OPTIONAL_REQUEST_FIELDS | (_GROUPED_REQUEST_FIELDS if grouped else set())
+    if set(request) - allowed:
         raise ExportScopeError("export scope fields are invalid")
     if not _identifier(request["job_id"]) or not _identifier(request["result_revision"]):
         raise ExportScopeError("a published task and result revision are required")
     if request["scope_kind"] not in ("all", "sources", "list"):
         raise ExportScopeError("export scope kind is invalid")
-    if request["output_mode"] not in ("merged", "by_source", "both") or type(request["include_xlsx"]) is not bool:
+    if request["output_mode"] not in ("merged", "by_source", "both", *GROUPED_OUTPUT_MODES) or type(request["include_xlsx"]) is not bool:
         raise ExportScopeError("export output options are invalid")
+    if grouped:
+        if not request["include_xlsx"] or not _GROUPED_REQUEST_FIELDS.issubset(request):
+            raise ExportScopeError("grouped export requires an XLSX index and grouping bindings")
+        revision = request["expected_grouping_revision"]
+        if type(revision) is not int or not 0 <= revision < 2 ** 53:
+            raise ExportScopeError("expected grouping revision is invalid")
+        for field in ("expected_review_fingerprint", "own_account_fingerprint"):
+            value = request[field]
+            if not isinstance(value, str) or _SHA256.fullmatch(value) is None:
+                raise ExportScopeError(f"{field} is invalid")
+        if type(request["include_counterparty_pending"]) is not bool:
+            raise ExportScopeError("counterparty pending export option is invalid")
+    elif _GROUPED_REQUEST_FIELDS.intersection(request):
+        raise ExportScopeError("grouped export fields are only valid for grouped output modes")
     if "include_manifest" in request and type(request["include_manifest"]) is not bool:
         raise ExportScopeError("export manifest option is invalid")
     selected = request["selected_segment_ids"]
@@ -182,11 +204,15 @@ def _check_sources(snapshot: dict[str, Any]) -> set[str]:
 
 
 def _build_scope(store: BatchStore, connection: sqlite3.Connection, review_database: Path,
-                 snapshot: dict[str, Any], request: dict[str, Any], geometry_valid: set[str]) -> dict[str, Any]:
+                 snapshot: dict[str, Any], request: dict[str, Any], geometry_valid: set[str],
+                 grouping_snapshot: object | None = None) -> dict[str, Any]:
+    if request.get("output_mode") in GROUPED_OUTPUT_MODES and snapshot["job"].get("page_result_schema") != 2:
+        raise ExportScopeError("counterparty grouping requires a receipt task")
     if snapshot["job"].get("page_result_schema") == 2:
         from .receipt_export_scope import build_receipt_export_scope
         return build_receipt_export_scope(
             connection, review_database, snapshot, request, geometry_valid, _published_items(store, snapshot),
+            grouping_snapshot=grouping_snapshot,
         )
     descriptor, source_shas, context_key = _validate_context(snapshot["context"], trusted_aliases=True)
     _, expected_manifest, _ = _validate_originals(snapshot["originals"], source_shas)
@@ -280,7 +306,9 @@ def _resolved(record: dict[str, Any], identifier: str, geometry_valid: set[str])
 
 @contextmanager
 def hold_export_scope(store: BatchStore, review_database: str | Path, request: object, *,
-                      expected_snapshot: dict[str, Any] | None = None) -> Iterator[dict[str, Any]]:
+                      expected_snapshot: dict[str, Any] | None = None,
+                      grouping_snapshot: object | None = None,
+                      grouping_snapshot_reader: Callable[[sqlite3.Connection, Mapping[str, Any], Mapping[str, Any]], object] | None = None) -> Iterator[dict[str, Any]]:
     validated = validate_scope_request(request)
     try:
         snapshot = store.review_snapshot(validated["job_id"], validated["result_revision"])
@@ -289,7 +317,32 @@ def hold_export_scope(store: BatchStore, review_database: str | Path, request: o
         geometry_valid = _check_sources(snapshot)
         with store.hold_review_binding(snapshot["job"]):
             with _hold_existing_reviews(Path(review_database)) as connection:
-                current = _build_scope(store, connection, Path(review_database), snapshot, validated, geometry_valid)
+                trusted_grouping = grouping_snapshot
+                if validated["output_mode"] in GROUPED_OUTPUT_MODES and trusted_grouping is None:
+                    reader = grouping_snapshot_reader
+                    if reader is None:
+                        # The grouping backend exposes a read-only adapter for
+                        # this already-held review connection.  Keep the
+                        # fallback here so native callers cannot accidentally
+                        # export from a browser-provided group list.
+                        from .receipt_grouping_store import read_grouping_export_snapshot
+
+                        def reader(connection: sqlite3.Connection, request: Mapping[str, Any], published: Mapping[str, Any]) -> object:
+                            return read_grouping_export_snapshot(
+                                connection,
+                                request["job_id"],
+                                expected_grouping_revision=request["expected_grouping_revision"],
+                                expected_review_fingerprint=request["expected_review_fingerprint"],
+                                require_complete=False,
+                            )
+                    try:
+                        trusted_grouping = reader(connection, validated, snapshot)
+                    except ExportScopeError:
+                        raise
+                    except Exception as error:
+                        raise ExportScopeError("grouping snapshot is unavailable", "grouping_stale") from error
+                current = _build_scope(store, connection, Path(review_database), snapshot, validated, geometry_valid,
+                                       grouping_snapshot=trusted_grouping)
                 if expected_snapshot is not None and current != expected_snapshot:
                     raise ExportScopeError("frozen export scope changed", "export_scope_stale")
                 yield current
@@ -301,6 +354,9 @@ def hold_export_scope(store: BatchStore, review_database: str | Path, request: o
         raise ExportScopeError("published task or persisted review is unavailable", "export_scope_stale") from None
 
 
-def capture_export_scope(store: BatchStore, review_database: str | Path, request: object) -> dict[str, Any]:
-    with hold_export_scope(store, review_database, request) as snapshot:
+def capture_export_scope(store: BatchStore, review_database: str | Path, request: object, *,
+                         grouping_snapshot: object | None = None,
+                         grouping_snapshot_reader: Callable[[sqlite3.Connection, Mapping[str, Any], Mapping[str, Any]], object] | None = None) -> dict[str, Any]:
+    with hold_export_scope(store, review_database, request, grouping_snapshot=grouping_snapshot,
+                           grouping_snapshot_reader=grouping_snapshot_reader) as snapshot:
         return snapshot
