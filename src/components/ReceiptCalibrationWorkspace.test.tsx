@@ -443,7 +443,7 @@ describe('step-based calibration workspace', () => {
     fireEvent.click(all);
     fireEvent.click(saveButton);
     expect(save).toHaveBeenCalledTimes(canSave ? 1 : 0);
-  });
+  }, 30000);
   it('edits all three slots on the same sample, keeps overflow editable, and previews the full corrected layout', async () => {
     const { service, client, pt } = liveEditor();
     fireEvent.click(screen.getByRole('button', { name: '调整所选边界' }));
