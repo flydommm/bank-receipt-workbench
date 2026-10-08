@@ -129,6 +129,59 @@ describe('ReceiptLayoutEditor', () => {
     expect(changed?.slots.map((slot) => slot.height_pt)).toEqual([440, 440]);
   });
 
+  it('asks how to handle synchronized changes before disabling uniform height', () => {
+    const initial = makeLayout({ uniform_height: true });
+    const starting = makeLayout({ uniform_height: true, slots: [
+      { ...initial.slots[0] },
+      { ...initial.slots[1], top_pt: 500 },
+    ] });
+    let current = starting;
+    let view: ReturnType<typeof render>;
+    const onChange = vi.fn<(next: LayoutDefinition) => void>((next) => {
+      current = next;
+      view.rerender(<ReceiptLayoutEditor layout={current} baselineLayout={initial} scopePageCount={9}
+        selectedSlotId="slot-1" dirty onChange={onChange} onPreview={vi.fn()} onCancel={vi.fn()} />);
+    });
+    view = render(<ReceiptLayoutEditor layout={current} baselineLayout={initial} scopePageCount={9}
+      selectedSlotId="slot-1" dirty onChange={onChange} onPreview={vi.fn()} onCancel={vi.fn()} />);
+
+    fireEvent.change(screen.getByLabelText('回单高度（mm）'), { target: { value: '100' } });
+    expect(screen.getByRole('status').textContent).toContain('18');
+    fireEvent.click(screen.getByLabelText('统一所有栏位高度'));
+    expect(screen.getByRole('dialog').textContent).toContain('已经同步到其他栏位');
+    fireEvent.click(screen.getByRole('button', { name: '仅保留当前栏，恢复其他栏位' }));
+
+    expect(current.uniform_height).toBe(false);
+    expect(current.slots[0].height_pt).toBeCloseTo(100 * 72 / 25.4);
+    expect(current.slots.slice(1).map((slot) => slot.height_pt)).toEqual([440]);
+    expect(current.slots[1].top_pt).toBe(500);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByRole('status').textContent).toContain('9');
+  });
+
+  it('can disable uniform height while retaining all synchronized slot changes', () => {
+    const initial = makeLayout({ uniform_height: true });
+    let current = initial;
+    let view: ReturnType<typeof render>;
+    const onChange = vi.fn<(next: LayoutDefinition) => void>((next) => {
+      current = next;
+      view.rerender(<ReceiptLayoutEditor layout={current} baselineLayout={initial}
+        selectedSlotId="slot-1" dirty onChange={onChange} onPreview={vi.fn()} onCancel={vi.fn()} />);
+    });
+    view = render(<ReceiptLayoutEditor layout={current} baselineLayout={initial}
+      selectedSlotId="slot-1" dirty onChange={onChange} onPreview={vi.fn()} onCancel={vi.fn()} />);
+
+    fireEvent.change(screen.getByLabelText('回单高度（mm）'), { target: { value: '100' } });
+    fireEvent.click(screen.getByLabelText('统一所有栏位高度'));
+    fireEvent.click(screen.getByRole('button', { name: '保留已同步的多栏修改，仅关闭后续联动' }));
+
+    expect(current.uniform_height).toBe(false);
+    expect(current.slots.map((slot) => slot.height_pt)).toEqual([
+      100 * 72 / 25.4,
+      100 * 72 / 25.4,
+    ]);
+  });
+
   it('shows conversion or callback failures for uniform height changes', () => {
     const onChange = vi.fn<(next: LayoutDefinition) => void>(() => { throw new Error('转换失败'); });
     renderEditor({ onChange });

@@ -74,6 +74,13 @@
 }
 .receipt-layout-editor__checkbox { display: flex; align-items: center; gap: 6px; font-size: 13px; }
 .receipt-layout-editor__checkbox input { flex: none; margin: 0; accent-color: #338f83; }
+.receipt-layout-editor__impact {
+  grid-column: 1 / -1;
+  margin: -2px 0 0;
+  color: #567985;
+  font-size: 12px;
+  line-height: 1.45;
+}
 .receipt-layout-editor__copy { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .receipt-layout-editor__copy button,
 .receipt-calibration-pane .receipt-layout-editor__copy button {
@@ -103,6 +110,30 @@
 .receipt-layout-editor__actions .secondary { background: #fff; color: #31565d; }
 .receipt-layout-editor button:disabled { cursor: default; opacity: .5; }
 .receipt-layout-editor button:focus-visible { outline: 2px solid #3f90d5; outline-offset: 2px; }
+.receipt-layout-editor__prompt-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgb(18 48 58 / 28%);
+}
+.receipt-layout-editor__prompt {
+  width: min(520px, 100%);
+  box-sizing: border-box;
+  padding: 20px;
+  border: 1px solid #c8dcdf;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 12px 36px rgb(24 59 69 / 22%);
+}
+.receipt-layout-editor__prompt h3 { margin: 0 0 8px; color: #183b45; font-size: 16px; }
+.receipt-layout-editor__prompt p { margin: 0; color: #567985; line-height: 1.55; }
+.receipt-layout-editor__prompt-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+.receipt-layout-editor__prompt-actions button { min-height: 34px; padding: 6px 12px; border: 1px solid #d5e1e9; border-radius: 7px; font: inherit; cursor: pointer; }
+.receipt-layout-editor__prompt-actions .primary { border-color: #338f83; background: #338f83; color: #fff; }
+.receipt-layout-editor__prompt-actions .secondary { background: #fff; color: #31565d; }
 @media (max-width: 700px) {
   .receipt-layout-editor__controls { column-gap: 12px; }
   .receipt-layout-editor__copy,

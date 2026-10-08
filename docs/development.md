@@ -1,6 +1,6 @@
 # 开发指南
 
-本文对应 0.1.60 Core，使用 Windows x64、Bun 和应用私有运行时。当前操作见[使用指南](usage.md)和[交易对手整理](counterparty-grouping.md)。历史本机验收与开发待办已归档，不作为当前版本通过证据。
+本文对应 0.1.62 Core，使用 Windows x64、Bun 和应用私有运行时。当前操作见[使用指南](usage.md)和[交易对手整理](counterparty-grouping.md)。历史本机验收与开发待办已归档，不作为当前版本通过证据。
 
 ## 前置条件
 
@@ -140,7 +140,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-release.ps1 
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-release.ps1 -Edition Ocr
 ```
 
-Core 和 Ocr 共用 `.build/runtime`，切换 edition 会重新生成运行时；不要把一次运行的 NSIS 包与另一次运行的 runtime 清单混用。记录目录为 `outputs/releases/<版本>-<core或ocr>-<源码提交前12位>/`，包含根目录 `LICENSE`、第三方声明和源码提交地址。同一提交与 edition 的已有交付目录不会被覆盖；新提交使用独立目录，保留此前交付记录。
+Core 和 Ocr 共用 `.build/runtime`，切换 edition 会重新生成运行时；不要把一次运行的 NSIS 包与另一次运行的 runtime 清单混用。记录目录为 `outputs/releases/<版本>-<core或ocr>-<源码提交前12位>/`，包含根目录 `LICENSE`、第三方声明、源码提交地址和随包教程 `readme.txt`。同一提交与 edition 的已有交付目录不会被覆盖；新提交使用独立目录，保留此前交付记录。
 
 脚本生成的本地资产位于受 `.gitignore` 保护的 `outputs/` 下，不是公开下载地址。若只需要手工调试构建，可分别执行：
 
@@ -193,7 +193,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --locked bundled_ocr_health_runs
 
 当前界面不提供“历史任务”入口。后台保留旧任务数据与兼容读取能力，不代表用户可以在界面重新打开旧任务，也不将旧 schema 1 任务因关键词为空而改为全部分割。新任务通过“我的模板”复用已核对的版式边界，不继承旧任务的审核、排除或特殊凭证状态。
 
-按交易对手整理已接入桌面流程：CompanyAccountSelector 选择本批账户，ReceiptGroupingPanel 调用本地提取和分组，ReceiptExportWorkspace 直接选择目录并生成 PDF 和核对表。导出使用有界 JSONL 进度帧，经每次调用独立的 Tauri Channel 显示阶段、计数和耗时；普通引擎请求保持单响应协议。流程见[交易对手整理](counterparty-grouping.md)，验证范围见[版本说明](release-0.1.60.md)。
+按交易对手整理已接入桌面流程：CompanyAccountSelector 选择本批账户，ReceiptGroupingPanel 调用本地提取和分组，ReceiptExportWorkspace 直接选择目录并生成 PDF 和核对表。导出使用有界 JSONL 进度帧，经每次调用独立的 Tauri Channel 显示阶段、计数和耗时；普通引擎请求保持单响应协议。流程见[交易对手整理](counterparty-grouping.md)，验证范围见[版本说明](release-0.1.62.md)。
 
 批量分析和微调预览会连续更新进度，缓存命中时多个更新可能处于同一轮微任务中。文件列表应在勾选路径确实失效时才写入选择状态；不要在每次 `files` 数组变化后无条件调用 setter，再仅在 updater 内返回原值。在生产 React 和原生鼠标点击的同步优先级下，这种无效更新与进度更新交错曾触发 `Maximum update depth exceeded`（错误码 185）。
 

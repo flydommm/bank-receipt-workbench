@@ -62,7 +62,7 @@ def build_summary(items, report_id):
         # Only a temporary report ordinal is emitted, never this original key.
         signature = extracted.get('layout_signature')
         layouts[signature if isinstance(signature, str) else 'unknown'] += 1
-    return {'schema_version': 1, 'report_id': report_id, 'app_version': '0.1.61', 'total': len(items),
+    return {'schema_version': 1, 'report_id': report_id, 'app_version': '0.1.62', 'total': len(items),
             'issues': [{'code': code, 'count': count} for code, count in sorted(issues.items())],
             'field_states': [{'field': field, 'role': role, 'state': state, 'count': count}
                              for (field, role, state), count in sorted(field_states.items())],
