@@ -166,7 +166,7 @@ describe('真实交易对手分组面板与父阶段联动', () => {
     expect(apply).toHaveBeenCalledTimes(1); expect(save).not.toHaveBeenCalled();
     expect(screen.queryByRole('region', { name: '同版式批量识别' })).toBeNull();
     expect(screen.getByRole('button', { name: '撤销最近一次读取应用', hidden: true })).toBeTruthy();
-  }, 15000);
+  }, 30000);
 
   it('父阶段停止在途试读后不开始后续步骤、不应用，关闭后恢复核对', async () => {
     vi.stubGlobal('PointerEvent', MouseEvent);

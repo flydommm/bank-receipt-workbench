@@ -100,6 +100,9 @@ print('Release executable build-path audit passed.')
     Copy-Item -LiteralPath (Join-Path $runtime 'MSVC_RUNTIME_NOTICE.txt') -Destination $outputRoot
     Copy-Item -LiteralPath $projectLicense -Destination $outputRoot
     Copy-Item -LiteralPath (Join-Path $projectRoot 'THIRD_PARTY_NOTICES.md') -Destination $outputRoot
+    $tutorial = Join-Path $projectRoot 'readme.txt'
+    if (-not (Test-Path -LiteralPath $tutorial -PathType Leaf)) { throw 'Bundled tutorial readme.txt missing.' }
+    Copy-Item -LiteralPath $tutorial -Destination $outputRoot
     $bunVersion = & bun --version
     if ($LASTEXITCODE -ne 0) { throw 'Unable to record Bun version.' }
     $rustVersion = & rustc --version

@@ -13,6 +13,10 @@ const DISPLAY_DECIMAL_PLACES = 2;
 
 export type ReceiptLayoutEditorProps = {
   layout: LayoutDefinition;
+  /** Layout at the start of the current adjustment round. */
+  baselineLayout?: LayoutDefinition;
+  /** Number of pages in the current adjustment scope, used for impact guidance. */
+  scopePageCount?: number;
   selectedSlotId?: string | null;
   dirty: boolean;
   busy?: boolean;
@@ -79,6 +83,8 @@ function slotDetails(slot: LayoutDefinition['slots'][number]): ReactElement {
 
 export function ReceiptLayoutEditor({
   layout,
+  baselineLayout,
+  scopePageCount,
   selectedSlotId,
   dirty,
   busy = false,
@@ -92,6 +98,7 @@ export function ReceiptLayoutEditor({
   const [localFailure, setLocalFailure] = useState<{ message: string; revision: number; slotId: string | null } | null>(null);
   const [drafts, setDrafts] = useState<Partial<Record<DraftField, DraftValue>>>({});
   const [copiedFrame, setCopiedFrame] = useState<{ height: number; position: number } | null>(null);
+  const [uniformPrompt, setUniformPrompt] = useState<{ slotId: string; position: number } | null>(null);
   const selected = layout.slots.find((slot) => slot.slot_id === selectedSlotId) ?? layout.slots[0];
   const selectedRect = selected ? slotRect(layout, selected) : null;
   const uniform = layout.uniform_height;
@@ -101,6 +108,23 @@ export function ReceiptLayoutEditor({
   const localError = localFailure?.revision === layout.revision && localFailure.slotId === (selected?.slot_id ?? null) ? localFailure.message : null;
   const activeError = localError ?? error ?? layoutError;
   const canPreview = !busy && !activeError;
+
+  const synchronizedHeightChanges = useMemo(() => {
+    if (!baselineLayout || !selected) return false;
+    const baselineById = new Map(baselineLayout.slots.map((slot) => [slot.slot_id, slot]));
+    return layout.slots.some((slot) => {
+      if (slot.slot_id === selected.slot_id) return false;
+      const baseline = baselineById.get(slot.slot_id);
+      return baseline !== undefined && Math.abs(slot.height_pt - baseline.height_pt) > 0.000001;
+    });
+  }, [baselineLayout, layout.slots, selected]);
+
+  const impactSlotCount = uniform ? layout.slots.length : selected ? 1 : 0;
+  const impactSummary = selected && impactSlotCount > 0
+    ? scopePageCount !== undefined
+      ? `调整高度时预计影响 ${scopePageCount * impactSlotCount} 处（${scopePageCount} 页 × ${impactSlotCount} 栏）`
+      : `调整高度时预计影响 ${impactSlotCount} 栏`
+    : null;
 
   const summary = useMemo(() => {
     return `页面宽度 ${formatMillimetres(layout.page_geometry.width_pt)} mm · 页面高度 ${formatMillimetres(layout.page_geometry.height_pt)} mm · ${layout.slots.length} 栏`;
@@ -197,10 +221,31 @@ export function ReceiptLayoutEditor({
 
   function changeUniform(enabled: boolean): void {
     if (busy || protectedScope) return;
+    if (!enabled && uniform && synchronizedHeightChanges && selected) {
+      setUniformPrompt({ slotId: selected.slot_id, position: selected.position_index });
+      return;
+    }
     const slots = enabled && selected
       ? layout.slots.map((slot) => ({ ...slot, height_pt: selected.height_pt }))
       : layout.slots;
     commitCandidate({ ...layout, revision: nextRevision(layout), uniform_height: enabled, slots }, '统一所有栏位高度更新');
+  }
+
+  function keepCurrentSlotOnly(): void {
+    if (!uniformPrompt || !baselineLayout) return;
+    const baselineById = new Map(baselineLayout.slots.map((slot) => [slot.slot_id, slot]));
+    const slots = layout.slots.map((slot) => {
+      if (slot.slot_id === uniformPrompt.slotId) return slot;
+      const baseline = baselineById.get(slot.slot_id);
+      return baseline ? { ...slot, height_pt: baseline.height_pt } : slot;
+    });
+    setUniformPrompt(null);
+    commitCandidate({ ...layout, revision: nextRevision(layout), uniform_height: false, slots }, '恢复其他栏位');
+  }
+
+  function keepAllSlotChanges(): void {
+    setUniformPrompt(null);
+    commitCandidate({ ...layout, revision: nextRevision(layout), uniform_height: false }, '取消统一高度');
   }
 
   function preview(): void {
@@ -280,6 +325,9 @@ export function ReceiptLayoutEditor({
             />
             <span>统一所有栏位高度</span>
           </label>
+          {impactSummary && <p className="receipt-layout-editor__impact" role="status">{uniform
+            ? `${impactSummary}；当前调整会同步所有栏位。`
+            : `${impactSummary}；其他栏位保持不变。`}</p>}
           <p className="receipt-layout-editor__rect" aria-live="polite">
             {selectedRect
               ? `当前框：${formatMillimetres(selectedRect.x0)}, ${formatMillimetres(selectedRect.y0)} – ${formatMillimetres(selectedRect.x1)}, ${formatMillimetres(selectedRect.y1)} mm`
@@ -321,6 +369,17 @@ export function ReceiptLayoutEditor({
         </div>
         {activeError && <p className="receipt-layout-editor__error" role="alert">{activeError}</p>}
       </div>
+      {uniformPrompt && <div className="receipt-layout-editor__prompt-backdrop" role="presentation">
+        <section className="receipt-layout-editor__prompt" role="dialog" aria-modal="true" aria-labelledby="receipt-layout-editor-uniform-prompt-title">
+          <h3 id="receipt-layout-editor-uniform-prompt-title">已同步修改多个栏位</h3>
+          <p>第 {uniformPrompt.position} 栏的高度修改已经同步到其他栏位。取消统一高度后，如何处理已经同步的修改？</p>
+          <div className="receipt-layout-editor__prompt-actions">
+            <button type="button" className="primary" onClick={keepCurrentSlotOnly}>仅保留当前栏，恢复其他栏位</button>
+            <button type="button" className="secondary" onClick={keepAllSlotChanges}>保留已同步的多栏修改，仅关闭后续联动</button>
+            <button type="button" className="secondary" onClick={() => setUniformPrompt(null)}>返回</button>
+          </div>
+        </section>
+      </div>}
       <footer className="receipt-layout-editor__actions">
         <button type="button" className="secondary" disabled={busy} onClick={onCancel}>返回</button>
         <button

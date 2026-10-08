@@ -239,7 +239,8 @@ export function ReceiptCalibrationPane({ state, controller, onExport, onBack, on
           {session.items.length > scopedHits && <p>另有 {session.items.length - scopedHits} 处命中不在本轮范围内，需从对应版式样本调整。</p>}
           {Object.entries(preparation.excluded_page_counts).map(([reason, count]) => <p key={reason}>{excludedScopeReason(reason)}：{count} 页未纳入</p>)}
         </details>
-        <ReceiptLayoutEditor layout={draft} selectedSlotId={selectedSlotId} onSelectSlot={(id) => controller.selectSlot(id)}
+        <ReceiptLayoutEditor layout={draft} baselineLayout={preparation.layout_definition} scopePageCount={preparation.page_count}
+          selectedSlotId={selectedSlotId} onSelectSlot={(id) => controller.selectSlot(id)}
           editableSlotIds={preparation.editable_slot_ids}
           dirty={JSON.stringify(draft) !== JSON.stringify(preparation.layout_definition)} busy={busy}
           onChange={(value: import('../domain/receiptLayout').LayoutDefinition) => controller.change(value)} onPreview={() => void controller.generatePreview()} onCancel={() => void controller.leave()} />

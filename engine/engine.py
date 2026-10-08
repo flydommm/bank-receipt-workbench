@@ -148,7 +148,7 @@ class _V2InvalidStoreResponse(RuntimeError):
     """Raised when the real v2 store returns an invalid response shape."""
 
 
-ENGINE_VERSION = "0.1.60"
+ENGINE_VERSION = "0.1.62"
 EXPORT_TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{15,127}$")
 SOURCE_SHA256_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
 RENDER_DPI = 144

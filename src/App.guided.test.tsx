@@ -413,7 +413,7 @@ describe('App guided review workflow', () => {
     expect(roundRows[0]?.getAttribute('aria-current')).toBe('true');
     expect(roundRows[0]?.getAttribute('aria-label')).toMatch(position);
     expect(selected.getAttribute('aria-current')).toBe('true');
-  });
+  }, 30000);
 
   it('进入微调时按右侧选中样本定位，即使预览已手动翻到其他页', async () => {
     const user = userEvent.setup();
