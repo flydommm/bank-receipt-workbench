@@ -144,7 +144,7 @@ _SIDE_ALIASES: dict[str, tuple[str, ...]] = {
 }
 
 _FIELD_ALIASES: dict[str, tuple[str, ...]] = {
-    "name": ("账户名称", "帐户名称", "名称", "户名", "单位名称", "姓名"),
+    "name": ("账户名称", "帐户名称", "名称", "全称", "户名", "单位名称", "姓名"),
     "account": ("账号", "帐号", "账户号码", "账户", "卡号", "账号户号"),
     "bank": ("开户银行名称", "开户行名称", "开户行名", "开户银行", "开户行", "开户机构", "银行", "行名"),
 }
@@ -222,6 +222,10 @@ _BLANK_MARKERS = {"", "空", "空白", "未提供", "无", "—", "–", "-", "/
 _MASK_CHARS = set("*＊×xX")
 _ACCOUNT_DIGIT_RE = re.compile(r"\d")
 _SUFFIX_ACCOUNT_RE = re.compile(r"(?:尾号|末四位|后四位|后\d+位)\s*[：:]?\s*\d{2,8}$")
+_TABLE_ROW_BOUNDARIES = frozenset({
+    "金额", "金额大写", "币种", "摘要", "备注", "用途", "附言", "客户附言",
+    "交易流水号", "交易日期", "记账时间", "开户行号", "银行行号", "业务类型",
+})
 
 
 def _finite(value: Any) -> float:
@@ -682,13 +686,7 @@ def _vertical_headers(
             continue
         rect = _union_rects(lines[item].rect for item in chain)
         assert rect is not None
-        fields = {
-            label.field for label in generic_labels
-            if rect[2] <= label.rect[0] <= rect[2] + height * 5
-            and rect[1] - height * 3 <= label.rect[1] <= rect[3] + height * 3
-        }
-        if {"name", "account"} <= fields:
-            candidates.append(_VerticalHeader("payer" if line.text == "付" else "payee", rect, tuple(chain), height))
+        candidates.append(_VerticalHeader("payer" if line.text == "付" else "payee", rect, tuple(chain), height))
     # Some tables print the very same row-spanning role horizontally. Only
     # use it as a table header when both name/account cells are nearby;
     # ordinary “付款方：公司” labels keep their existing meaning.
@@ -697,29 +695,51 @@ def _vertical_headers(
         if text not in {"付款人", "付款方", "收款人", "收款方"}:
             continue
         height = line.rect[3] - line.rect[1]
-        fields = {label.field for label in generic_labels
-                  if line.rect[2] <= label.rect[0] <= line.rect[2] + height * 5
-                  and abs(label.rect[1] - line.rect[1]) <= height * 3}
-        if {"name", "account"} <= fields:
-            candidates.append(_VerticalHeader("payer" if text.startswith("付") else "payee",
-                                               line.rect, (index,), height))
-    if len(candidates) != 2 or {item.side for item in candidates} != set(SIDES):
-        return ()
-    first, second = candidates
-    height = min(lines[item.line_indexes[0]].rect[3] - lines[item.line_indexes[0]].rect[1] for item in candidates)
-    if (abs(first.rect[0] - second.rect[0]) <= height * 4
-            or abs(first.rect[1] - second.rect[1]) > height * 0.5):
-        return ()
-    return tuple(candidates)
+        candidates.append(_VerticalHeader("payer" if text.startswith("付") else "payee",
+                                           line.rect, (index,), height))
+    # A wide role cell is not a wider font. Use the paired column spacing,
+    # while keeping each label strictly on its own side of the next role.
+    # Both sides still need aligned name/account rows; one side's labels
+    # must never establish both headers.
+    valid_pair: tuple[_VerticalHeader, ...] = ()
+    for index, first in enumerate(candidates):
+        for second in candidates[index + 1:]:
+            height = min(first.unit_height, second.unit_height)
+            if (first.side == second.side
+                    or abs(first.rect[0] - second.rect[0]) <= height * 4
+                    or abs(first.rect[1] - second.rect[1]) > height * .5):
+                continue
+            pair = (first, second)
+            for header in pair:
+                local = [label for label in generic_labels
+                         if _vertical_field_header(label, pair) == header]
+                names = [label for label in local if label.field == "name"]
+                accounts = [label for label in local if label.field == "account"]
+                if not any(abs(name.rect[0] - account.rect[0]) <= header.unit_height * 2
+                           for name in names for account in accounts):
+                    break
+            else:
+                # Ignore unrelated role-like text without cells, but never
+                # choose between two actual tables inside one crop.
+                if valid_pair:
+                    return ()
+                valid_pair = pair
+    return valid_pair
 
 
 def _vertical_field_header(label: _Label, headers: Sequence[_VerticalHeader]) -> _VerticalHeader | None:
+    if len(headers) != 2:
+        return None
+    column_width = abs(headers[0].rect[0] - headers[1].rect[0])
+    matches = []
     for header in headers:
         height = header.unit_height or (header.rect[3] - header.rect[1]) / 3
-        if (header.rect[2] <= label.rect[0] <= header.rect[2] + height * 5
+        next_role = min((other.rect[0] for other in headers if other.rect[0] > header.rect[0]), default=math.inf)
+        if (header.rect[2] <= label.rect[0] <= header.rect[2] + max(height * 5, column_width * .5)
+                and label.rect[2] < next_role
                 and header.rect[1] - height * 3 <= label.rect[1] <= header.rect[3] + height * 3):
-            return header
-    return None
+            matches.append(header)
+    return matches[0] if len(matches) == 1 else None
 
 
 def _ningbo_layout(
@@ -873,16 +893,46 @@ def _table_value_lines(
             neighbour_ys.append((other.rect[1] + other.rect[3]) / 2)
     upper = max(((y + center_y) / 2 for y in neighbour_ys if y < center_y - height * .5), default=-math.inf)
     lower = min(((y + center_y) / 2 for y in neighbour_ys if y > center_y + height * .5), default=math.inf)
-    values = []
+    role_centers = sorted((item.rect[0] + item.rect[2]) / 2 for item in headers)
+    divider = sum(role_centers) / 2
+    role_center = (header.rect[0] + header.rect[2]) / 2
+    column_left, column_right = (-math.inf, divider) if role_center < divider else (divider, math.inf)
+    for line in lines:
+        # Metadata below the party block can start left of the centred role
+        # text. A row label crossing both columns is a boundary for both.
+        if line.rect[2] <= column_left or line.rect[0] >= column_right:
+            continue
+        text = _label_text_norm(line.text)
+        if text.split(":", 1)[0] not in _TABLE_ROW_BOUNDARIES:
+            continue
+        if line.rect[1] > center_y:
+            lower = min(lower, line.rect[1])
+        elif line.rect[3] < center_y:
+            upper = max(upper, line.rect[3])
+    nearby = []
     for index, line in enumerate(lines):
         if index in ignored or index == label.line_index:
             continue
         if not (label.rect[2] <= line.rect[0]
                 and line.rect[2] <= right_edge
-                and upper < (line.rect[1] + line.rect[3]) / 2 < lower
-                and _same_text_row(label.rect, line.rect, table=True)):
+                and upper < (line.rect[1] + line.rect[3]) / 2 < lower):
             continue
-        values.append((index, line))
+        nearby.append((index, line))
+    values = [(index, line) for index, line in nearby
+              if _same_text_row(label.rect, line.rect, table=True)]
+    if label.field == "account" or len(values) != 1:
+        return values
+    # A centred label need not overlap both lines of a wrapped value. Grow
+    # only from an observed same-row line, inside this column and row, with
+    # matching alignment, font height and ordinary line spacing. Add only
+    # directly adjacent lines: never follow a chain into a note below the
+    # table when no lower field label exists.
+    selected = {index for index, _line in values}
+    additions = [(index, line) for index, line in nearby if index not in selected
+                 and abs((line.rect[1] + line.rect[3]) / 2 - center_y) <= height * 2
+                 and any(_wrapped_line_pair(previous.rect, line.rect)
+                         or _wrapped_line_pair(line.rect, previous.rect) for _, previous in values)]
+    values.extend(additions)
     return values
 
 
@@ -954,6 +1004,14 @@ def _same_row_table_values(
     return _join_wrapped_values(label, values)
 
 
+def _wrapped_line_pair(a: tuple, b: tuple) -> bool:
+    height = min(a[3] - a[1], b[3] - b[1])
+    aligned = (abs(a[0] - b[0]) <= height * .3
+               or abs((a[0] + a[2]) - (b[0] + b[2])) <= height * .6)
+    return (height > 0 and max(a[3] - a[1], b[3] - b[1]) <= height * 1.5
+            and aligned and height * .7 <= b[1] - a[1] <= height * 1.5)
+
+
 def _join_wrapped_values(
     label: _Label, values: list[tuple[str, tuple[float, float, float, float]]],
 ) -> list[tuple[str, tuple[float, float, float, float]]]:
@@ -964,11 +1022,7 @@ def _join_wrapped_values(
             and not any(re.search(r"[A-Za-z]", text) for text, _rect in ordered)):
         for previous, following in zip(ordered, ordered[1:]):
             a, b = previous[1], following[1]
-            height = min(a[3] - a[1], b[3] - b[1])
-            aligned = (abs(a[0] - b[0]) <= height * .3
-                       or abs((a[0] + a[2]) - (b[0] + b[2])) <= height * .6)
-            if not (aligned
-                    and height * .7 <= b[1] - a[1] <= height * 1.5):
+            if not _wrapped_line_pair(a, b):
                 break
         else:
             rect = _union_rects(item[1] for item in ordered)
