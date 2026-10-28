@@ -65,6 +65,7 @@ if __package__:
         extract_separators,
         extract_frame_anchors,
         extract_visual_anchors,
+        extract_table_anchors,
         infer_receipt_candidates,
         select_candidate_for_match,
     )
@@ -128,6 +129,7 @@ else:  # Running as ``python engine/engine.py`` from the project root.
         extract_separators,
         extract_frame_anchors,
         extract_visual_anchors,
+        extract_table_anchors,
         infer_receipt_candidates,
         select_candidate_for_match,
     )
@@ -148,7 +150,7 @@ class _V2InvalidStoreResponse(RuntimeError):
     """Raised when the real v2 store returns an invalid response shape."""
 
 
-ENGINE_VERSION = "0.1.62"
+ENGINE_VERSION = "0.1.63"
 EXPORT_TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{15,127}$")
 SOURCE_SHA256_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
 RENDER_DPI = 144
@@ -1536,6 +1538,8 @@ def _analyze_page_geometry(
             *extract_visual_anchors(path, page_number, **page_options),
             *extract_frame_anchors(path, page_number, **page_options),
         ]
+        visual_anchors.extend(extract_table_anchors(
+            path, page_number, parsed=parsed, visual_anchors=visual_anchors, **page_options))
     except LayoutBudgetExceeded:
         # Optional visual evidence is deliberately all-or-nothing for a page:
         # using only the subset extracted before a budget failure could make a

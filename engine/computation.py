@@ -32,6 +32,7 @@ COMPUTATION_SOURCE_FILES: tuple[str, ...] = (
     "engine/pdf_parser.py",
     "engine/search.py",
     "engine/layout.py",
+    "engine/table_geometry.py",
     "engine/receipt_layout_models.py",
     "engine/pdf_geometry.py",
     "engine/receipt_layout.py",
