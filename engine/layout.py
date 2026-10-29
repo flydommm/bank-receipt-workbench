@@ -585,6 +585,88 @@ def _page_local_image_anchor(
     return VisualAnchor("image", left, top, right, bottom)
 
 
+def extract_table_anchors(
+    pdf_path: str | Path, page_number: int, *, parsed: ParsedPage, loaded_page: Any = None,
+    visual_anchors: Iterable[VisualAnchor] = (),
+) -> list[VisualAnchor]:
+    """Supplement only the titleless fallback; preserve the titled frame path."""
+    if any(not block.is_watermark and _is_receipt_title(block.text) for block in parsed.blocks):
+        return []
+    from .table_geometry import closed_table_geometry, TableGeometryBudgetExceeded
+
+    try:
+        with _layout_page(pdf_path, page_number, loaded_page) as page:
+            tables, ink = closed_table_geometry(page, images=tuple(
+                (a.x0, a.y0, a.x1, a.y1) for a in visual_anchors if a.kind == "image"))
+    except TableGeometryBudgetExceeded as error:
+        raise LayoutBudgetExceeded from error
+    if not tables:
+        return []
+    if len(tables) + len(ink) > MAX_VISUAL_ANCHORS:
+        raise LayoutBudgetExceeded
+    return ([VisualAnchor("table", *box) for box in tables]
+            + [VisualAnchor("table_ink", *box) for box in ink])
+
+
+def _titleless_table_candidates(
+    page: ParsedPage, anchors: tuple[VisualAnchor, ...], margin: float,
+) -> list[ReceiptCandidate] | None:
+    """Treat a closed grid as a whole only when all content has a clear owner.
+
+    A stamp may extend far beyond its table. It must not join two receipts or
+    be clipped at an invented midpoint. Ambiguous/unsupported geometry keeps
+    the existing reviewable fallback instead of silently dropping content.
+    """
+    tables = sorted((a for a in anchors if a.kind == "table"), key=lambda a: (a.y0, a.x0))
+    if not tables or not page.blocks:
+        return None
+    if any(a.y1 >= b.y0 for a, b in zip(tables, tables[1:])):
+        return None  # The slot contract supports vertical stacks, not columns.
+    bounds = [[a.x0, a.y0, a.x1, a.y1] for a in tables]
+    counts = [0] * len(tables)
+    typical = statistics.median(max(1.0, b.y1 - b.y0) for b in page.blocks)
+    nearby = min(48.0, max(24.0, typical * 3))
+    objects = [(b.x0, b.y0, b.x1, b.y1, True) for b in page.blocks]
+    objects.extend((a.x0, a.y0, a.x1, a.y1, False) for a in anchors
+                   if a.kind in {"image", "table_ink"})
+    for x0, y0, x1, y1, is_text in objects:
+        choices = []
+        intersections = []
+        for index, table in enumerate(tables):
+            if min(x1, table.x1) <= max(x0, table.x0):
+                continue
+            if min(y1, table.y1) > max(y0, table.y0):
+                intersections.append(index)
+            distance = max(table.y0 - y1, y0 - table.y1, 0.0)
+            if distance <= nearby:
+                choices.append((distance, index))
+        if len(intersections) > 1:
+            return None
+        if intersections:
+            owner = intersections[0]
+        else:
+            choices.sort()
+            if not choices or (len(choices) > 1 and choices[1][0] - choices[0][0] <= 2):
+                return None
+            owner = choices[0][1]
+        target = bounds[owner]
+        target[:] = [min(target[0], x0), min(target[1], y0),
+                     max(target[2], x1), max(target[3], y1)]
+        counts[owner] += int(is_text)
+    if any(count < 2 for count in counts):
+        return None
+    if any(a[3] >= b[1] for a, b in zip(bounds, bounds[1:])):
+        return None
+    candidates = []
+    for index, box in enumerate(bounds):
+        lower = (bounds[index - 1][3] + box[1]) / 2 if index else 0.0
+        upper = (box[3] + bounds[index + 1][1]) / 2 if index + 1 < len(bounds) else page.height
+        rect = Rect(0.0, max(lower, box[1] - margin), page.width, min(upper, box[3] + margin))
+        candidates.append(ReceiptCandidate(rect, 0.88, "single" if len(bounds) == 1 else f"slot-{index + 1}",
+                                           ("closed_table", "associated_content", "page_width")))
+    return candidates
+
+
 def infer_candidates(
     page: ParsedPage,
     *,
@@ -1870,7 +1952,7 @@ def infer_receipt_candidates(
     if any(block.is_watermark for block in page.blocks):
         page = replace(page, blocks=tuple(block for block in page.blocks if not block.is_watermark))
     frame_anchors = tuple(anchor for anchor in all_anchors if anchor.kind == "frame")
-    anchor_list = tuple(anchor for anchor in all_anchors if anchor.kind != "frame")
+    anchor_list = tuple(anchor for anchor in all_anchors if anchor.kind not in {"frame", "table", "table_ink"})
     titles = _deduplicate_title_blocks(
         block for block in page.blocks if _is_receipt_title(block.text)
     )
@@ -1884,7 +1966,9 @@ def infer_receipt_candidates(
             )
         ])
     if not titles:
-        candidates = _single_receipt_candidates(page, margin, separator_list)
+        candidates = _titleless_table_candidates(page, all_anchors, margin)
+        if candidates is None:
+            candidates = _single_receipt_candidates(page, margin, separator_list)
         return (
             _mark_layout_budget_exceeded(candidates)
             if layout_budget_exceeded

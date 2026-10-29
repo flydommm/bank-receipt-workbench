@@ -79,6 +79,19 @@ def test_receipt_layout_contract_and_pdf_geometry_participate_in_computation_ver
             "engine/receipt_layout.py", "engine/receipt_selection.py"} <= set(COMPUTATION_SOURCE_FILES)
 
 
+def test_table_geometry_changes_invalidate_previous_analysis(monkeypatch: pytest.MonkeyPatch):
+    before = computation_info()["computation_version"]
+    changed_path = (Path(__file__).parents[1] / "engine/table_geometry.py").resolve()
+    read_bytes = Path.read_bytes
+
+    def changed_bytes(path: Path) -> bytes:
+        content = read_bytes(path)
+        return content + b"\n# synthetic geometry change\n" if path.resolve() == changed_path else content
+
+    monkeypatch.setattr(Path, "read_bytes", changed_bytes)
+    assert computation_info()["computation_version"] != before
+
+
 def test_receipt_checkpoints_and_publication_participate_in_computation_version():
     assert {"engine/receipt_checkpoint.py", "engine/receipt_snapshot.py", "engine/batch_store.py",
             "engine/batch_schema.py", "engine/batch_processor.py"} <= set(COMPUTATION_SOURCE_FILES)
